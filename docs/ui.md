@@ -545,6 +545,12 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
   - Revise… manda lo escrito como el mensaje siguiente, sin salir del plan.
   - La tarjeta se va cuando la persona escribe o cambia de modo. No tiene atajo de teclado.
 
+**Pregunta** (`question_card`). Una pregunta por página, con sus opciones y "Other" con un campo para las palabras de la persona. La entrada puede traer:
+- `other: false`: sin "Other".
+- `secret: true`: el campo se enmascara.
+- Ninguna opción: solo el campo, "Type your answer"; Next / Submit se habilita al escribir.
+- `blocking: false` (una pregunta sin la que el agente sigue): tras un minuto sin que la persona la toque, el pie muestra "Skipped in 42s" junto a Skip; al llegar a cero, `Ui::due` la contesta sin respuestas (`Decision::Answer({})`). Tocarla apaga la cuenta. El reloj vive en `Ui::unanswered` y lo pone `Ui::tick`.
+
 ### 2.8 Panel derecho (Environment / Context / Connectors / Changes)
 
 | Tarjeta | y | Contenido | Componente |

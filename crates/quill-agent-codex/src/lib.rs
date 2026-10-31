@@ -305,10 +305,12 @@ impl Codex {
                 (rpc, json!({ "decision": word }))
             }
             (Approval::Ask(rpc, questions), Decision::Answer(answers)) => {
+                // A question the card does not answer (one that went unanswered) is left out,
+                // as `{answers: {}}` leaves them all.
                 let answers: serde_json::Map<String, Value> = questions
                     .into_iter()
-                    .map(|(question, id)| {
-                        let said = text(&answers[question.as_str()]);
+                    .filter_map(|(question, id)| {
+                        let said = text(answers.get(question.as_str())?);
                         // The card says "[No preference]" for a question left alone. A single
                         // choice: a typed "Other" is one answer, whatever it contains.
                         let labels = if said.is_empty() || said == "[No preference]" {
@@ -316,7 +318,7 @@ impl Codex {
                         } else {
                             vec![said]
                         };
-                        (id, json!({ "answers": labels }))
+                        Some((id, json!({ "answers": labels })))
                     })
                     .collect();
                 (rpc, json!({ "answers": answers }))
@@ -1091,14 +1093,20 @@ impl Codex {
                     .unwrap_or_default();
                 (name, input, false, always)
             }
-            // The card of AskUserQuestion: `{questions: [{question, header, options}]}`.
+            // The card of AskUserQuestion: `{questions: [{question, header, options}]}`, with
+            // Codex's flags in the card's words: `other`, a free-text answer is allowed;
+            // `secret`, it is masked; no options, it is words only. A question Codex goes on
+            // without (Default mode, ask.jsonl:30; Plan's block, plan-mode.jsonl:67) is not
+            // `blocking`: the card answers it with nothing after a while.
             "item/tool/requestUserInput" => {
                 let asked: Vec<&Value> = p["questions"].as_array().into_iter().flatten().collect();
                 let questions: Vec<Value> = asked
                     .iter()
                     .map(|q| {
+                        let options = q["options"].as_array().cloned().unwrap_or_default();
                         json!({ "question": q["question"], "header": q["header"],
-                            "options": q["options"], "multiSelect": false })
+                            "options": options, "multiSelect": false,
+                            "other": q["isOther"] == true, "secret": q["isSecret"] == true })
                     })
                     .collect();
                 let ids = asked
@@ -1107,9 +1115,11 @@ impl Codex {
                     .collect();
                 self.approvals
                     .insert(key.clone(), Approval::Ask(id.clone(), ids));
+                // The schema's default is blocking (`isBlocking` absent).
+                let blocking = p["isBlocking"] != false;
                 (
                     "AskUserQuestion".to_owned(),
-                    json!({ "questions": questions }),
+                    json!({ "questions": questions, "blocking": blocking }),
                     true,
                     vec![],
                 )

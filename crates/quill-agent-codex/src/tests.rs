@@ -687,6 +687,9 @@ fn a_plan_turn_runs_in_codex_plan_mode_and_its_plan_is_the_proposed_plan() {
         .starts_with("## Add `hello.txt`\n\n- Create `hello.txt`"));
     assert!(run.events.iter().any(|e| matches!(e,
         ToolResult { call, is_error: false, .. } if call.ends_with("-plan"))));
+    // Plan mode's question waits for the person (plan-mode.jsonl:67).
+    assert!(run.events.iter().any(|e| matches!(e,
+        PermissionRequest { input, .. } if input["blocking"] == true)));
     assert_eq!(finished(&run.events), [(true, false), (true, false)]);
     assert_eq!(unknown(&run.events), Vec::<&Value>::new());
 }
@@ -743,6 +746,11 @@ fn a_question_is_the_ask_user_question_card_and_its_answer_goes_by_id() {
     assert_eq!(q["question"], "Which do you pick: red or blue?");
     assert_eq!(q["header"], "Color");
     assert_eq!(q["options"][1]["label"], "Blue");
+    // Codex goes on without an answer in Default mode (ask.jsonl:30); "Other" is allowed.
+    assert_eq!(
+        (&input["blocking"], &q["other"], &q["secret"]),
+        (&json!(false), &json!(true), &json!(false))
+    );
     // The card answers by the question's words; Codex wants its id (ask.jsonl:31).
     let answer = run.written.last().unwrap();
     assert_eq!(
@@ -750,6 +758,64 @@ fn a_question_is_the_ask_user_question_card_and_its_answer_goes_by_id() {
         json!({ "answers": { "color_choice": { "answers": ["Red"] } } })
     );
     assert_eq!(texts(&run.events), ["Red"]);
+}
+
+/// The schema's other questions (no capture has them: the model's own tool always gives options
+/// and allows "Other"): one answered in words only, a secret one, and a request that goes
+/// unanswered, which leaves every question out.
+#[test]
+fn a_question_may_be_words_only_secret_or_go_unanswered() {
+    let mut run = run_of("simple");
+    let ask = |id: u64, blocking: bool| {
+        json!({ "id": id, "method": "item/tool/requestUserInput", "params": {
+            "threadId": "t", "turnId": "u", "itemId": "c1", "isBlocking": blocking,
+            "autoResolutionMs": null, "questions": [
+                { "id": "token", "header": "Token", "question": "Paste the API token",
+                  "isOther": false, "isSecret": true, "options": null },
+                { "id": "color", "header": "Color", "question": "Red or blue?",
+                  "isOther": false, "isSecret": false,
+                  "options": [{ "label": "Red", "description": "" }, { "label": "Blue", "description": "" }] },
+            ] } })
+    };
+    let asked = |run: &Run| {
+        (run.events.iter().rev())
+            .find_map(|e| match e {
+                PermissionRequest { input, .. } => Some(input.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    run.feed(&ask(5, true));
+    let input = asked(&run);
+    assert_eq!(
+        input["questions"][0],
+        json!({ "question": "Paste the API token", "header": "Token", "options": [],
+            "multiSelect": false, "other": false, "secret": true })
+    );
+    assert_eq!(
+        (&input["blocking"], &input["questions"][1]["other"]),
+        (&json!(true), &json!(false))
+    );
+    run.send(AgentCommand::Decide {
+        id: "5".into(),
+        decision: Decision::Answer(
+            json!({ "Paste the API token": "s3cret", "Red or blue?": "Blue" }),
+        ),
+    });
+    assert_eq!(
+        run.written.last().unwrap()["result"],
+        json!({ "answers": { "token": { "answers": ["s3cret"] }, "color": { "answers": ["Blue"] } } })
+    );
+    run.feed(&ask(6, false));
+    assert_eq!(asked(&run)["blocking"], false);
+    run.send(AgentCommand::Decide {
+        id: "6".into(),
+        decision: Decision::Answer(json!({})),
+    });
+    assert_eq!(
+        run.written.last().unwrap(),
+        &json!({ "id": 6, "result": { "answers": {} } })
+    );
 }
 
 #[test]

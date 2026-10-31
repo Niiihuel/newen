@@ -2749,7 +2749,14 @@ impl Actor {
                         AgentCommand::Decide { id, decision } => Some(Event::Decided {
                             session: self.id,
                             permission: id.clone(),
-                            decision: decision.clone(),
+                            // Kept only to show the card answered: the answers go to the agent
+                            // and nowhere else, since one may be a secret.
+                            decision: match decision {
+                                quill_agent::Decision::Answer(_) => {
+                                    quill_agent::Decision::Answer(serde_json::Value::Null)
+                                }
+                                decision => decision.clone(),
+                            },
                         }),
                         _ => None,
                     };

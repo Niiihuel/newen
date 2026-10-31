@@ -1835,3 +1835,47 @@ fn a_mode_chosen_before_the_agent_runs_is_the_one_it_starts_in() {
         .nth(1);
     assert_eq!(mode, Some("plan"), "{launched}");
 }
+
+/// An answer goes to the agent and nowhere else: what is kept of it only says the card was
+/// answered, since one may be a secret.
+#[test]
+fn an_answer_is_not_kept_with_the_session() {
+    let (engine, rx) = engine();
+    new_session(&engine, "ask");
+    engine.send(Intent::Send {
+        session: 1,
+        text: "Ask me".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    let events = until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::PermissionRequest { .. },
+                ..
+            }
+        )
+    });
+    let Some(Event::Agent {
+        event: AgentEvent::PermissionRequest { id, .. },
+        ..
+    }) = events.last()
+    else {
+        unreachable!()
+    };
+    engine.send(Intent::Decide {
+        session: 1,
+        permission: id.clone(),
+        decision: Decision::Answer(serde_json::json!({ "Pick red or blue?": "hunter2" })),
+    });
+    let events = until(&rx, |e| matches!(e, Event::Decided { .. }));
+    assert!(matches!(
+        events.last(),
+        Some(Event::Decided {
+            decision: Decision::Answer(serde_json::Value::Null),
+            ..
+        })
+    ));
+}

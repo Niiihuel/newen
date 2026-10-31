@@ -33,7 +33,7 @@ Un proceso por sesión de quill, con un thread cada uno, igual que con Claude.
 | `ThinkingDelta` / `ThinkingText` | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` |
 | `ToolUse` / `ToolResult` | `item/started` / `item/completed` según el tipo de ítem (ver abajo). La salida en vivo llega con `item/commandExecution/outputDelta` |
 | `PermissionRequest` → `Decide` | Pedidos del servidor `item/commandExecution/requestApproval` y `item/fileChange/requestApproval`. Se contestan con `accept`, `acceptForSession`, `decline` o `cancel` |
-| Pregunta al usuario (tarjeta de AskUserQuestion) | `item/tool/requestUserInput`: preguntas con `id`, `header`, `question`, `options{label, description}`, `isOther` e `isSecret`, la misma forma que la tarjeta de quill. Se contesta `{answers:{<id>:{answers:[<label>]}}}`. Solo existe en modo Plan o con la feature `default_mode_request_user_input` |
+| Pregunta al usuario (tarjeta de AskUserQuestion) | `item/tool/requestUserInput`: preguntas con `id`, `header`, `question`, `options{label, description}`, `isOther` e `isSecret`, la misma forma que la tarjeta de quill. Se contesta `{answers:{<id>:{answers:[<label>]}}}`. Solo existe en modo Plan o con la feature `default_mode_request_user_input`. Texto libre, secretos, solo texto y `isBlocking`: ver "Preguntas" |
 | `TurnFinished` | `turn/completed` |
 | `Tokens` / `ContextUsage` | `thread/tokenUsage/updated`: lo usado sobre la ventana del modelo, sin desglose por categoría |
 | `Limits` | `account/rateLimits/updated` / `account/rateLimits/read`: ventana primaria y semanal, igual que la tarjeta Usage |
@@ -319,3 +319,23 @@ Captura `plan-mode.jsonl` (`codex-cli 0.163.0`, `gpt-6-luna`, esfuerzo `low`, 2 
   - Los deltas del último mensaje, que partían una ruta en pedazos, son uno solo.
 - **Inferido:** que volver a Auto sea lo esperado cuando la sesión empezó en Plan, y el diseño de la tarjeta sin Reject.
 - **Verificación en pantalla** (agente falso con `plan-mode.jsonl`, Xvfb 1408×844, oscuro): el selector con Read only, Auto y Plan; la pregunta bloqueante con Other; "Proposed plan ›" y la tarjeta "Codex proposed a plan" con "Revise…" e "Implement in Auto" (en el menú, "Implement in Read only"); "Open plan" abre el plan en su panel. Al implementar, "Implement the plan." queda como mensaje, el chip pasa a Auto y corre el segundo turno.
+
+## Preguntas: texto libre, secretos, solo texto y las que no bloquean (2026-10-31)
+
+`item/tool/requestUserInput` trae por pregunta `isOther` (se puede contestar con palabras propias), `isSecret` (la respuesta se oculta) y `options`, que puede ser `null` (solo texto). Por pedido trae `isBlocking`. El adaptador lo pasa a la tarjeta de pregunta de quill con palabras propias de la tarjeta:
+- `other: false` quita la fila "Other", que era fija.
+- `secret: true` enmascara el campo (`TextField::password` de limn).
+- Sin opciones, la pregunta es solo un campo, "Type your answer".
+- `blocking: false` la marca como una pregunta sin la que el agente sigue. Sin `isBlocking` vale `true`, el valor por defecto del esquema.
+
+- **Lo que manda codex 0.163.0.** Su herramienta `request_user_input` exige opciones (2 o 3), fuerza `isOther: true` y no ofrece `isSecret` (`codex-rs/core/src/tools/handlers/request_user_input_spec.rs`). `isBlocking` es `true` solo en modo Plan (`plan-mode.jsonl:67`; en Default, `ask.jsonl:30`, es `false`). Las preguntas de solo texto y las secretas existen en el protocolo pero no salen de esta versión: sus tests son sintéticos, con la forma del esquema *(inferido)*.
+- **La respuesta.** Una pregunta que la tarjeta no contesta queda fuera de `answers`; si no contesta ninguna, va `{answers: {}}`, lo mismo que manda la TUI de Codex al vencer el plazo. "Skip" sigue mandando la pregunta con `answers: []`.
+- **Las que no bloquean se resuelven solas.** Si la persona no toca la tarjeta durante un minuto, la tarjeta cuenta otro minuto ("Skipped in 42s", junto a Skip) y al terminar se contesta sin respuestas: el modelo sigue con su mejor criterio, como le piden las instrucciones del modo Default de Codex. Tocar la tarjeta (elegir, escribir, pasar de página) apaga la cuenta y la pregunta espera a la persona.
+  - Los tiempos son de quill. Se tomaron de las constantes de la TUI de código abierto de Codex (60 s ocultos y 60 s visibles, `codex-rs/tui/src/bottom_pane/request_user_input/mod.rs`), que también apaga la cuenta con cualquier tecla.
+  - El reloj corre desde que quill ve la pregunta, esté o no en pantalla. Con la ventana sin pintar (minimizada, inferido) se resuelve en el cuadro siguiente.
+  - Una pregunta que bloquea nunca vence.
+- **Secretos.** Lo escrito se enmascara y, al enviarlo, se borra de la memoria de la UI. Las respuestas ya no se guardan con la sesión, para ningún agente: el `Event::Decided` que se persiste dice solo que la tarjeta se contestó (test del motor `an_answer_is_not_kept_with_the_session`). La respuesta sí queda en el registro propio de Codex (`~/.codex/sessions`), fuera del alcance de quill.
+- **limn.** Un `TextField` con `password(true)` que tiene texto hace que el ícono "›" de la tarjeta (página siguiente) se pinte como un cuadrado blanco. Los comandos de dibujo son los correctos (el `Icon` lleva el SVG del caret), así que el problema está al pintar, en `limn-egui`. Escribir caracteres nuevos en un campo normal no lo provoca. Hace falta un PR a limn; quill no lo parchea.
+- **Verificación en pantalla** (agente falso, Xvfb 1408×844, oscuro):
+  - `ask.jsonl`, que no bloquea: la tarjeta con Red / Blue / Other; al minuto "Skipped in 40s" junto a Skip; al vencer, la tarjeta se va y el turno sigue.
+  - Una copia de `ask.jsonl`, fuera del repo, con una pregunta secreta de solo texto y otra sin "Other": el campo enmascarado ("•••"), Next habilitado al escribir, y la segunda página con Red / Blue sin Other.

@@ -1055,6 +1055,93 @@ fn questions_page_take_several_choices_their_own_words_and_skips() {
     assert_eq!(answers["Size?"], "[No preference]");
 }
 
+/// A question may allow no "Other", mask its words, or take words only; one the agent goes on
+/// without counts down on its card once it waited untouched, and is answered with nothing at
+/// the end, unless the person touched it.
+#[test]
+fn a_question_may_be_secret_words_only_and_go_unanswered() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Awaiting,
+    });
+    let asked = |id: &str, blocking: bool| AgentEvent::PermissionRequest {
+        id: id.into(),
+        call: None,
+        tool: "AskUserQuestion".into(),
+        input: serde_json::json!({ "blocking": blocking, "questions": [
+            { "question": "Paste the API token", "options": [], "other": false, "secret": true },
+            { "question": "Red or blue?", "other": false,
+              "options": [{ "label": "Red" }, { "label": "Blue" }] }] }),
+        title: None,
+        interactive: true,
+        suggestions: vec![],
+    };
+    agent(&mut store, asked("p1", true));
+    let typed = |ui: &mut Ui, value: &str| {
+        update(
+            &store,
+            ui,
+            &UiAction::InputChanged {
+                id: "ask-other:p1:0".into(),
+                value: value.into(),
+            },
+        )
+    };
+    typed(&mut ui, "hunter2");
+    let window = limn::Size::new(1408.0, 844.0);
+    let drawn = |store: &Store, ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(drawn(&store, &ui, "•••••••") && !drawn(&store, &ui, "hunter2"));
+    click(&store, &mut ui, "ask:p1:next");
+    assert!(!drawn(&store, &ui, "Other"));
+    let intents = click(&store, &mut ui, "ask:p1:submit");
+    let [Intent::Decide {
+        decision: Decision::Answer(answers),
+        ..
+    }] = intents.as_slice()
+    else {
+        panic!("{intents:?}")
+    };
+    assert_eq!(answers["Paste the API token"], "hunter2");
+    assert_eq!(answers["Red or blue?"], "Red");
+    // What was typed is not kept once it is sent.
+    assert!(ui.other.is_empty());
+    // A blocking question never counts down.
+    ui.tick(&store);
+    assert!(ui.unanswered.is_empty());
+    // One the agent goes on without: its clock starts as it comes, its card counts down once
+    // it waited a minute, and at two it is answered with nothing.
+    agent(&mut store, asked("p2", false));
+    ui.tick(&store);
+    assert!(matches!(ui.unanswered.get("p2"), Some((1, Some(_)))));
+    assert!(!drawn(&store, &ui, "Skipped in"));
+    let ago = |secs| std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
+    ui.unanswered.insert("p2".into(), (1, ago(90)));
+    assert!(drawn(&store, &ui, "Skipped in 30s"));
+    assert!(ui.due().is_empty());
+    ui.unanswered.insert("p2".into(), (1, ago(121)));
+    assert_eq!(
+        ui.due(),
+        [Intent::Decide {
+            session: 1,
+            permission: "p2".into(),
+            decision: Decision::Answer(serde_json::json!({})),
+        }]
+    );
+    // Touched, it waits for the person.
+    agent(&mut store, asked("p3", false));
+    ui.tick(&store);
+    ui.unanswered.insert("p3".into(), (1, ago(121)));
+    click(&store, &mut ui, "ask:p3:1:1");
+    assert!(ui.due().is_empty());
+    assert!(!drawn(&store, &ui, "Skipped in"));
+}
+
 #[test]
 fn accepting_a_plan_allows_it_and_sets_the_mode() {
     let (mut store, mut ui) = store_with_session();
