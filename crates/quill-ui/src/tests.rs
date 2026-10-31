@@ -4417,6 +4417,54 @@ fn the_queue_bar_buttons_and_row_menus_send_their_intents() {
 }
 
 #[test]
+fn the_agents_suggested_prompt_waits_in_the_empty_composer_until_taken_or_sent() {
+    let (mut store, mut ui) = store_with_session();
+    let set = |store: &mut Store, status| store.apply(Event::Status { session: 1, status });
+    let suggest = |store: &mut Store, text: &str| {
+        agent(store, AgentEvent::PromptSuggestion { text: text.into() })
+    };
+    set(&mut store, SessionStatus::Idle);
+    suggest(&mut store, "add a docstring");
+    // In the placeholder's place, while the box is empty.
+    assert!(drawn(&store, &ui, "add a docstring"));
+    assert!(!drawn(&store, &ui, "Type / for commands"));
+    ui.prompt = "run it".into();
+    assert!(!drawn(&store, &ui, "add a docstring"));
+    // Tab or → in the empty composer puts it there, to send or change; not over a draft, nor
+    // from another control.
+    let (tab, right) = (key(limn::Key::Tab), key(limn::Key::ArrowRight));
+    assert!(!suggestion_key(&store, &mut ui, Some(view::COMPOSER), &tab));
+    ui.prompt.clear();
+    assert!(!suggestion_key(&store, &mut ui, Some("terminal"), &tab));
+    assert!(suggestion_key(
+        &store,
+        &mut ui,
+        Some(view::COMPOSER),
+        &right
+    ));
+    assert_eq!(ui.restore_prompt.take().as_deref(), Some("add a docstring"));
+    // A message sent takes it away, as do a turn that starts and an agent that stops.
+    store.apply(Event::Queued {
+        session: 1,
+        request: "r2".into(),
+        text: "add a docstring".into(),
+        at: None,
+        images: vec![],
+    });
+    assert!(!suggestion_key(&store, &mut ui, Some(view::COMPOSER), &tab));
+    for status in [SessionStatus::Running, SessionStatus::Exited] {
+        set(&mut store, SessionStatus::Idle);
+        suggest(&mut store, "add a docstring");
+        set(&mut store, status);
+        assert_eq!(store.session(1).unwrap().suggestion, None);
+    }
+    // One that comes once the next turn began is the last turn's: it is let go.
+    set(&mut store, SessionStatus::Running);
+    suggest(&mut store, "stale");
+    assert_eq!(store.session(1).unwrap().suggestion, None);
+}
+
+#[test]
 fn an_empty_composer_takes_the_last_queued_message_back_with_arrow_up() {
     let (mut store, mut ui) = store_with_session();
     queued(&mut store, &["first", "second"]);

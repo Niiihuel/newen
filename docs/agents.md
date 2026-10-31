@@ -27,6 +27,7 @@ encode(cmd)  → Vec<String>                                                  //
 | Reanudar / fork | `capabilities.resume/fork` | `--resume`, `--fork-session` | `thread/resume`, `thread/fork` | sesiones persistidas del servidor |
 | Rewind propio del CLI | `capabilities.rewind` | `rewind_files` | — | `revert` |
 | Desglose del contexto | `Command::ContextUsage` → `Event::ContextUsage{used, max, categories, groups}` (sin respuesta si el agente no lo sabe) | `control_request get_context_usage` (`detail: "full"`) | solo el total: `thread/tokenUsage/updated`, sin categorías | — |
+| Siguiente prompt sugerido | `Event::PromptSuggestion{text}` tras el fin de turno; efímero, el store no lo guarda | con la opción "Prompt suggestions" del adaptador (prendida por defecto), `initialize` lleva `promptSuggestions: true` y llega `prompt_suggestion{suggestion}` ~1 s después del `result`, nunca tras el primer turno (2.1.316, fixture `2.1.316/suggest`) | no tiene: `thread/prediction/request` es experimental y la 0.163.0 lo contesta "not implemented yet" | — |
 
 Lo que un CLI no tenga se declara en `AgentCapabilities` y la UI lo muestra degradado. Por ejemplo, sin hooks la atribución se hace por turno con el repo sombra, y sin permisos interactivos no hay tarjeta de permiso.
 

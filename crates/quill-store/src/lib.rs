@@ -80,6 +80,8 @@ impl Store {
                     // Reachable from another device only while its agent runs.
                     | AgentEvent::Remote { .. }
                     | AgentEvent::RemotePairing { .. }
+                    // Only until the person types, sends or the agent stops.
+                    | AgentEvent::PromptSuggestion { .. }
             ),
             _ => true,
         }
@@ -160,6 +162,18 @@ mod tests {
         };
         assert!(!Store::keeps(&logo));
         assert_eq!(logo.session(), 0);
+    }
+
+    #[test]
+    fn a_suggested_prompt_is_never_kept() {
+        let suggested = Event::Agent {
+            session: 1,
+            request: None,
+            event: AgentEvent::PromptSuggestion {
+                text: "add a docstring".into(),
+            },
+        };
+        assert!(!Store::keeps(&suggested));
     }
 
     #[test]

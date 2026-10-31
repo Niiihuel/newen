@@ -94,6 +94,7 @@ Se declara en `AgentCapabilities` y la interfaz lo muestra degradado, como dice 
 - **Desglose del contexto por categoría:** solo el total.
 - **Rewind de archivos del CLI:** Codex no restaura archivos (`capabilities.rewind` queda en false); los restaura el motor con sus instantáneas. La conversación sí se puede devolver, ver «Rewind» abajo.
 - **Comandos `/`:** Codex tiene skills y prompts propios (`skills/list`). Se muestran en el menú `/` en una fase posterior.
+- **Sugerencia del siguiente prompt:** no la tiene. El app-server declara como experimentales `thread/prediction/request` y `thread/prediction/updated`, pero la 0.163.0 contesta el pedido con "thread/prediction/request is not implemented yet" (`codex-rs/app-server/src/message_processor.rs`). El adaptador no ofrece la opción ni manda `PromptSuggestion`.
 
 ## Elegir el agente
 

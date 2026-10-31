@@ -62,6 +62,9 @@ pub struct Claude {
     remote: bool,
     /// quill's own prompts, until the CLI echoes them back (`--replay-user-messages`).
     prompts: std::collections::HashSet<String>,
+    /// `initialize` asks for a suggested next prompt after each turn, as the session's options
+    /// said at launch.
+    suggest: std::cell::Cell<bool>,
 }
 
 impl Claude {
@@ -313,6 +316,12 @@ impl AgentAdapter for Claude {
     }
 
     fn launch(&self, spec: &SessionSpec) -> LaunchPlan {
+        // On unless the person turned it off, as Desktop's switch starts.
+        let on = spec
+            .options
+            .get(PROMPT_SUGGESTIONS)
+            .is_none_or(|v| v == "true");
+        self.suggest.set(on);
         let mut args: Vec<String> = [
             "--output-format",
             "stream-json",
@@ -638,6 +647,13 @@ impl AgentAdapter for Claude {
                 &[],
                 "false",
             ),
+            option(
+                PROMPT_SUGGESTIONS,
+                "Prompt suggestions",
+                "Show a suggested next prompt in the message box after Claude replies. Suggestions add a little to your usage. Applies to new sessions.",
+                &[],
+                "true",
+            ),
         ]
     }
 
@@ -776,14 +792,19 @@ impl AgentAdapter for Claude {
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {
         match command {
             AgentCommand::Start => {
-                let line = self.request(json!({
+                let mut request = json!({
                     "subtype": "initialize",
                     "hooks": { "PostToolUse": [{ "hookCallbackIds": [POST_TOOL_HOOK] }] },
                     "sdkMcpServers": [SERVER, BROWSER_SERVER],
                     "appendSystemPrompt": format!(
                         "{WORK_GUIDE}\n\n{SESSIONS_GUIDE}\n\n{BROWSER_GUIDE}\n\n{LAUNCH_GUIDE}"
                     ),
-                }));
+                });
+                // Answered by a `prompt_suggestion` after a turn's `result` (2.1.316 [F:suggest]).
+                if self.suggest.get() {
+                    request["promptSuggestions"] = json!(true);
+                }
+                let line = self.request(request);
                 self.initialize = Some(self.last_request_id());
                 vec![line]
             }
@@ -1259,6 +1280,14 @@ impl AgentAdapter for Claude {
                     weekly: window(&windows["seven_day"]),
                 }));
             }
+            // Verified on 2.1.316 [F:suggest]: about a second after the turn's `result`, none
+            // after the first turn.
+            ("prompt_suggestion", _) => {
+                let text = text(&msg["suggestion"]).trim().to_owned();
+                if !text.is_empty() {
+                    decoded.events.push(AgentEvent::PromptSuggestion { text });
+                }
+            }
             (kind, _) if QUIET.contains(&kind) => {}
             _ => decoded.events.push(AgentEvent::Unknown(msg)),
         }
@@ -1499,6 +1528,7 @@ fn ready(body: &Value, ultracode: bool) -> AgentEvent {
 const OUTPUT_STYLE: &str = "output_style";
 const SANDBOX: &str = "sandbox";
 const STRICT_SANDBOX: &str = "strict_sandbox";
+const PROMPT_SUGGESTIONS: &str = "prompt_suggestions";
 
 /// The session's options as Claude Code settings: `outputStyle`, and `sandbox.enabled` with
 /// `allowUnsandboxedCommands` off when strict. `None` when none is set.

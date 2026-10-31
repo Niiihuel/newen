@@ -698,6 +698,10 @@ pub enum AgentEvent {
         code: String,
         expires_at: u64,
     },
+    /// What the person might ask next, as the agent guesses it after a turn ends.
+    PromptSuggestion {
+        text: String,
+    },
     /// The agent calls one of quill's own tools, the ones that start and propose other
     /// sessions ([`HOST_TOOLS`]). The engine answers with [`AgentCommand::HostToolResult`].
     HostTool {
