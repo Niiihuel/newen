@@ -42,6 +42,7 @@ When they are all merged, point `Cargo.toml` back at `../lienzo` and drop the br
 | — | `feat/surface-texture` | the browser's GPU frames drawn from a texture quill registered with egui-wgpu (`present_surface_texture`) | local, not pushed |
 | — | `feat/surface-paint` | the page presented beneath the window: quill paints the browser's surface itself, a transparent hole (`present_surface_paint`) | local, not pushed |
 | — | `feat/drawn-over` | no longer used: native tabs now paint into their surface, so nothing has to step aside for quill (docs/browser.md §8) | local, not pushed; can be dropped |
+| — | `feat/textarea-persistent-placeholder` | the composer's placeholder, and the agent's suggested prompt in it, kept while the box is focused and empty (`Composer::persistent_placeholder`) | local, not pushed |
 
 Updating the branch: `git -C ../limn-quill-integration merge <branch>`; the only conflicts so
 far were rows added side by side in `docs/components.md`, `CHANGELOG.md` and `lib.rs`, and

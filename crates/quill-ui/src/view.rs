@@ -6461,6 +6461,8 @@ fn composer(
         look::composer_palette(),
     )
     .enter_submits(true)
+    // Desktop's hint stays in the focused box, as it is right after sending.
+    .persistent_placeholder(true)
     .auto_grow(28.0, 184.0)
     .editor_font_size(15.0)
     .pill_controls(Element::spacer().size(Some(0.0), None), trailing)

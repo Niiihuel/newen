@@ -4762,9 +4762,22 @@ fn the_agents_suggested_prompt_waits_in_the_empty_composer_until_taken_or_sent()
     let suggest = |store: &mut Store, text: &str| {
         agent(store, AgentEvent::PromptSuggestion { text: text.into() })
     };
+    // The box has the focus, as it does right after sending: its placeholder stays.
+    let window = limn::Size::new(1408.0, 844.0);
+    let focused = |store: &Store, ui: &Ui, words: &str| {
+        let mut tree = UiTree::new(view(store, ui, window));
+        tree.layout(window);
+        assert!(tree.focus(view::COMPOSER));
+        let frame = tree.layout(window);
+        frame.commands.iter().any(
+            |command| matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words)),
+        )
+    };
     set(&mut store, SessionStatus::Idle);
+    assert!(focused(&store, &ui, "Type / for commands"));
     suggest(&mut store, "add a docstring");
-    // In the placeholder's place, while the box is empty.
+    // In the placeholder's place while the box is empty, focused or not.
+    assert!(focused(&store, &ui, "add a docstring"));
     assert!(drawn(&store, &ui, "add a docstring"));
     assert!(!drawn(&store, &ui, "Type / for commands"));
     ui.prompt = "run it".into();
