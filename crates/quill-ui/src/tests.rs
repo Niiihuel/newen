@@ -1060,6 +1060,93 @@ fn questions_page_take_several_choices_their_own_words_and_skips() {
     assert_eq!(answers["Size?"], "[No preference]");
 }
 
+/// A question may allow no "Other", mask its words, or take words only; one the agent goes on
+/// without counts down on its card once it waited untouched, and is answered with nothing at
+/// the end, unless the person touched it.
+#[test]
+fn a_question_may_be_secret_words_only_and_go_unanswered() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Awaiting,
+    });
+    let asked = |id: &str, blocking: bool| AgentEvent::PermissionRequest {
+        id: id.into(),
+        call: None,
+        tool: "AskUserQuestion".into(),
+        input: serde_json::json!({ "blocking": blocking, "questions": [
+            { "question": "Paste the API token", "options": [], "other": false, "secret": true },
+            { "question": "Red or blue?", "other": false,
+              "options": [{ "label": "Red" }, { "label": "Blue" }] }] }),
+        title: None,
+        interactive: true,
+        suggestions: vec![],
+    };
+    agent(&mut store, asked("p1", true));
+    let typed = |ui: &mut Ui, value: &str| {
+        update(
+            &store,
+            ui,
+            &UiAction::InputChanged {
+                id: "ask-other:p1:0".into(),
+                value: value.into(),
+            },
+        )
+    };
+    typed(&mut ui, "hunter2");
+    let window = limn::Size::new(1408.0, 844.0);
+    let drawn = |store: &Store, ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(drawn(&store, &ui, "•••••••") && !drawn(&store, &ui, "hunter2"));
+    click(&store, &mut ui, "ask:p1:next");
+    assert!(!drawn(&store, &ui, "Other"));
+    let intents = click(&store, &mut ui, "ask:p1:submit");
+    let [Intent::Decide {
+        decision: Decision::Answer(answers),
+        ..
+    }] = intents.as_slice()
+    else {
+        panic!("{intents:?}")
+    };
+    assert_eq!(answers["Paste the API token"], "hunter2");
+    assert_eq!(answers["Red or blue?"], "Red");
+    // What was typed is not kept once it is sent.
+    assert!(ui.other.is_empty());
+    // A blocking question never counts down.
+    ui.tick(&store);
+    assert!(ui.unanswered.is_empty());
+    // One the agent goes on without: its clock starts as it comes, its card counts down once
+    // it waited a minute, and at two it is answered with nothing.
+    agent(&mut store, asked("p2", false));
+    ui.tick(&store);
+    assert!(matches!(ui.unanswered.get("p2"), Some((1, Some(_)))));
+    assert!(!drawn(&store, &ui, "Skipped in"));
+    let ago = |secs| std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
+    ui.unanswered.insert("p2".into(), (1, ago(90)));
+    assert!(drawn(&store, &ui, "Skipped in 30s"));
+    assert!(ui.due().is_empty());
+    ui.unanswered.insert("p2".into(), (1, ago(121)));
+    assert_eq!(
+        ui.due(),
+        [Intent::Decide {
+            session: 1,
+            permission: "p2".into(),
+            decision: Decision::Answer(serde_json::json!({})),
+        }]
+    );
+    // Touched, it waits for the person.
+    agent(&mut store, asked("p3", false));
+    ui.tick(&store);
+    ui.unanswered.insert("p3".into(), (1, ago(121)));
+    click(&store, &mut ui, "ask:p3:1:1");
+    assert!(ui.due().is_empty());
+    assert!(!drawn(&store, &ui, "Skipped in"));
+}
+
 #[test]
 fn accepting_a_plan_allows_it_and_sets_the_mode() {
     let (mut store, mut ui) = store_with_session();
@@ -1104,6 +1191,170 @@ fn accepting_a_plan_allows_it_and_sets_the_mode() {
 
 fn click(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     update(store, ui, &UiAction::Clicked { id: id.into() })
+}
+
+/// An agent in a planning mode that ends its turn with the plan (none of its own is asked):
+/// the card waits under the turn; "Implement in …" goes back to the mode the session left and
+/// says the words that have the plan carried out, kept as the person's message; "Revise…" says
+/// what should change, still planning. Claude Code's plan, which it asks about, is not this card.
+#[test]
+fn a_plan_that_ends_the_turn_is_carried_out_by_a_turn_of_its_own() {
+    let mut store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.selected = Some(1);
+    ui.skip_welcome = true;
+    let word = |id: &str, label: &str, tone| quill_model::ModeWords {
+        id: id.into(),
+        label: label.into(),
+        about: String::new(),
+        tone,
+        listed: true,
+    };
+    use quill_model::ModeTone;
+    ui.agents = vec![quill_model::AgentInfo {
+        id: "codex".into(),
+        name: "Codex".into(),
+        tested: vec![],
+        options: vec![],
+        icon: None,
+        sign_in_methods: vec![],
+        sign_in_code: false,
+        modes: vec![
+            word("read-only", "Read only", ModeTone::Read),
+            word("auto", "Auto", ModeTone::Auto),
+            word("plan", "Plan", ModeTone::Plan),
+        ],
+        default_mode: "auto".into(),
+    }];
+    store.apply(Event::SessionCreated {
+        session: 1,
+        agent: "codex".into(),
+        cwd: "/work".into(),
+    });
+    let modes = ["read-only", "auto", "plan"].map(String::from).to_vec();
+    agent(
+        &mut store,
+        AgentEvent::Ready {
+            version: "0.163.0".into(),
+            capabilities: AgentCapabilities {
+                modes,
+                ..Default::default()
+            },
+            mode: Some("read-only".into()),
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::ModeChanged {
+            mode: "plan".into(),
+        },
+    );
+    store.apply(Event::Queued {
+        session: 1,
+        request: "r1".into(),
+        text: "Plan hello.txt".into(),
+        at: None,
+        images: vec![],
+    });
+    agent(
+        &mut store,
+        AgentEvent::ToolUse {
+            call: "t1-plan".into(),
+            name: "ExitPlanMode".into(),
+            input: serde_json::json!({ "plan": "# Add hello.txt" }),
+            parent: None,
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::ToolResult {
+            call: "t1-plan".into(),
+            output: String::new(),
+            is_error: false,
+            files: vec![],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::TurnFinished {
+            ok: true,
+            interrupted: false,
+            usage: Usage::default(),
+            error: None,
+        },
+    );
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    let session = store.session(1).unwrap();
+    assert_eq!(view::proposed_plan(session, &ui), Some("t1-plan"));
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let drawn = |words: &str| {
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(drawn("Codex proposed a plan") && drawn("Implement in Read only"));
+    assert!(!drawn("Reject"));
+    let intents = click(&store, &mut ui, "planok:t1-plan:read-only");
+    assert_eq!(
+        intents,
+        [
+            Intent::SetMode {
+                session: 1,
+                mode: "read-only".into()
+            },
+            Intent::Send {
+                session: 1,
+                text: IMPLEMENT_PLAN.into(),
+                mentions: vec![],
+                images: vec![],
+                lane: Lane::default(),
+            }
+        ]
+    );
+    click(&store, &mut ui, "revise:t1-plan");
+    let revised = update(
+        &store,
+        &mut ui,
+        &UiAction::Submitted {
+            id: "revise-text:t1-plan".into(),
+            value: " Keep it to one line ".into(),
+        },
+    );
+    assert!(matches!(&revised[..], [Intent::Send { text, .. }] if text == "Keep it to one line"));
+    // Once the person said something, or left planning, it waits no more.
+    let session = store.session(1).unwrap();
+    let mut left = session.clone();
+    left.mode = "auto".into();
+    assert_eq!(view::proposed_plan(&left, &ui), None);
+    let mut answered = session.clone();
+    answered.items.push(Item::User {
+        request: "r2".into(),
+        text: IMPLEMENT_PLAN.into(),
+        at: None,
+        images: vec![],
+    });
+    assert_eq!(view::proposed_plan(&answered, &ui), None);
+    // A plan the agent asks about is its permission's card.
+    let mut asked = session.clone();
+    asked.items.push(Item::Permission {
+        id: "p1".into(),
+        call: Some("t1-plan".into()),
+        tool: "ExitPlanMode".into(),
+        input: serde_json::json!({ "plan": "# Add hello.txt" }),
+        title: None,
+        interactive: true,
+        suggestions: vec![],
+        decided: Some("Allowed"),
+    });
+    assert_eq!(view::proposed_plan(&asked, &ui), None);
 }
 
 #[test]

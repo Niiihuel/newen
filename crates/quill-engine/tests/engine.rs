@@ -2034,3 +2034,87 @@ fn what_is_uncommitted_is_read_after_each_step_and_a_burst_is_read_once() {
     assert!(reads.len() <= 2, "{reads:?}");
     assert_eq!(reads.last(), Some(&vec![("a.txt".to_owned(), 4, 0)]));
 }
+
+/// A mode chosen while the agent is not running (a session read back, or one not yet sent
+/// to) is the one it starts in: a plan carried out after a restart leaves planning.
+#[test]
+fn a_mode_chosen_before_the_agent_runs_is_the_one_it_starts_in() {
+    let (engine, rx) = engine();
+    let dir = workdir("simple");
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.clone(),
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    engine.send(Intent::SetMode {
+        session: 1,
+        mode: "plan".into(),
+    });
+    engine.send(Intent::Send {
+        session: 1,
+        text: "hi".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::TurnFinished { .. },
+                ..
+            }
+        )
+    });
+    let launched = std::fs::read_to_string(dir.join(".fake-launch")).unwrap();
+    let mode = (launched.lines())
+        .skip_while(|l| *l != "--permission-mode")
+        .nth(1);
+    assert_eq!(mode, Some("plan"), "{launched}");
+}
+
+/// An answer goes to the agent and nowhere else: what is kept of it only says the card was
+/// answered, since one may be a secret.
+#[test]
+fn an_answer_is_not_kept_with_the_session() {
+    let (engine, rx) = engine();
+    new_session(&engine, "ask");
+    engine.send(Intent::Send {
+        session: 1,
+        text: "Ask me".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    let events = until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::PermissionRequest { .. },
+                ..
+            }
+        )
+    });
+    let Some(Event::Agent {
+        event: AgentEvent::PermissionRequest { id, .. },
+        ..
+    }) = events.last()
+    else {
+        unreachable!()
+    };
+    engine.send(Intent::Decide {
+        session: 1,
+        permission: id.clone(),
+        decision: Decision::Answer(serde_json::json!({ "Pick red or blue?": "hunter2" })),
+    });
+    let events = until(&rx, |e| matches!(e, Event::Decided { .. }));
+    assert!(matches!(
+        events.last(),
+        Some(Event::Decided {
+            decision: Decision::Answer(serde_json::Value::Null),
+            ..
+        })
+    ));
+}

@@ -4,9 +4,9 @@
 //! line (`out` = quill → CLI, `in` = CLI → quill, `stderr`, `exit`). Each run gets a fresh git repo.
 //!
 //! Always `gpt-6-luna` at effort `low`; never `danger-full-access` or approval policy `never`.
-//! Scenarios: simple, edit-bash, deny, deny-patch, always, plan, steer, interrupt, resume, fork, rewind, think,
-//! websearch, ask, account, subagent, image, view-sleep, compact, review, remote (by hand, with
-//! a phone: it prints the pairing code, and `touch <capture>/stop` ends the listening).
+//! Scenarios: simple, edit-bash, deny, deny-patch, always, plan, plan-mode, steer, interrupt, resume, fork,
+//! rewind, think, websearch, ask, account, subagent, image, view-sleep, compact, review, remote (by
+//! hand, with a phone: it prints the pairing code, and `touch <capture>/stop` ends the listening).
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -43,6 +43,9 @@ enum Step {
     /// Only listen, for at most this many seconds or until `<capture>/stop` appears: someone
     /// acts from another device meanwhile.
     Listen(u64),
+    /// The collaboration mode (`plan` or `default`) of the turns that follow, each with the
+    /// policy quill gives it: Plan reads only.
+    Mode(&'static str),
 }
 
 /// A 24x24 blue square, for `view_image` to look at.
@@ -153,6 +156,23 @@ fn scenario(name: &str) -> Option<Scenario> {
             vec![Turn(
                 "Use the request_user_input tool to ask me to pick red or blue (multiple choice), then reply with my answer only.",
             )],
+        ),
+        // A plan proposed in Plan mode, with the question it asks first (blocking there), then
+        // carried out in Default mode with the words quill sends.
+        "plan-mode" => (
+            AUTO,
+            "accept",
+            vec![
+                Rpc("collaborationMode/list", json!({})),
+                Mode("plan"),
+                Turn(
+                    "Plan adding a file hello.txt that contains the word hi. Before the plan, use \
+                     request_user_input to ask me one question: should the file end with a newline? \
+                     Keep the final plan to three short bullets.",
+                ),
+                Mode("default"),
+                Turn("Implement the plan."),
+            ],
         ),
         "subagent" => (
             AUTO,
@@ -345,12 +365,13 @@ struct Driver {
     decline_first: bool,
     /// `turn/start.summary`: reasoning summaries are off unless asked for.
     summary: Option<&'static str>,
-    /// Leave approvals and questions to another client (a phone over Remote Control), and use
-    /// the experimental API that Remote Control is in.
+    /// Leave approvals and questions to another client (a phone over Remote Control).
     remote: bool,
     /// Sent again on resume and fork, which otherwise take the user's own configured defaults.
     approval: &'static str,
     sandbox: &'static str,
+    /// `turn/start.collaborationMode` (experimental), once a step set one.
+    collaboration: Option<&'static str>,
 }
 
 impl Driver {
@@ -453,11 +474,11 @@ impl Driver {
     }
 
     fn handshake(&mut self) -> Result<(), String> {
-        let mut params =
-            json!({ "clientInfo": { "name": "quill", "title": "quill", "version": "0.0.1" } });
-        if self.remote {
-            params["capabilities"] = json!({ "experimentalApi": true });
-        }
+        // The experimental API, as quill asks for it: Remote Control and Plan mode are in it.
+        let params = json!({
+            "clientInfo": { "name": "quill", "title": "quill", "version": "0.0.1" },
+            "capabilities": { "experimentalApi": true },
+        });
         self.call("initialize", params)?;
         self.p.send(json!({ "method": "initialized" }));
         Ok(())
@@ -469,6 +490,18 @@ impl Driver {
         let mut params = json!({ "threadId": self.st.thread_id, "input": [{ "type": "text", "text": text }], "effort": "low" });
         if let Some(summary) = self.summary {
             params["summary"] = json!(summary);
+        }
+        // Its own instructions (null) and the turn's model and effort, as quill sends it.
+        if let Some(mode) = self.collaboration {
+            let settings = json!({ "model": MODEL, "reasoning_effort": "low", "developer_instructions": null });
+            params["collaborationMode"] = json!({ "mode": mode, "settings": settings });
+            let sandbox = if mode == "plan" {
+                "readOnly"
+            } else {
+                "workspaceWrite"
+            };
+            params["approvalPolicy"] = json!("on-request");
+            params["sandboxPolicy"] = json!({ "type": sandbox });
         }
         let r = self.call("turn/start", params)?;
         if let Some(id) = r["turn"]["id"].as_str() {
@@ -563,6 +596,7 @@ pub fn run(name: &str) -> Result<(), String> {
         remote: name == "remote",
         approval: sc.approval,
         sandbox: sc.sandbox,
+        collaboration: None,
     };
     // A failed step still ends the run cleanly, so the capture of what happened is kept.
     let outcome = (|| -> Result<(), String> {
@@ -686,6 +720,7 @@ pub fn run(name: &str) -> Result<(), String> {
                     // `stop` ends this listen only; the next one runs its full time.
                     let _ = std::fs::remove_file(&stop);
                 }
+                Step::Mode(mode) => d.collaboration = Some(mode),
             }
         }
         Ok(())
@@ -708,6 +743,7 @@ mod tests {
             "deny-patch",
             "always",
             "plan",
+            "plan-mode",
             "steer",
             "interrupt",
             "resume",

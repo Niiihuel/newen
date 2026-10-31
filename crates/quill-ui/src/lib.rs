@@ -130,6 +130,8 @@ pub struct Session {
     pub items: Vec<Item>,
     pub capabilities: Option<AgentCapabilities>,
     pub mode: String,
+    /// The mode it was in before this one, which carrying out a plan goes back to.
+    pub mode_before: Option<String>,
     /// The model and the effort it runs at, as last chosen for it.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -287,6 +289,7 @@ impl Store {
                 queue: vec![],
                 capabilities: None,
                 mode: "default".into(),
+                mode_before: None,
                 model: None,
                 effort: None,
                 title: String::new(),
@@ -668,7 +671,9 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
                 s.mode = mode;
             }
         }
-        AgentEvent::ModeChanged { mode } => s.mode = mode,
+        AgentEvent::ModeChanged { mode } if mode != s.mode => {
+            s.mode_before = Some(std::mem::replace(&mut s.mode, mode));
+        }
         AgentEvent::Remote { on, url, error } => {
             s.remote = match (on, error) {
                 // A later word without the link keeps the one already given.
@@ -1208,6 +1213,9 @@ pub struct Ui {
     pub question: std::collections::HashMap<String, usize>,
     /// What the person wrote under "Other", by permission and question.
     pub other: std::collections::HashMap<(String, usize), String>,
+    /// Questions the agent goes on without, by permission: their session, and since when they
+    /// wait untouched; `None` once the person touched one, which then waits for them.
+    pub unanswered: std::collections::HashMap<String, (SessionId, Option<std::time::Instant>)>,
     /// The plan whose "Revise…" field is open, and what it holds.
     pub revising: Option<String>,
     pub revision: String,
@@ -1975,6 +1983,7 @@ impl Ui {
             plan: None,
             question: Default::default(),
             other: Default::default(),
+            unanswered: Default::default(),
             revising: None,
             revision: String::new(),
             terminal: TerminalPane::default(),
@@ -2089,10 +2098,20 @@ impl Ui {
             .ultra_since
             .map(|_| std::time::Duration::from_millis(33));
         let mcp = (self.mcp.as_ref()).map(|m| MCP_POLL.saturating_sub(m.asked.elapsed()));
+        // A question's countdown shows from its quiet stretch's end, in whole seconds.
+        let questions = (self.unanswered.values())
+            .filter_map(|(_, since)| {
+                let waited = since.as_ref()?.elapsed();
+                Some(match QUESTION_QUIET.checked_sub(waited) {
+                    Some(quiet) => quiet,
+                    None => std::time::Duration::from_secs(1),
+                })
+            })
+            .min();
         if self.animating() {
             Some(std::time::Duration::ZERO)
         } else {
-            [check, ultra, mcp].into_iter().flatten().min()
+            [check, ultra, mcp, questions].into_iter().flatten().min()
         }
     }
 
@@ -2198,6 +2217,22 @@ impl Ui {
     /// [`MCP_POLL`], so one that connects or fails shows it; Customize's lists, read again
     /// for a folder chosen while it shows.
     pub fn due(&mut self) -> Vec<Intent> {
+        // A question nobody touched goes unanswered once its countdown ends.
+        let mut gone = vec![];
+        self.unanswered.retain(|permission, (session, since)| {
+            let over = since.is_some_and(|t| t.elapsed() >= QUESTION_QUIET + QUESTION_COUNTDOWN);
+            if over {
+                gone.push(Intent::Decide {
+                    session: *session,
+                    permission: permission.clone(),
+                    decision: Decision::Answer(serde_json::json!({})),
+                });
+            }
+            !over
+        });
+        if !gone.is_empty() {
+            return gone;
+        }
         let customizing = (self.settings_page.as_deref())
             .is_some_and(|p| [view::SETTINGS_PLUGINS, view::SETTINGS_SKILLS].contains(&p));
         let folder = customize_folder(self);
@@ -2224,6 +2259,30 @@ impl Ui {
             }
         }
         let now = std::time::Instant::now();
+        // A question the agent goes on without starts its clock as it comes; one answered (or
+        // withdrawn, or closed with its turn) is forgotten. Open ones are in the turn under way.
+        let open: Vec<(&String, SessionId)> = (store.sessions.iter())
+            .flat_map(|s| {
+                (s.items.iter().rev())
+                    .take_while(|i| !matches!(i, Item::TurnEnd { .. }))
+                    .filter_map(move |i| match i {
+                        Item::Permission {
+                            id,
+                            input,
+                            decided: None,
+                            ..
+                        } if input["blocking"] == false => Some((id, s.id)),
+                        _ => None,
+                    })
+            })
+            .collect();
+        self.unanswered
+            .retain(|id, _| open.iter().any(|(o, _)| *o == id));
+        for (id, session) in open {
+            self.unanswered
+                .entry(id.clone())
+                .or_insert((session, Some(now)));
+        }
         // The pace of limn's own opening and closing slots, one and a half `move_ms`;
         // Desktop's own timing is not measured.
         let motion = limn::SpringMotion::settling_in(std::time::Duration::from_millis(
@@ -2834,6 +2893,7 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
         UiAction::InputChanged { id, value } if id.starts_with("ask-other:") => {
             let rest = &id["ask-other:".len()..];
             if let Some((permission, q)) = rest.rsplit_once(':') {
+                ui.touched(permission);
                 if let Ok(q) = q.parse() {
                     ui.other.insert((permission.to_owned(), q), value.clone());
                 }
@@ -2849,11 +2909,19 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
             ui.revision = value.clone();
             vec![]
         }
-        // "Revise…" sends what should change as the reason the plan is turned down.
+        // "Revise…" sends what should change as the reason the plan is turned down; for a plan
+        // the agent ended its turn with, as the next message, still planning.
         UiAction::Submitted { id, value } if id.starts_with("revise-text:") => {
             let permission = &id["revise-text:".len()..];
             ui.revising = None;
             ui.revision.clear();
+            if let Some(session) = proposing(store, ui, permission) {
+                let text = value.trim();
+                if text.is_empty() {
+                    return vec![];
+                }
+                return vec![send(session, text.to_owned())];
+            }
             let Some(session) = ui.selected else {
                 return vec![];
             };
@@ -3890,9 +3958,20 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         ui.revision.clear();
         return vec![];
     }
-    // Accepting a plan allows it and puts the session in the mode chosen.
+    // Accepting a plan allows it and puts the session in the mode chosen. A plan the agent ended
+    // its turn with is carried out by a turn of its own, in that mode.
     if let Some((permission, mode)) = id.strip_prefix("planok:").and_then(|r| r.rsplit_once(':')) {
         ui.perm_menu = None;
+        if let Some(session) = proposing(store, ui, permission) {
+            ui.mode = mode.to_owned();
+            return vec![
+                Intent::SetMode {
+                    session,
+                    mode: mode.to_owned(),
+                },
+                send(session, IMPLEMENT_PLAN.to_owned()),
+            ];
+        }
         let Some(session) = asking(store, ui, permission).map(|s| s.id) else {
             return vec![];
         };
@@ -3985,6 +4064,30 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
 
 /// The session in view, or the one beside it, that asks `permission`: its card is answered
 /// in either.
+/// What the person says to have a proposed plan carried out, kept in the transcript as theirs.
+const IMPLEMENT_PLAN: &str = "Implement the plan.";
+
+/// The session on screen whose agent ended its turn with the plan `call`.
+fn proposing(store: &Store, ui: &Ui, call: &str) -> Option<SessionId> {
+    [ui.selected, ui.side_chat]
+        .into_iter()
+        .flatten()
+        .filter_map(|s| store.session(s))
+        .find(|s| view::proposed_plan(s, ui) == Some(call))
+        .map(|s| s.id)
+}
+
+/// A message to the session, as the composer sends one.
+fn send(session: SessionId, text: String) -> Intent {
+    Intent::Send {
+        session,
+        text,
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::default(),
+    }
+}
+
 fn asking<'a>(store: &'a Store, ui: &Ui, permission: &str) -> Option<&'a Session> {
     [ui.selected, ui.side_chat]
         .into_iter()
@@ -4079,6 +4182,7 @@ fn answer(store: &Store, ui: &mut Ui, rest: &str) -> Vec<Intent> {
     let Some(input) = find(permission) else {
         return vec![];
     };
+    ui.touched(permission);
     let questions = input["questions"].as_array().cloned().unwrap_or_default();
     let page = ui.question.get(permission).copied().unwrap_or(0);
     let last = page + 1 >= questions.len();
@@ -4088,13 +4192,17 @@ fn answer(store: &Store, ui: &mut Ui, rest: &str) -> Vec<Intent> {
             .enumerate()
             .map(|(q, question)| {
                 let other = ui.other.get(&(permission.to_owned(), q));
-                let labels: Vec<String> = view::picked(ui, permission, q, question)
+                let mut labels: Vec<String> = view::picked(ui, permission, q, question)
                     .into_iter()
                     .map(|l| match other {
                         Some(typed) if l == "Other" && !typed.trim().is_empty() => typed.clone(),
                         _ => l,
                     })
                     .collect();
+                // A question with no options is answered in words only.
+                if question["options"].as_array().is_none_or(Vec::is_empty) {
+                    labels.extend(other.filter(|t| !t.trim().is_empty()).cloned());
+                }
                 let said = if labels.is_empty() {
                     "[No preference]".to_owned()
                 } else {
@@ -4104,6 +4212,8 @@ fn answer(store: &Store, ui: &mut Ui, rest: &str) -> Vec<Intent> {
                 (asked, Value::String(said))
             })
             .collect();
+        // What was typed (a secret, maybe) is not kept once it is sent.
+        ui.other.retain(|(p, _), _| p != permission);
         vec![Intent::Decide {
             session: session.id,
             permission: permission.to_owned(),
@@ -4783,6 +4893,28 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
 /// How often the open MCP dialog asks for its servers again (inferred: Desktop polls them,
 /// at a pace not found).
 pub const MCP_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A question the agent goes on without waits this long untouched, then counts down this long
+/// on its card, then is answered with nothing (quill's timing, docs/codex.md).
+const QUESTION_QUIET: std::time::Duration = std::time::Duration::from_secs(60);
+const QUESTION_COUNTDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Ui {
+    /// How long question `permission` has left before it goes unanswered, once its card
+    /// counts down.
+    pub(crate) fn question_countdown(&self, permission: &str) -> Option<std::time::Duration> {
+        let waited = self.unanswered.get(permission)?.1.as_ref()?.elapsed();
+        (waited >= QUESTION_QUIET)
+            .then(|| (QUESTION_QUIET + QUESTION_COUNTDOWN).saturating_sub(waited))
+    }
+
+    /// The person touched the card of `permission`: it waits for them now.
+    fn touched(&mut self, permission: &str) {
+        if let Some((_, since)) = self.unanswered.get_mut(permission) {
+            *since = None;
+        }
+    }
+}
 
 /// The MCP dialog's clicks: done; a server's details and back; reconnecting it, turning it
 /// on, signing in to it and forgetting its credentials (after asking), each followed by

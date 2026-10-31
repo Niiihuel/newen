@@ -19,7 +19,7 @@ encode(cmd)  → Vec<String>                                                  //
 | Texto en streaming | `Event::TextDelta` / `Event::Text` | `stream_event` `text_delta`; `assistant` completo | `item/agentMessage/delta` y `item/completed` | evento SSE de parte de mensaje |
 | Herramienta | `Event::ToolUse{call, name, input}` / `Event::ToolResult{call, output, is_error, files, command}` | `assistant.tool_use`; `user.tool_result` + `tool_use_result` estructurado | `item/started` / `item/completed` de `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`; el plan, con `turn/plan/updated` | partes `tool` del mensaje |
 | Permiso | `Event::PermissionRequest{id, call, tool, input, suggestions}` → `Command::Decide{id, Decision}` | `control_request can_use_tool` → `control_response` allow/deny | pedidos del servidor `item/commandExecution/requestApproval` y `item/fileChange/requestApproval`; se contestan `accept` / `acceptForSession` / `decline` | evento `permission.updated` → responder por API |
-| Pregunta al usuario | `PermissionRequest` con `interactive: true`, respuesta en `Decision::Answer` | AskUserQuestion vía `can_use_tool` + `updatedInput.answers` | `item/tool/requestUserInput`, contestado con `{answers:{id:{answers:[…]}}}` | — |
+| Pregunta al usuario | `PermissionRequest` con `interactive: true` e input `{questions: [{question, header, options, multiSelect, other?, secret?}], blocking?}`; respuesta en `Decision::Answer` (una pregunta sin respuesta no está) | AskUserQuestion vía `can_use_tool` + `updatedInput.answers` | `item/tool/requestUserInput`, contestado con `{answers:{id:{answers:[…]}}}` | — |
 | Interrumpir | `Command::Interrupt` → `Event::TurnFinished{interrupted}` | `control_request interrupt` | `turn/interrupt` → `turn/completed` interrumpido | `POST /session/:id/abort` |
 | Fin de turno | `Event::TurnFinished{ok, usage, cost}` | `result` sin `parent_tool_use_id` | `turn/completed` | sesión idle |
 | Atribución por herramienta | `capabilities.tool_hooks` | `hook_callback` PostToolUse con `prompt_id` | no hay hooks: atribución por turno | partes `patch` |
@@ -45,7 +45,7 @@ Cada agente recibe la misma guía, escrita por quill (`quill_agent::WORK_GUIDE`)
 
 ## Modos de permiso (`modes`, `default_mode`)
 
-El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Full access.
+El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Plan (su modo Plan, de solo lectura), Full access.
 
 ## Cuenta (`sign_in_methods`, `auth_query`, `login_run`, `logout_run`)
 

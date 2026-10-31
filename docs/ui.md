@@ -544,6 +544,19 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
 |---|---|
 | `FramedCard`/`Card`, `ButtonGroup` (`button_group.rs`), `Button` (`loading`, `disabled`, `tooltip_with`), `Kbd`, `DropdownMenu`, `Collapse` (`collapse.rs`), `Notice`, `Chip` | limn: `SplitButton` (P1). quill: `PermissionCard` (variantes genérica / plan / pregunta), mapeo herramienta→título. |
 
+**Plan propuesto** (`plan_card`). Hay dos casos:
+- **El agente espera la respuesta** (Claude Code, `ExitPlanMode` como permiso): "Claude proposed a plan", Open plan, Reject, Revise…, Accept y el botón dividido de los modos.
+- **El agente termina el turno con el plan** (Codex en modo Plan, `docs/codex.md` "Modo Plan"): no espera nada. Si la sesión sigue en un modo de tono `Plan` y lo último después del mensaje de la persona es un `ExitPlanMode` sin permiso propio, la misma tarjeta queda bajo el turno: "{Agente} proposed a plan", Open plan, Revise… e "Implement in {modo}".
+  - "Implement in {modo}" es un botón dividido; su menú tiene los demás modos ofrecidos que no planifican. Implementar cambia al modo que la sesión tenía antes de planificar (o al del agente por defecto) y manda "Implement the plan." como mensaje de la persona.
+  - Revise… manda lo escrito como el mensaje siguiente, sin salir del plan.
+  - La tarjeta se va cuando la persona escribe o cambia de modo. No tiene atajo de teclado.
+
+**Pregunta** (`question_card`). Una pregunta por página, con sus opciones y "Other" con un campo para las palabras de la persona. La entrada puede traer:
+- `other: false`: sin "Other".
+- `secret: true`: el campo se enmascara.
+- Ninguna opción: solo el campo, "Type your answer"; Next / Submit se habilita al escribir.
+- `blocking: false` (una pregunta sin la que el agente sigue): tras un minuto sin que la persona la toque, el pie muestra "Skipped in 42s" junto a Skip; al llegar a cero, `Ui::due` la contesta sin respuestas (`Decision::Answer({})`). Tocarla apaga la cuenta. El reloj vive en `Ui::unanswered` y lo pone `Ui::tick`.
+
 ### 2.8 Panel derecho (Environment / Context / Connectors / Changes)
 
 | Tarjeta | y | Contenido | Componente |

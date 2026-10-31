@@ -578,6 +578,8 @@ mod ext {
                 ]})
             }
             (Some("config/mcpServer/reload"), Some(_)) => json!({}),
+            // Codex's adapter tells a mode back once this is answered.
+            (Some("account/read"), Some(_)) => json!({}),
             (Some("mcpServer/oauth/login"), Some(_)) => {
                 json!({"authorizationUrl": "https://example.invalid/oauth/authorize?state=fake"})
             }

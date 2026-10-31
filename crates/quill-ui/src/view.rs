@@ -2610,6 +2610,10 @@ fn transcript(
     );
     let (entries, running) = entries(store, session, &session.items, busy, ui, column, palette);
     items.extend(entries);
+    // A plan the agent ended its turn with waits under the turn for the person's word.
+    if let Some(call) = proposed_plan(session, ui) {
+        items.push(plan_card(store, call, Some(session), ui, column, palette));
+    }
     if !busy && !session.rewound.is_empty() {
         items.push(rewound_line());
     }
@@ -6058,9 +6062,56 @@ fn permission(
         .size(Some(width), None)
 }
 
-/// The plan Claude proposed, before the person decides: "Claude
-/// proposed a plan" and "Open plan"; Reject, "Revise…", "Accept", and the main button
-/// accepting into the most trusting mode offered, the other modes in its menu.
+/// The plan the agent ended its turn with, while the session plans: the last thing after the
+/// person's last message, and not one the agent asks about (Claude Code asks with a permission,
+/// whose card this is not).
+pub(crate) fn proposed_plan<'a>(session: &'a Session, ui: &Ui) -> Option<&'a str> {
+    let planning = mode_entry(ui, &session.agent, &session.mode)
+        .is_some_and(|w| w.tone == quill_model::ModeTone::Plan);
+    if !planning || session.working() {
+        return None;
+    }
+    let call = (session.items.iter().rev())
+        .take_while(|i| !matches!(i, Item::User { .. }))
+        .find_map(|i| match i {
+            Item::Tool {
+                call,
+                name,
+                result: Some(r),
+                ..
+            } if name == "ExitPlanMode" && !r.is_error && !r.stopped => Some(call.as_str()),
+            _ => None,
+        })?;
+    let asked = (session.items.iter())
+        .any(|i| matches!(i, Item::Permission { call: Some(c), .. } if c == call));
+    (!asked).then_some(call)
+}
+
+/// The mode a plan is carried out in: the one the session left to plan, else the agent's own
+/// default, as long as it is offered; never a planning one.
+fn implement_modes(store: &Store, session: &Session, ui: &Ui) -> (String, Vec<String>) {
+    let planning = |m: &String| {
+        mode_entry(ui, &session.agent, m).is_some_and(|w| w.tone == quill_model::ModeTone::Plan)
+    };
+    let mut modes = menu_modes(store, Some(session), ui);
+    modes.retain(|m| !planning(m));
+    let default = (ui.agents.iter().find(|a| a.id == session.agent)).map(|a| &a.default_mode);
+    let back = [session.mode_before.as_ref(), default]
+        .into_iter()
+        .flatten()
+        .find(|m| modes.contains(m))
+        .or(modes.first())
+        .cloned()
+        .unwrap_or_default();
+    modes.retain(|m| *m != back);
+    (back, modes)
+}
+
+/// The plan the agent proposed, before the person decides: "{Agent} proposed a plan" and
+/// "Open plan". While the agent waits on it (a permission): Reject, "Revise…", "Accept", and the
+/// main button accepting into the most trusting mode offered, the other modes in its menu. A
+/// plan it ended its turn with: "Revise…", which sends what should change, and "Implement in
+/// {mode}", which leaves planning and has a turn carry it out, the other modes in its menu.
 fn plan_card(
     store: &Store,
     id: &str,
@@ -6070,10 +6121,14 @@ fn plan_card(
     palette: ComponentPalette,
 ) -> Element {
     let inner = column - 32.0;
+    let agent = session.map_or(ui.agent.as_str(), |s| s.agent.as_str());
     let head = Element::row(vec![
-        text("Claude proposed a plan")
-            .font_family(FontFamily::SansBold)
-            .centered_y(),
+        text(format!(
+            "{} proposed a plan",
+            capital(&agent_word(ui, agent))
+        ))
+        .font_family(FontFamily::SansBold)
+        .centered_y(),
         Element::spacer().flex(1.0),
         limn::Link::new(format!("plan:{id}"), "Open plan", palette)
             .ink(look::handle())
@@ -6082,6 +6137,78 @@ fn plan_card(
             .centered_y(),
     ])
     .size(Some(inner), None);
+    let revise = keyed_button(
+        &format!("revise:{id}"),
+        "Revise…",
+        "Esc",
+        false,
+        true,
+        palette,
+    );
+    let ended = session.filter(|s| proposed_plan(s, ui) == Some(id));
+    let actions = if let Some(session) = ended {
+        let (back, others) = implement_modes(store, session, ui);
+        let label = |mode: &str| {
+            let words = mode_entry(ui, agent, mode).map_or(mode, |w| w.label.as_str());
+            format!("Implement in {words}")
+        };
+        let menu: Vec<limn::DropdownMenuEntry> = (others.iter())
+            .map(|m| limn::DropdownMenuItem::new(format!("planok:{id}:{m}"), label(m)).into())
+            .collect();
+        let implement = limn::SplitButton::new(
+            format!("planok:{id}:{back}"),
+            label(&back),
+            format!("perm:{id}:menu"),
+            palette,
+        )
+        .menu(
+            menu,
+            ui.perm_menu.as_deref() == Some(id),
+            format!("perm:{id}:menu-dismiss"),
+        )
+        .render();
+        vec![revise, hgap(12.0), implement.centered_y()]
+    } else {
+        permission_plan_actions(store, id, session, ui, revise, palette)
+    };
+    let mut rows = vec![
+        head,
+        Element::row(actions)
+            .gap(8.0)
+            // In a narrow column the buttons go on a second line.
+            .wrap()
+            .size(Some(inner), None),
+    ];
+    if ui.revising.as_deref() == Some(id) {
+        rows.push(
+            limn::TextField::new(
+                format!("revise-text:{id}"),
+                ui.revision.as_str(),
+                "What should change? (optional)",
+                palette,
+            )
+            .width(inner)
+            .render(),
+        );
+    }
+    Element::panel(Element::column(rows).gap(14.0))
+        .background(palette.surface)
+        .border(look::card_border(), 1.0)
+        .radius(12.0)
+        .padding(16.0)
+        .size(Some(column), None)
+}
+
+/// A plan the agent waits on: Reject, "Revise…", "Accept" into Manual, and the main button
+/// accepting into the most trusting mode offered, the other in its menu.
+fn permission_plan_actions(
+    store: &Store,
+    id: &str,
+    session: Option<&Session>,
+    ui: &Ui,
+    revise: Element,
+    palette: ComponentPalette,
+) -> Vec<Element> {
     let modes = offered_modes(store, session, ui);
     let trusting = if modes.iter().any(|m| m == "auto") {
         ("auto", "Accept and auto mode")
@@ -6109,59 +6236,27 @@ fn plan_card(
         format!("perm:{id}:menu-dismiss"),
     )
     .render();
-    let mut rows = vec![
-        head,
-        Element::row(vec![
-            keyed_button(
-                &format!("perm:{id}:deny"),
-                "Reject",
-                "",
-                false,
-                true,
-                palette,
-            ),
-            keyed_button(
-                &format!("revise:{id}"),
-                "Revise…",
-                "Esc",
-                false,
-                true,
-                palette,
-            ),
-            hgap(12.0),
-            keyed_button(
-                &format!("planok:{id}:default"),
-                "Accept",
-                "Ctrl+Shift+⏎",
-                false,
-                true,
-                palette,
-            ),
-            accept.centered_y(),
-        ])
-        .gap(8.0)
-        // In a narrow column the buttons go on a second line.
-        .wrap()
-        .size(Some(inner), None),
-    ];
-    if ui.revising.as_deref() == Some(id) {
-        rows.push(
-            limn::TextField::new(
-                format!("revise-text:{id}"),
-                ui.revision.as_str(),
-                "What should change? (optional)",
-                palette,
-            )
-            .width(inner)
-            .render(),
-        );
-    }
-    Element::panel(Element::column(rows).gap(14.0))
-        .background(palette.surface)
-        .border(look::card_border(), 1.0)
-        .radius(12.0)
-        .padding(16.0)
-        .size(Some(column), None)
+    vec![
+        keyed_button(
+            &format!("perm:{id}:deny"),
+            "Reject",
+            "",
+            false,
+            true,
+            palette,
+        ),
+        revise,
+        hgap(12.0),
+        keyed_button(
+            &format!("planok:{id}:default"),
+            "Accept",
+            "Ctrl+Shift+⏎",
+            false,
+            true,
+            palette,
+        ),
+        accept.centered_y(),
+    ]
 }
 
 /// Deny, then the last way of allowing as the main button with its keys, and the other way
@@ -8407,6 +8502,9 @@ pub fn parse_patch(patch: &str) -> Vec<limn::CodeDiffLine> {
 /// mark (a radio, or a box when several may be chosen), label and muted description, lines
 /// between; "Other" with a field for the person's own words; Skip, and Next or
 /// Submit with Ctrl ⏎. A single choice starts on its first option, as Desktop's did.
+/// A question may say `other: false` (no "Other"), `secret: true` (the words are masked) or
+/// have no options (only a field for words); one that is not `blocking` counts down to going
+/// unanswered once it waited untouched a while.
 fn question_card(
     id: &str,
     input: &Value,
@@ -8421,6 +8519,22 @@ fn question_card(
     let question = &questions.get(page).cloned().unwrap_or_default();
     let multi = question["multiSelect"] == true;
     let chosen = picked(ui, id, page, question);
+    let secret = question["secret"] == true;
+    let typed = ui
+        .other
+        .get(&(id.to_owned(), page))
+        .map_or("", String::as_str);
+    let field = |placeholder: &str| {
+        limn::TextField::new(
+            format!("ask-other:{id}:{page}"),
+            typed,
+            placeholder,
+            palette,
+        )
+        .password(secret)
+        .width(width - 74.0)
+        .render()
+    };
     let mut band = vec![
         text(question["question"].as_str().unwrap_or_default().to_owned())
             .font_size(BODY)
@@ -8478,7 +8592,17 @@ fn question_card(
             )
         })
         .collect();
-    options.push(("Other".into(), String::new()));
+    let words_only = options.is_empty();
+    if question["other"] != false && !words_only {
+        options.push(("Other".into(), String::new()));
+    }
+    if words_only {
+        rows.push(
+            Element::column(vec![field("Type your answer")])
+                .padding(16.0)
+                .size(Some(width), None),
+        );
+    }
     for (o, (label, description)) in options.iter().enumerate() {
         if o > 0 {
             rows.push(hline(width, look::card_border()));
@@ -8508,22 +8632,7 @@ fn question_card(
             row.push(pad(muted(description.clone()).font_size(BODY), 26.0, 0.0));
         }
         if label == "Other" && on {
-            let typed = ui
-                .other
-                .get(&(id.to_owned(), page))
-                .map_or("", String::as_str);
-            row.push(pad(
-                limn::TextField::new(
-                    format!("ask-other:{id}:{page}"),
-                    typed,
-                    "Type your own answer here",
-                    palette,
-                )
-                .width(width - 74.0)
-                .render(),
-                26.0,
-                0.0,
-            ));
+            row.push(pad(field("Type your own answer here"), 26.0, 0.0));
         }
         rows.push(
             Element::column(row)
@@ -8538,22 +8647,32 @@ fn question_card(
     } else {
         ("next", "Next")
     };
+    // The agent goes on without an answer once this ends.
+    let left = ui.question_countdown(id).map(|left| {
+        let seconds = left.as_secs_f32().ceil() as u64;
+        muted(format!("Skipped in {seconds}s"))
+            .font_size(SMALL)
+            .centered_y()
+    });
+    let answered = !chosen.is_empty() || (words_only && !typed.trim().is_empty());
+    let mut footer: Vec<Element> = left.into_iter().collect();
+    footer.extend([
+        Element::spacer().flex(1.0),
+        keyed_button(&format!("ask:{id}:skip"), "Skip", "", false, true, palette),
+        keyed_button(
+            &format!("ask:{id}:{go}"),
+            label,
+            "Ctrl+⏎",
+            true,
+            answered,
+            palette,
+        ),
+    ]);
     rows.push(
-        Element::row(vec![
-            Element::spacer().flex(1.0),
-            keyed_button(&format!("ask:{id}:skip"), "Skip", "", false, true, palette),
-            keyed_button(
-                &format!("ask:{id}:{go}"),
-                label,
-                "Ctrl+⏎",
-                true,
-                !chosen.is_empty(),
-                palette,
-            ),
-        ])
-        .gap(8.0)
-        .padding(16.0)
-        .size(Some(width), None),
+        Element::row(footer)
+            .gap(8.0)
+            .padding(16.0)
+            .size(Some(width), None),
     );
     Element::panel(Element::column(rows))
         .background(palette.surface)
