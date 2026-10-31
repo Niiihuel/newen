@@ -263,9 +263,12 @@ impl Direct {
     }
 
     /// Whether the page is presented beneath the window, which then punches a hole for it;
-    /// otherwise the window draws it as a texture.
+    /// otherwise the window draws it as a texture. Only a paint made on the GPU reaches the
+    /// compositor: when Chromium paints on the CPU (its GPU process could not start), nothing
+    /// is attached here and the window draws those paints.
     pub fn shows(&self) -> bool {
-        !self.inner.lock().unwrap().window_draws
+        let inner = self.inner.lock().unwrap();
+        !inner.window_draws && inner.painted.is_some()
     }
 
     /// What the compositor shows of the page, in the window's logical pixels.
