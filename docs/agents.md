@@ -44,7 +44,7 @@ Cada agente recibe la misma guía, escrita por quill (`quill_agent::WORK_GUIDE`)
 
 ## Modos de permiso (`modes`, `default_mode`)
 
-El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Full access.
+El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Plan (su modo Plan, de solo lectura), Full access.
 
 ## Cuenta (`sign_in_methods`, `auth_query`, `login_run`, `logout_run`)
 

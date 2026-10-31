@@ -128,6 +128,8 @@ pub struct Session {
     pub items: Vec<Item>,
     pub capabilities: Option<AgentCapabilities>,
     pub mode: String,
+    /// The mode it was in before this one, which carrying out a plan goes back to.
+    pub mode_before: Option<String>,
     /// The model and the effort it runs at, as last chosen for it.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -282,6 +284,7 @@ impl Store {
                 queue: vec![],
                 capabilities: None,
                 mode: "default".into(),
+                mode_before: None,
                 model: None,
                 effort: None,
                 title: String::new(),
@@ -658,7 +661,9 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
                 s.mode = mode;
             }
         }
-        AgentEvent::ModeChanged { mode } => s.mode = mode,
+        AgentEvent::ModeChanged { mode } if mode != s.mode => {
+            s.mode_before = Some(std::mem::replace(&mut s.mode, mode));
+        }
         AgentEvent::Remote { on, url, error } => {
             s.remote = match (on, error) {
                 // A later word without the link keeps the one already given.
@@ -2804,11 +2809,19 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
             ui.revision = value.clone();
             vec![]
         }
-        // "Revise…" sends what should change as the reason the plan is turned down.
+        // "Revise…" sends what should change as the reason the plan is turned down; for a plan
+        // the agent ended its turn with, as the next message, still planning.
         UiAction::Submitted { id, value } if id.starts_with("revise-text:") => {
             let permission = &id["revise-text:".len()..];
             ui.revising = None;
             ui.revision.clear();
+            if let Some(session) = proposing(store, ui, permission) {
+                let text = value.trim();
+                if text.is_empty() {
+                    return vec![];
+                }
+                return vec![send(session, text.to_owned())];
+            }
             let Some(session) = ui.selected else {
                 return vec![];
             };
@@ -3806,9 +3819,20 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         ui.revision.clear();
         return vec![];
     }
-    // Accepting a plan allows it and puts the session in the mode chosen.
+    // Accepting a plan allows it and puts the session in the mode chosen. A plan the agent ended
+    // its turn with is carried out by a turn of its own, in that mode.
     if let Some((permission, mode)) = id.strip_prefix("planok:").and_then(|r| r.rsplit_once(':')) {
         ui.perm_menu = None;
+        if let Some(session) = proposing(store, ui, permission) {
+            ui.mode = mode.to_owned();
+            return vec![
+                Intent::SetMode {
+                    session,
+                    mode: mode.to_owned(),
+                },
+                send(session, IMPLEMENT_PLAN.to_owned()),
+            ];
+        }
         let Some(session) = asking(store, ui, permission).map(|s| s.id) else {
             return vec![];
         };
@@ -3901,6 +3925,30 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
 
 /// The session in view, or the one beside it, that asks `permission`: its card is answered
 /// in either.
+/// What the person says to have a proposed plan carried out, kept in the transcript as theirs.
+const IMPLEMENT_PLAN: &str = "Implement the plan.";
+
+/// The session on screen whose agent ended its turn with the plan `call`.
+fn proposing(store: &Store, ui: &Ui, call: &str) -> Option<SessionId> {
+    [ui.selected, ui.side_chat]
+        .into_iter()
+        .flatten()
+        .filter_map(|s| store.session(s))
+        .find(|s| view::proposed_plan(s, ui) == Some(call))
+        .map(|s| s.id)
+}
+
+/// A message to the session, as the composer sends one.
+fn send(session: SessionId, text: String) -> Intent {
+    Intent::Send {
+        session,
+        text,
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::default(),
+    }
+}
+
 fn asking<'a>(store: &'a Store, ui: &Ui, permission: &str) -> Option<&'a Session> {
     [ui.selected, ui.side_chat]
         .into_iter()

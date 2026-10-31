@@ -39,7 +39,7 @@ Un proceso por sesión de quill, con un thread cada uno, igual que con Claude.
 | `Limits` | `account/rateLimits/updated` / `account/rateLimits/read`: ventana primaria y semanal, igual que la tarjeta Usage |
 | `TaskStarted` / `TaskEnded` (subagentes) | `collabAgentToolCall`, `subAgentActivity` |
 | `McpServers` / `McpStatus` | `mcpServerStatus/list`, `mcpServer/startupStatus/updated` |
-| `ModeChanged` | `thread/settings/updated` (no observado en las capturas) |
+| `ModeChanged` | Ningún pedido cambia el modo de un thread: viaja en cada `turn/start`. `SetMode` lo cuenta con la respuesta de un `account/read` (id `quill-mode`). `thread/settings/updated` solo repite los ajustes que mandó un `turn/start` y se ignora (ver "Modo Plan") |
 | `AuthRequired` | `account/read` con `account: null` y `requiresOpenaiAuth: true`, o `turn/completed` fallido con `codexErrorInfo: unauthorized` (inferido de la fuente, ver Fase 1) |
 | Desconocido | Se guarda como `Unknown` y nunca rompe (AGENTS.md) |
 
@@ -53,7 +53,8 @@ El adaptador traduce cada ítem al nombre de herramienta que la interfaz ya cono
 | `fileChange` | `Edit` / `Write` por archivo (`add` → creado, `update` → editado, `delete`) | Codex da un diff unificado. `add` trae el contenido completo como `diff`; `update` trae solo el hunk. El antes y el después de `ToolResult.files` se reconstruyen con el repo sombra del motor (confirmado, ver Fase 1) |
 | `mcpToolCall` | `mcp__{server}__{tool}` | Etiqueta y logo del conector como hoy |
 | `webSearch` | `WebSearch` con `WebSearchRun` | El bloque de búsqueda web actual |
-| `turn/plan/updated` | La lista de tareas (forma de `TodoWrite`) | El panel de tareas sobre el composer. No hay ítem `plan`, solo la notificación, y el thread debe activar `update_plan` (ver Fase 1) |
+| `turn/plan/updated` | La lista de tareas (forma de `TodoWrite`) | El panel de tareas sobre el composer. Es la notificación de `update_plan`, que el thread debe activar (ver Fase 1); el ítem `plan` es otra cosa (fila siguiente) |
+| `plan` (modo Plan) | `ExitPlanMode` con `{plan}` | El plan propuesto: "Proposed plan ›", que lo abre en su panel, y la tarjeta para implementarlo al final del turno (ver "Modo Plan") |
 | `subAgentActivity` (`started`) / `collabAgentToolCall` `spawnAgent` | `Agent` + `TaskStarted` | El mismo `Agent` de Claude: la fila "Ran agent", el panel del subagente y el panel de tareas. Ver "Ítems restantes" |
 | `subAgentActivity` (`completed`) | `TaskEnded` + el `ToolResult` del `Agent` | El resumen es el último mensaje del hilo del subagente |
 | `collabAgentToolCall` (`wait`, `sendInput`, …) | `WaitAgent`, `MessageAgent`, `CloseAgent` | "Waited for agents", "Messaged an agent", "Closed an agent" |
@@ -72,6 +73,7 @@ Codex no tiene un modo único sino dos ejes: `approvalPolicy` (`untrusted`, `on-
 |---|---|---|
 | Read only | `untrusted` (pide aprobación antes de cualquier cosa que no sea leer) | `read-only` |
 | Auto (por defecto) | `on-request` | `workspace-write` |
+| Plan (el modo Plan de Codex, ver "Modo Plan") | `on-request` | `read-only` |
 | Full access (inseguro, en `unsafe_modes`) | `never` | `danger-full-access` |
 
 El selector del composer ya se arma desde `AgentCapabilities`. La exención del servidor de desarrollo hoy mira los nombres de Claude (`bypassPermissions`, `auto`); con Codex pasa a ser una pregunta al adaptador ("¿este modo exime?"), para que el motor no nombre modos de ningún proveedor.
@@ -192,7 +194,7 @@ El adaptador está en `crates/quill-agent-codex` (`Codex`, con `tested() = ["0.1
 - **Motor.** `waives_server_consent` ya no nombra modos: pregunta al adaptador (`AgentAdapter::mode_waives_prompts`). Claude: `bypassPermissions` y `auto`; Codex: solo `full-access` (su `auto` sí pregunta, no es el de Claude). El mapa de modos del motor ahora guarda (agente, modo).
 - **Fuera de alcance, queda `Unknown` o sin respuesta:** `collabAgentToolCall`, `subAgentActivity`, `imageView`, `contextCompaction`, `plan` (ítem), `dynamicToolCall`, `imageGeneration`, review, `sleep`, `functionCallOutput`; `Rewind`, `ContextUsage`, `McpStatus` y compañía, `Skills`, herramientas del anfitrión (`HostTool`, navegador) (`SessionSpec.resume_at` sí se soporta: ver «Rewind»). Las imágenes del prompt van como `{type:"image", url:"data:…;base64,…"}` (inferido del esquema).
 
-- **Fuera de alcance, queda `Unknown` o sin respuesta** (los ítems de subagente, imagen, compactación, review, `sleep` y `dynamicToolCall` se resolvieron después, ver "Ítems restantes"): `plan` (ítem), `hookPrompt`, `functionCallOutput`; `Rewind`, `ContextUsage`, `McpStatus` y compañía, `Skills`, herramientas del anfitrión (`HostTool`, navegador) y `SessionSpec.resume_at` (fork desde un mensaje: `thread/fork` tiene `lastTurnId`, pero el evento `Text` no lleva el id del turno). Las imágenes del prompt van como `{type:"image", url:"data:…;base64,…"}` (inferido del esquema).
+- **Fuera de alcance, queda `Unknown` o sin respuesta** (los ítems de subagente, imagen, compactación, review, `sleep` y `dynamicToolCall` se resolvieron después, ver "Ítems restantes"; el ítem `plan`, en "Modo Plan"): `hookPrompt`, `functionCallOutput`; `Rewind`, `ContextUsage`, `McpStatus` y compañía, `Skills`, herramientas del anfitrión (`HostTool`, navegador) y `SessionSpec.resume_at` (fork desde un mensaje: `thread/fork` tiene `lastTurnId`, pero el evento `Text` no lleva el id del turno). Las imágenes del prompt van como `{type:"image", url:"data:…;base64,…"}` (inferido del esquema).
 - **Replay.** `fork` pasa dentro de un solo proceso en la captura, pero quill forkea lanzando uno nuevo (`fork: true`): el test lo comprueba como dos corridas. Por el mismo motivo, el agente falso no puede reproducir `fork` entero (el segundo `thread/fork` de la captura no sale nunca). `resume` sí, porque el motor relanza el programa.
 
 ## Fases 4 y 5: cuenta e interfaz
@@ -293,3 +295,27 @@ Servidores MCP, plugins, marketplaces y skills de Codex, con el mismo detalle qu
 - **Reconectar:** `config/mcpServer/reload` (contesta `{}`); no hay reconexión de un servidor.
 - **Skills en el menú `/`:** al estar listo el agente, el motor corre `skills/list` aparte (otro proceso, sin tocar las líneas de la sesión) y avisa `AgentEvent::Skills`. La UI los suma a los comandos. Al mandar uno, el adaptador cambia `/nombre` por `$nombre` (mención explícita, inferido de la TUI).
 - **Sin verificar:** `plugin add|remove`, `plugin marketplace add|upgrade|remove` (no se corrieron, solo sus `--help`), `mcpServer/oauth/login` y `config/mcpServer/reload` dentro de una sesión real, y que `$nombre` active el skill.
+
+## Modo Plan (2026-10-31)
+
+Captura `plan-mode.jsonl` (`codex-cli 0.163.0`, `gpt-6-luna`, esfuerzo `low`, 2 turnos, con `quill-capture --agent codex plan-mode`): un turno en modo Plan que pregunta primero y propone un plan de tres puntos, y otro en modo Default con "Implement the plan.", que crea el archivo.
+
+- **Protocolo** (API experimental; quill ya pide `experimentalApi` en `initialize`): `turn/start.collaborationMode = {mode: "plan" | "default", settings: {model, reasoning_effort, developer_instructions}}`. Con `developer_instructions: null` Codex usa sus propias instrucciones para el modo (`codex-rs/collaboration-mode-templates`), y `settings` manda sobre el `model` y el `effort` del turno. `collaborationMode/list` respondió `[{name: "Plan", mode: "plan", model: null, reasoning_effort: "medium"}, {name: "Default", mode: "default", model: null, reasoning_effort: null}]`. quill no lo pide: en esta versión los modos son esos dos (`ModeKind`).
+- **El modo queda en el thread** hasta que otro `turn/start` lo cambie (`thread/resume` lo devuelve en `collaborationMode`). Por eso cada `turn/start` de quill lleva el suyo: `plan` en el modo Plan y `default` en los demás, con el modelo y el esfuerzo elegidos. Si la persona no eligió esfuerzo va el del thread (`reasoningEffort` de `thread/start`), para no pisar el de su config. Codex contesta cada cambio con `thread/settings/updated` (`:17`, `:131`): los ajustes completos, con el texto de las instrucciones del modo. Se ignora.
+- **Plan en quill** es un cuarto modo del selector: `plan`, tono `Plan` (el pergamino), "Explores read-only and proposes a plan", con `on-request` y el sandbox `read-only`. Explora sin pedir permiso y nada que corra puede cambiar un archivo; si el modelo pide salir del sandbox, aparece la tarjeta de aprobación de siempre. En Codex el modo Plan no cambia los permisos (son otros campos del mismo `turn/start`): que no se toquen archivos lo piden sus instrucciones. En quill además es de solo lectura.
+- **El plan propuesto** es un ítem `plan` `{id: "<turno>-plan", text}`: `:73` started con el texto vacío, los `item/plan/delta` en `:74-119` y `:120` completed. El texto es lo que el modelo escribió entre `<proposed_plan>` y `</proposed_plan>`. El mensaje del agente no lo repite: en la captura el turno no tuvo `agentMessage` con el plan, y la fuente (`codex-rs/utils/stream-parser`) lo saca del texto visible. El adaptador lo dibuja como el `ExitPlanMode` de Claude Code, al terminar: la línea "Proposed plan ›", que abre el plan en su panel. Los deltas se ignoran, porque el esquema avisa que no tienen por qué sumar el texto final.
+- **La pregunta del modo Plan** llegó con `isBlocking: true` (`:67`); en Default (`ask.jsonl`) llega `false`. Codex la marca bloqueante solo en Plan (`codex-rs/core/src/tools/handlers/request_user_input.rs`).
+- **"Implement this plan?"** Al terminar el turno Codex no espera nada: el plan solo queda propuesto. La tarjeta es la del plan de Claude Code (`plan_card`, `docs/ui.md` §2.7), sin Reject. Si un turno termina con un plan que el agente no pidió aprobar y la sesión sigue en un modo de tono `Plan`, la tarjeta "Codex proposed a plan" queda bajo el turno con "Open plan", "Revise…" e "Implement in {modo}".
+  - Implementar pasa la sesión al modo que tenía antes del Plan, si se ofrece, o si no al modo por defecto del agente (Auto). Después manda "Implement the plan." como mensaje de la persona, que queda en el transcript. El menú del botón ofrece los demás modos que no planifican.
+  - "Revise…" manda lo escrito como el mensaje siguiente, todavía en Plan. Escribir en el composer hace lo mismo.
+  - "Implement the plan." es lo que manda la TUI de código abierto de Codex al implementar (`codex-rs/tui/src/chatwidget/plan_implementation.rs`).
+- **Un modo elegido sin proceso se perdía**: el `SetMode` de una sesión leída al arrancar, antes de su primer mensaje, iba a un proceso que no existía. El motor lo guarda ahora en el `SessionSpec`, como el modelo y el esfuerzo, y la sesión arranca en él (test `a_mode_chosen_before_the_agent_runs_is_the_one_it_starts_in`). Sin esto, "Implement" después de reiniciar quill corría en modo Plan.
+- **El aviso del modo** (`SetMode` → `account/read`) usa el id `quill-mode`, como `quill-models`. Así no corre la numeración de las capturas y el agente falso lo contesta solo. Con un pedido en camino, otro cambio no manda un segundo pedido: se cuenta el último modo.
+- **Ruido nuevo, ignorado:** `turn/moderationMetadata` (las marcas de moderación de cada turno) y `thread/readState/changed`. No aparecían en las capturas del 2026-10-28.
+- **Fixture.** Anonimizado como los demás (`/work`, `/home/user`, el id de instalación fijo). Además:
+  - Se quitaron el `collaborationMode/list` del driver y su respuesta, y se renumeraron los ids que siguen.
+  - Se agregó la línea `quill-models` de siempre.
+  - Un comando del modelo que listó el home de la persona quedó solo con la línea de `/work`, sin sus `outputDelta`.
+  - Los deltas del último mensaje, que partían una ruta en pedazos, son uno solo.
+- **Inferido:** que volver a Auto sea lo esperado cuando la sesión empezó en Plan, y el diseño de la tarjeta sin Reject.
+- **Verificación en pantalla** (agente falso con `plan-mode.jsonl`, Xvfb 1408×844, oscuro): el selector con Read only, Auto y Plan; la pregunta bloqueante con Other; "Proposed plan ›" y la tarjeta "Codex proposed a plan" con "Revise…" e "Implement in Auto" (en el menú, "Implement in Read only"); "Open plan" abre el plan en su panel. Al implementar, "Implement the plan." queda como mensaje, el chip pasa a Auto y corre el segundo turno.

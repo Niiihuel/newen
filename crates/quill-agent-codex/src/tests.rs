@@ -234,13 +234,14 @@ fn texts(events: &[AgentEvent]) -> Vec<&str> {
         .collect()
 }
 
-const SCENARIOS: [&str; 19] = [
+const SCENARIOS: [&str; 20] = [
     "simple",
     "edit-bash",
     "deny-patch",
     "deny",
     "always",
     "plan",
+    "plan-mode",
     "steer",
     "interrupt",
     "fork",
@@ -264,8 +265,12 @@ fn every_fixture_writes_its_out_lines_and_decodes_without_unknown_messages() {
         }
         let run = run_of(name);
         assert_eq!(unknown(&run.events), Vec::<&Value>::new(), "{name}");
-        // A compaction runs a turn of its own (compact.jsonl).
-        let turns = if name == "compact" { 2 } else { 1 };
+        // A compaction runs a turn of its own (compact.jsonl); a plan is carried out in another.
+        let turns = if matches!(name, "compact" | "plan-mode") {
+            2
+        } else {
+            1
+        };
         assert_eq!(finished(&run.events).len(), turns, "{name}");
     }
 }
@@ -286,7 +291,7 @@ fn a_session_starts_with_its_id_and_what_codex_can_do() {
     };
     assert_eq!(version, "0.163.0");
     assert_eq!(mode.as_deref(), Some("auto"));
-    assert_eq!(capabilities.modes, ["read-only", "auto"]);
+    assert_eq!(capabilities.modes, ["read-only", "auto", "plan"]);
     assert_eq!(capabilities.unsafe_modes, ["full-access"]);
     assert!(
         capabilities.steer && capabilities.resume && capabilities.fork && !capabilities.tool_hooks
@@ -343,6 +348,7 @@ fn every_thread_is_opened_with_its_approval_policy_sandbox_and_config() {
     for (mode, approval, sandbox) in [
         (None, "on-request", "workspace-write"),
         (Some("read-only"), "untrusted", "read-only"),
+        (Some("plan"), "on-request", "read-only"),
         (Some("full-access"), "never", "danger-full-access"),
     ] {
         let allow = mode == Some("full-access");
@@ -425,9 +431,15 @@ fn a_mode_a_model_and_an_effort_apply_to_the_next_turn() {
     run.send(AgentCommand::SetMode("read-only".into()));
     run.send(AgentCommand::SetModel("gpt-6.1-sol".into()));
     run.send(AgentCommand::SetEffort("high".into()));
-    // The mode is told back when Codex answers the request that carried it.
+    // The mode is told back when Codex answers the request that carried it, by a name that
+    // keeps the numbers of the rest; one on its way tells the latest of two.
     assert_eq!(run.written.last().unwrap()["method"], "account/read");
     let id = run.written.last().unwrap()["id"].clone();
+    assert_eq!(id, "quill-mode");
+    let asked = run.written.len();
+    run.send(AgentCommand::SetMode("plan".into()));
+    run.send(AgentCommand::SetMode("read-only".into()));
+    assert_eq!(run.written.len(), asked);
     run.feed(&json!({ "id": id, "result": {} }));
     assert_eq!(
         run.events.last(),
@@ -621,6 +633,62 @@ fn the_plan_is_a_task_list() {
         .unwrap()
         .1;
     assert_eq!(first["todos"][0]["content"], "Create a.txt");
+}
+
+/// plan-mode.jsonl: a turn in Plan mode asks first (blocking there) and proposes a plan; the
+/// person takes it, and the next turn, in Auto, carries it out.
+#[test]
+fn a_plan_turn_runs_in_codex_plan_mode_and_its_plan_is_the_proposed_plan() {
+    let entries = entries("plan-mode");
+    let mut run = Run::started(SessionSpec {
+        mode: Some("plan".into()),
+        ..Default::default()
+    });
+    // The person chose no effort: the collaboration mode keeps the thread's (the config's).
+    run.codex.effort = None;
+    let first_end = (entries.iter())
+        .position(|(_, m)| m["method"] == "turn/completed")
+        .unwrap();
+    replay(&mut run, &entries[..=first_end], 0);
+    run.codex.effort = Some("low".into());
+    run.send(AgentCommand::SetMode("auto".into()));
+    run.feed(&json!({ "id": MODE_ID, "result": {} }));
+    replay(&mut run, &entries, first_end + 1);
+    let turns: Vec<&Value> = (run.written.iter())
+        .filter(|l| l["method"] == "turn/start")
+        .collect();
+    let mode = |turn: &Value| turn["params"]["collaborationMode"].clone();
+    assert_eq!(
+        mode(turns[0]),
+        json!({ "mode": "plan", "settings": { "model": "gpt-6-luna", "reasoning_effort": "max",
+            "developer_instructions": null } })
+    );
+    assert_eq!(turns[0]["params"]["sandboxPolicy"]["type"], "readOnly");
+    assert_eq!(mode(turns[1])["mode"], "default");
+    assert_eq!(mode(turns[1])["settings"]["reasoning_effort"], "low");
+    assert_eq!(
+        turns[1]["params"]["sandboxPolicy"]["type"],
+        "workspaceWrite"
+    );
+    // The capture's own numbers: telling the mode back took none.
+    assert_eq!((&turns[0]["id"], &turns[1]["id"]), (&json!(3), &json!(4)));
+    assert!(run
+        .events
+        .iter()
+        .any(|e| matches!(e, ModeChanged { mode } if mode == "auto")));
+    let plan = calls(&run.events)
+        .into_iter()
+        .find(|(n, _)| *n == "ExitPlanMode")
+        .unwrap()
+        .1;
+    assert!(plan["plan"]
+        .as_str()
+        .unwrap()
+        .starts_with("## Add `hello.txt`\n\n- Create `hello.txt`"));
+    assert!(run.events.iter().any(|e| matches!(e,
+        ToolResult { call, is_error: false, .. } if call.ends_with("-plan"))));
+    assert_eq!(finished(&run.events), [(true, false), (true, false)]);
+    assert_eq!(unknown(&run.events), Vec::<&Value>::new());
 }
 
 #[test]
@@ -991,7 +1059,7 @@ fn what_codex_asks_that_quill_cannot_answer_is_refused_not_awaited() {
         );
     }
     // Items quill does not draw yet stay whole.
-    let item = json!({ "method": "item/started", "params": { "item": { "type": "plan", "id": "c", "text": "x" } } });
+    let item = json!({ "method": "item/started", "params": { "item": { "type": "hookPrompt", "id": "c", "fragments": [] } } });
     assert!(matches!(
         &codex.decode(&item.to_string()).events[..],
         [Unknown(_)]
@@ -1073,7 +1141,7 @@ fn the_mode_words_cover_the_modes_it_offers_and_the_default_is_one_of_them() {
     let codex = Codex::new();
     let words = codex.modes();
     let ids: Vec<&str> = words.iter().map(|w| w.id.as_str()).collect();
-    assert_eq!(ids, ["read-only", "auto", "full-access"]);
+    assert_eq!(ids, ["read-only", "auto", "plan", "full-access"]);
     assert_eq!(codex.default_mode(), "auto");
     assert!(ids.contains(&codex.default_mode()));
     // Only the unsafe one waits for the person's say.

@@ -26,14 +26,18 @@ const REMOTE: &str = "remote";
 /// The permission presets, as Codex's own are (docs/codex.md "Modos de permiso"). Each is an
 /// approval policy and a sandbox; quill always sends both, because a thread that is not told
 /// takes the person's own Codex config, which may be `danger-full-access`
-/// (resume.jsonl, first attempt in docs/codex.md "Fase 1").
-const MODES: [&str; 2] = ["read-only", "auto"];
+/// (resume.jsonl, first attempt in docs/codex.md "Fase 1"). Plan is Codex's Plan collaboration
+/// mode in the read-only sandbox (plan-mode.jsonl).
+const MODES: [&str; 3] = ["read-only", "auto", PLAN];
 const FULL_ACCESS: &str = "full-access";
+const PLAN: &str = "plan";
 const DEFAULT_MODE: &str = "auto";
 
 /// The id of the `model/list` request: a name, not a number, so that the numbers of the
 /// requests every capture holds stay the ones the adapter writes (the fake agent replays them).
 const MODELS_ID: &str = "quill-models";
+/// The same for the request that tells a mode back.
+const MODE_ID: &str = "quill-mode";
 
 /// Per-thread config (not `~/.codex/config.toml`): `update_plan` is off by default
 /// (plan.jsonl, two attempts without it) and `request_user_input` only exists in Plan mode
@@ -57,7 +61,7 @@ fn thread_config(servers: &[quill_agent::InjectedServer], env: &[(String, String
 }
 
 /// Notifications that carry nothing quill shows; not `Unknown`, not events.
-const QUIET: [&str; 13] = [
+const QUIET: [&str; 17] = [
     "mcpServer/startupStatus/updated",
     "thread/status/changed",
     "thread/started",
@@ -73,6 +77,13 @@ const QUIET: [&str; 13] = [
     "item/fileChange/outputDelta",
     // The old notice of a compaction; the `contextCompaction` item says it (docs/codex.md).
     "thread/compacted",
+    // The plan comes whole in its item, which is drawn once it ends (plan-mode.jsonl:73-120).
+    "item/plan/delta",
+    // The settings a `turn/start` set, told back (plan-mode.jsonl:17); quill sent them.
+    "thread/settings/updated",
+    // The moderation's flags of a turn, and where another client stopped reading.
+    "turn/moderationMetadata",
+    "thread/readState/changed",
 ];
 
 /// What a request waits for.
@@ -171,6 +182,8 @@ pub struct Codex {
     effort: Option<String>,
     models: Vec<ModelInfo>,
     thread_model: Option<String>,
+    /// The thread's effort when quill chose none (the person's Codex config).
+    thread_effort: Option<String>,
     plan: Option<String>,
     /// Each tool call's name and input, to ask about it and to close it.
     calls: HashMap<String, (String, Value)>,
@@ -251,10 +264,20 @@ impl Codex {
 
     fn turn_start(&mut self, request: String, input: Vec<Value>) -> String {
         let (approval, _, policy) = preset(&self.mode);
+        // The collaboration mode is the thread's until another is sent (thread/resume answers
+        // it), so every turn says its own. Its settings take precedence over the turn's model and
+        // effort: they are the same. No instructions: Codex's own for the mode (plan-mode.jsonl:17).
+        let kind = if self.mode == PLAN { "plan" } else { "default" };
+        let settings = json!({
+            "model": self.model.clone().or(self.thread_model.clone()),
+            "reasoning_effort": self.effort.clone().or(self.thread_effort.clone()),
+            "developer_instructions": null,
+        });
         // Mode, model and effort are sent with every turn, so a change applies to the next one.
         let mut params = json!({
             "threadId": self.thread, "input": input, "approvalPolicy": approval,
             "sandboxPolicy": { "type": policy }, "summary": "auto",
+            "collaborationMode": { "mode": kind, "settings": settings },
         });
         if let Some(model) = &self.model {
             params["model"] = json!(model);
@@ -395,6 +418,7 @@ impl Codex {
             Pending::Thread => {
                 let id = text(&result["thread"]["id"]);
                 self.thread_model = result["model"].as_str().map(str::to_owned);
+                self.thread_effort = result["reasoningEffort"].as_str().map(str::to_owned);
                 self.thread = Some(id.clone());
                 out.events.push(AgentEvent::Session { id: id.clone() });
                 out.events.push(self.ready());
@@ -931,6 +955,14 @@ impl Codex {
                 );
             }
             Some("webSearch") => {}
+            // The plan Plan mode proposes (`<proposed_plan>`, out of the message's words): the
+            // plan Claude Code proposes. It opens empty (plan-mode.jsonl:73): drawn once it ends.
+            Some("plan") if done => {
+                let input = json!({ "plan": text(&item["text"]) });
+                let call = (id, "ExitPlanMode", input);
+                self.tool_end(call, String::new(), false, vec![], None, None, out);
+            }
+            Some("plan") => {}
             Some("subAgentActivity") if !done => self.helper_item(item, out),
             Some("subAgentActivity") => {}
             Some("collabAgentToolCall") => self.collab(item, done, out),
@@ -1144,7 +1176,7 @@ impl AgentAdapter for Codex {
         mode == FULL_ACCESS
     }
 
-    // The three presets of docs/codex.md "Modos de permiso", in Codex's own words for them.
+    // The presets of docs/codex.md "Modos de permiso" and Plan, in quill's words for them.
     fn modes(&self) -> Vec<ModeWords> {
         use quill_agent::ModeTone::*;
         let w = |id: &str, label: &str, about: &str, tone, listed| ModeWords {
@@ -1167,6 +1199,13 @@ impl AgentAdapter for Codex {
                 "Auto",
                 "Works in this folder; asks to go beyond it",
                 Auto,
+                true,
+            ),
+            w(
+                PLAN,
+                "Plan",
+                "Explores read-only and proposes a plan",
+                Plan,
                 true,
             ),
             w(
@@ -1430,11 +1469,12 @@ impl AgentAdapter for Codex {
                     return vec![];
                 }
                 self.mode = mode.clone();
-                vec![self.request(
-                    "account/read",
-                    json!({}),
-                    Pending::Ack(vec![AgentEvent::ModeChanged { mode }]),
-                )]
+                // One on its way tells the latest mode when it is answered.
+                let told = Pending::Ack(vec![AgentEvent::ModeChanged { mode }]);
+                if self.pending.insert(MODE_ID.into(), told).is_some() {
+                    return vec![];
+                }
+                vec![json!({ "id": MODE_ID, "method": "account/read", "params": {} }).to_string()]
             }
             AgentCommand::SetModel(model) => {
                 self.model = Some(model);
@@ -1526,10 +1566,12 @@ fn key(id: &Value) -> String {
 
 /// (approval policy, sandbox, sandbox policy of a turn) of a mode. Read only asks before
 /// anything but a read (`untrusted`): with `on-request` the sandbox fails a command without
-/// asking (deny.jsonl and always.jsonl ask only under `untrusted`).
+/// asking (deny.jsonl and always.jsonl ask only under `untrusted`). Plan explores without
+/// asking, and nothing it runs can change a file.
 fn preset(mode: &str) -> (&'static str, &'static str, &'static str) {
     match mode {
         "read-only" => ("untrusted", "read-only", "readOnly"),
+        PLAN => ("on-request", "read-only", "readOnly"),
         FULL_ACCESS => ("never", "danger-full-access", "dangerFullAccess"),
         _ => ("on-request", "workspace-write", "workspaceWrite"),
     }

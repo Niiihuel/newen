@@ -2599,6 +2599,10 @@ fn transcript(
     );
     let (entries, running) = entries(store, session, &session.items, busy, ui, column, palette);
     items.extend(entries);
+    // A plan the agent ended its turn with waits under the turn for the person's word.
+    if let Some(call) = proposed_plan(session, ui) {
+        items.push(plan_card(store, call, Some(session), ui, column, palette));
+    }
     if !busy && !session.rewound.is_empty() {
         items.push(rewound_line());
     }
@@ -5840,9 +5844,56 @@ fn permission(
         .size(Some(width), None)
 }
 
-/// The plan Claude proposed, before the person decides: "Claude
-/// proposed a plan" and "Open plan"; Reject, "Revise…", "Accept", and the main button
-/// accepting into the most trusting mode offered, the other modes in its menu.
+/// The plan the agent ended its turn with, while the session plans: the last thing after the
+/// person's last message, and not one the agent asks about (Claude Code asks with a permission,
+/// whose card this is not).
+pub(crate) fn proposed_plan<'a>(session: &'a Session, ui: &Ui) -> Option<&'a str> {
+    let planning = mode_entry(ui, &session.agent, &session.mode)
+        .is_some_and(|w| w.tone == quill_model::ModeTone::Plan);
+    if !planning || session.working() {
+        return None;
+    }
+    let call = (session.items.iter().rev())
+        .take_while(|i| !matches!(i, Item::User { .. }))
+        .find_map(|i| match i {
+            Item::Tool {
+                call,
+                name,
+                result: Some(r),
+                ..
+            } if name == "ExitPlanMode" && !r.is_error && !r.stopped => Some(call.as_str()),
+            _ => None,
+        })?;
+    let asked = (session.items.iter())
+        .any(|i| matches!(i, Item::Permission { call: Some(c), .. } if c == call));
+    (!asked).then_some(call)
+}
+
+/// The mode a plan is carried out in: the one the session left to plan, else the agent's own
+/// default, as long as it is offered; never a planning one.
+fn implement_modes(store: &Store, session: &Session, ui: &Ui) -> (String, Vec<String>) {
+    let planning = |m: &String| {
+        mode_entry(ui, &session.agent, m).is_some_and(|w| w.tone == quill_model::ModeTone::Plan)
+    };
+    let mut modes = menu_modes(store, Some(session), ui);
+    modes.retain(|m| !planning(m));
+    let default = (ui.agents.iter().find(|a| a.id == session.agent)).map(|a| &a.default_mode);
+    let back = [session.mode_before.as_ref(), default]
+        .into_iter()
+        .flatten()
+        .find(|m| modes.contains(m))
+        .or(modes.first())
+        .cloned()
+        .unwrap_or_default();
+    modes.retain(|m| *m != back);
+    (back, modes)
+}
+
+/// The plan the agent proposed, before the person decides: "{Agent} proposed a plan" and
+/// "Open plan". While the agent waits on it (a permission): Reject, "Revise…", "Accept", and the
+/// main button accepting into the most trusting mode offered, the other modes in its menu. A
+/// plan it ended its turn with: "Revise…", which sends what should change, and "Implement in
+/// {mode}", which leaves planning and has a turn carry it out, the other modes in its menu.
 fn plan_card(
     store: &Store,
     id: &str,
@@ -5852,10 +5903,14 @@ fn plan_card(
     palette: ComponentPalette,
 ) -> Element {
     let inner = column - 32.0;
+    let agent = session.map_or(ui.agent.as_str(), |s| s.agent.as_str());
     let head = Element::row(vec![
-        text("Claude proposed a plan")
-            .font_family(FontFamily::SansBold)
-            .centered_y(),
+        text(format!(
+            "{} proposed a plan",
+            capital(&agent_word(ui, agent))
+        ))
+        .font_family(FontFamily::SansBold)
+        .centered_y(),
         Element::spacer().flex(1.0),
         limn::Link::new(format!("plan:{id}"), "Open plan", palette)
             .ink(look::handle())
@@ -5864,6 +5919,78 @@ fn plan_card(
             .centered_y(),
     ])
     .size(Some(inner), None);
+    let revise = keyed_button(
+        &format!("revise:{id}"),
+        "Revise…",
+        "Esc",
+        false,
+        true,
+        palette,
+    );
+    let ended = session.filter(|s| proposed_plan(s, ui) == Some(id));
+    let actions = if let Some(session) = ended {
+        let (back, others) = implement_modes(store, session, ui);
+        let label = |mode: &str| {
+            let words = mode_entry(ui, agent, mode).map_or(mode, |w| w.label.as_str());
+            format!("Implement in {words}")
+        };
+        let menu: Vec<limn::DropdownMenuEntry> = (others.iter())
+            .map(|m| limn::DropdownMenuItem::new(format!("planok:{id}:{m}"), label(m)).into())
+            .collect();
+        let implement = limn::SplitButton::new(
+            format!("planok:{id}:{back}"),
+            label(&back),
+            format!("perm:{id}:menu"),
+            palette,
+        )
+        .menu(
+            menu,
+            ui.perm_menu.as_deref() == Some(id),
+            format!("perm:{id}:menu-dismiss"),
+        )
+        .render();
+        vec![revise, hgap(12.0), implement.centered_y()]
+    } else {
+        permission_plan_actions(store, id, session, ui, revise, palette)
+    };
+    let mut rows = vec![
+        head,
+        Element::row(actions)
+            .gap(8.0)
+            // In a narrow column the buttons go on a second line.
+            .wrap()
+            .size(Some(inner), None),
+    ];
+    if ui.revising.as_deref() == Some(id) {
+        rows.push(
+            limn::TextField::new(
+                format!("revise-text:{id}"),
+                ui.revision.as_str(),
+                "What should change? (optional)",
+                palette,
+            )
+            .width(inner)
+            .render(),
+        );
+    }
+    Element::panel(Element::column(rows).gap(14.0))
+        .background(palette.surface)
+        .border(look::card_border(), 1.0)
+        .radius(12.0)
+        .padding(16.0)
+        .size(Some(column), None)
+}
+
+/// A plan the agent waits on: Reject, "Revise…", "Accept" into Manual, and the main button
+/// accepting into the most trusting mode offered, the other in its menu.
+fn permission_plan_actions(
+    store: &Store,
+    id: &str,
+    session: Option<&Session>,
+    ui: &Ui,
+    revise: Element,
+    palette: ComponentPalette,
+) -> Vec<Element> {
     let modes = offered_modes(store, session, ui);
     let trusting = if modes.iter().any(|m| m == "auto") {
         ("auto", "Accept and auto mode")
@@ -5891,59 +6018,27 @@ fn plan_card(
         format!("perm:{id}:menu-dismiss"),
     )
     .render();
-    let mut rows = vec![
-        head,
-        Element::row(vec![
-            keyed_button(
-                &format!("perm:{id}:deny"),
-                "Reject",
-                "",
-                false,
-                true,
-                palette,
-            ),
-            keyed_button(
-                &format!("revise:{id}"),
-                "Revise…",
-                "Esc",
-                false,
-                true,
-                palette,
-            ),
-            hgap(12.0),
-            keyed_button(
-                &format!("planok:{id}:default"),
-                "Accept",
-                "Ctrl+Shift+⏎",
-                false,
-                true,
-                palette,
-            ),
-            accept.centered_y(),
-        ])
-        .gap(8.0)
-        // In a narrow column the buttons go on a second line.
-        .wrap()
-        .size(Some(inner), None),
-    ];
-    if ui.revising.as_deref() == Some(id) {
-        rows.push(
-            limn::TextField::new(
-                format!("revise-text:{id}"),
-                ui.revision.as_str(),
-                "What should change? (optional)",
-                palette,
-            )
-            .width(inner)
-            .render(),
-        );
-    }
-    Element::panel(Element::column(rows).gap(14.0))
-        .background(palette.surface)
-        .border(look::card_border(), 1.0)
-        .radius(12.0)
-        .padding(16.0)
-        .size(Some(column), None)
+    vec![
+        keyed_button(
+            &format!("perm:{id}:deny"),
+            "Reject",
+            "",
+            false,
+            true,
+            palette,
+        ),
+        revise,
+        hgap(12.0),
+        keyed_button(
+            &format!("planok:{id}:default"),
+            "Accept",
+            "Ctrl+Shift+⏎",
+            false,
+            true,
+            palette,
+        ),
+        accept.centered_y(),
+    ]
 }
 
 /// Deny, then the last way of allowing as the main button with its keys, and the other way

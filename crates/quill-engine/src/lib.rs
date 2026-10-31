@@ -2734,6 +2734,8 @@ impl Actor {
                     match &command {
                         AgentCommand::SetModel(model) => self.spec.model = Some(model.clone()),
                         AgentCommand::SetEffort(effort) => self.spec.effort = Some(effort.clone()),
+                        // Also when no process runs yet (a session read back): the next starts in it.
+                        AgentCommand::SetMode(mode) => self.spec.mode = Some(mode.clone()),
                         // Reaching the session from another device needs its agent running.
                         AgentCommand::Remote { on: true, .. } => {
                             if let Err(error) = self.ensure_running().await {
