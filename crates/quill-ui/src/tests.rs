@@ -1834,6 +1834,7 @@ fn the_effort_thumb_follows_a_drag_and_springs_to_the_level_let_go_at() {
                     name: "Opus 5.5".into(),
                     efforts: vec!["low".into(), "medium".into(), "high".into()],
                     modes: vec![],
+                    default: false,
                 }],
                 ..Default::default()
             },
@@ -2786,6 +2787,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
                     name: "Haiku".into(),
                     efforts: vec!["low".into(), "high".into()],
                     modes: vec!["auto".into()],
+                    default: false,
                 }],
                 modes: vec!["default".into(), "plan".into()],
                 unsafe_modes: vec!["bypassPermissions".into()],
@@ -3707,12 +3709,14 @@ fn with_models(store: &mut Store) {
                         name: "Opus 5.5".into(),
                         efforts: vec!["low".into(), "medium".into(), "high".into()],
                         modes: vec![],
+                        default: false,
                     },
                     quill_model::ModelInfo {
                         id: "haiku".into(),
                         name: "Haiku".into(),
                         efforts: vec!["low".into(), "high".into()],
                         modes: vec!["auto".into()],
+                        default: false,
                     },
                 ],
                 modes: vec!["default".into(), "plan".into()],
@@ -6065,6 +6069,7 @@ fn a_new_session_offers_the_models_its_agent_told_before_any_session() {
         name: "GPT-6-Luna".into(),
         efforts: vec!["low".into()],
         modes: vec![],
+        default: false,
     };
     ui.applied(&Event::AgentModels {
         agent: "codex".into(),
@@ -6994,4 +6999,49 @@ fn an_agent_that_pairs_shows_a_code_to_type_on_the_phone() {
         },
     );
     assert_eq!(store.session(1).unwrap().remote_code, None);
+}
+
+#[test]
+fn the_agents_default_model_reads_by_name() {
+    let (mut store, mut ui) = store_with_session();
+    // Haiku is the one the agent runs when none is chosen.
+    store.apply(Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::Ready {
+            version: "2.1.316".into(),
+            capabilities: quill_model::AgentCapabilities {
+                models: vec![
+                    quill_model::ModelInfo {
+                        id: "opus".into(),
+                        name: "Opus 5.5".into(),
+                        efforts: vec!["low".into(), "high".into()],
+                        ..Default::default()
+                    },
+                    quill_model::ModelInfo {
+                        id: "haiku".into(),
+                        name: "Haiku 5.5".into(),
+                        efforts: vec!["low".into()],
+                        default: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            mode: None,
+        },
+    });
+    let window = limn::Size::new(1408.0, 844.0);
+    let drawn = |ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        (frame.commands.iter())
+            .any(|command| matches!(command, limn::DrawCommand::Text { text, .. } if text == words))
+    };
+    ui.model = None;
+    assert!(drawn(&ui, "Haiku 5.5 (default)"));
+    // Its efforts are the composer's, and another model can be chosen.
+    assert_eq!(view::efforts(&store, &ui), ["low"]);
+    ui.model = Some("opus".into());
+    assert!(drawn(&ui, "Opus 5.5"));
+    assert!(!drawn(&ui, "Haiku 5.5 (default)"));
 }

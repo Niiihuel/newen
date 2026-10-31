@@ -462,7 +462,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
         let column = look::column().min(layout.main - 64.0).max(240.0);
         let body = match session {
             Some(session) => transcript(store, session, ui, column, palette),
-            None => empty(ui, column),
+            None => empty(ui),
         };
         row.push(
             Element::column(vec![
@@ -2554,25 +2554,25 @@ fn status_dot(session: &Session) -> Element {
         .centered_y()
 }
 
-/// A new session's page greets the person at the top, 20 px: quill's pen and words that
-/// follow the local hour and day (`greeting`). Desktop's place and size, not its spark or
-/// its words.
-fn empty(ui: &Ui, column: f32) -> Element {
+/// A new session's page greets the person centered just over the composer, 26 px: quill's
+/// pen and words that follow the local hour and day (`greeting`). The person's place and size
+/// for it, not Desktop's top corner.
+fn empty(ui: &Ui) -> Element {
     let greeting = crate::greeting::now(ui.utc_offset, ui.name.as_deref());
     let line = Element::row(vec![
         Element::icon(icons::of(include_str!(
             "../../../apps/quill/assets/icons/quill-mark.svg"
         )))
         .foreground(look::palette().text)
-        .large_icon(30.0)
+        .large_icon(36.0)
         .centered_y(),
-        text(greeting).font_size(20.0).centered_y(),
+        text(greeting).font_size(26.0).centered_y(),
     ])
-    .gap(8.0)
-    .size(Some(column), Some(30.0));
+    .gap(10.0);
     Element::column(vec![
-        Element::spacer().size(None, Some(16.0)),
+        Element::spacer().flex(1.0),
         line.centered_x(),
+        Element::spacer().size(None, Some(28.0)),
     ])
 }
 
@@ -7367,22 +7367,24 @@ fn model_menu(
 ) -> Element {
     let open = ui.open_menu == Some(MODEL_MENU);
     let models = offered_models(store, session, ui);
-    let current = models.iter().find(|m| {
-        ui.model
-            .as_deref()
-            .is_some_and(|id| m.id == id || m.name.to_lowercase().contains(id))
-    });
-    let name = current.map_or_else(
-        || ui.model.clone().unwrap_or_else(|| "Default".into()),
-        |m| m.name.clone(),
-    );
+    let current = current_model(store, session, ui);
+    // The agent's own default says which model it is.
+    let named = |model: &quill_model::ModelInfo| match model.default {
+        true => format!("{} (default)", model.name),
+        false => model.name.clone(),
+    };
+    let name = match current {
+        Some(model) if ui.model.is_none() => named(model),
+        Some(model) => model.name.clone(),
+        None => ui.model.clone().unwrap_or_else(|| "Default".into()),
+    };
     let content = vec![chip_text(name, look::palette().text)];
     let anchor = chip(MODEL_MENU, content, open, "Model", Some("Ctrl+Shift+I"));
     // The person's Desktop lists the models bare; effort has its own chip.
     let mut entries = vec![];
     let (latest, more) = split_models(models);
     let item = |model: &quill_model::ModelInfo| {
-        limn::DropdownMenuItem::new(format!("model:{}", model.id), model.name.clone())
+        limn::DropdownMenuItem::new(format!("model:{}", model.id), named(model))
             .selected(current.is_some_and(|c| c.id == model.id))
     };
     for (n, model) in latest.iter().enumerate() {
@@ -7414,17 +7416,18 @@ fn model_menu(
     )
 }
 
-/// The model the composer runs: the one picked, matched by id or by name.
+/// The model the composer runs: the one picked, matched by id or by name, else the agent's
+/// default.
 pub(crate) fn current_model<'a>(
     store: &'a Store,
     session: Option<&'a Session>,
     ui: &'a Ui,
 ) -> Option<&'a quill_model::ModelInfo> {
-    offered_models(store, session, ui).iter().find(|m| {
-        ui.model
-            .as_deref()
-            .is_some_and(|id| m.id == id || m.name.to_lowercase().contains(id))
-    })
+    let models = offered_models(store, session, ui);
+    match ui.model.as_deref() {
+        Some(id) => (models.iter()).find(|m| m.id == id || m.name.to_lowercase().contains(id)),
+        None => models.iter().find(|m| m.default),
+    }
 }
 
 /// The efforts the composer's model accepts, the slider's stops in order.
@@ -7498,12 +7501,16 @@ fn effort_menu(store: &Store, ui: &Ui) -> Element {
         shown,
     } = state;
     let open = ui.open_menu == Some(EFFORT_MENU);
+    // None chosen, the agent runs at its own default, which it does not tell: "Default", not
+    // the first stop.
+    let unchosen = ui.effort.is_none() && !ui.effort_dragging;
+    let label = |effort: &str| match unchosen {
+        true => "Default".to_owned(),
+        false => effort_label(effort),
+    };
     let anchor = chip(
         EFFORT_MENU,
-        vec![chip_text(
-            effort_label(&efforts[chosen]),
-            look::palette().text,
-        )],
+        vec![chip_text(label(&efforts[chosen]), look::palette().text)],
         open,
         "Effort",
         None,
@@ -7594,7 +7601,7 @@ fn effort_menu(store: &Store, ui: &Ui) -> Element {
         .accessibility_label("Effort")
         .size(Some(width), Some(28.0));
     let effort = efforts[shown].clone();
-    let name = text(effort_label(&effort)).font_size(BODY);
+    let name = text(label(&effort)).font_size(BODY);
     // Ultracode reads in Desktop's "pro" accent.
     let name = if ultra {
         name.foreground(look::pro())

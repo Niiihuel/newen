@@ -317,7 +317,7 @@ impl Codex {
                     name: id.clone(),
                     id,
                     efforts: ["low", "medium", "high", "xhigh"].map(String::from).into(),
-                    modes: vec![],
+                    ..Default::default()
                 })
                 .collect();
         }
@@ -1644,6 +1644,7 @@ fn models(data: &Value) -> Vec<ModelInfo> {
             .map(|e| text(&e["reasoningEffort"]))
             .collect(),
             modes: vec![],
+            default: m["isDefault"] == true,
         })
         .collect()
 }

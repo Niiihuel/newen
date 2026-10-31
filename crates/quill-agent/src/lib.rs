@@ -131,7 +131,7 @@ pub struct TaskUsage {
 }
 
 /// One model the agent offers, with the efforts it accepts.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -139,6 +139,9 @@ pub struct ModelInfo {
     /// Permission modes only this model offers, after the agent's own.
     #[serde(default)]
     pub modes: Vec<String>,
+    /// The one the agent runs when none is chosen.
+    #[serde(default)]
+    pub default: bool,
 }
 
 /// A command the agent runs itself when a message starts with `/name`.

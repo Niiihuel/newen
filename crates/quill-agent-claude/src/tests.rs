@@ -1332,3 +1332,28 @@ fn remote_control_turns_on_and_off_and_brings_the_phones_messages() {
         .args
         .contains(&"--replay-user-messages".to_string()));
 }
+
+#[test]
+fn the_models_are_asked_outside_a_session_with_the_default_named() {
+    let claude = Claude::new();
+    let asked: Value = serde_json::from_str(&claude.models_query().unwrap()[0]).unwrap();
+    assert_eq!(asked["request"]["subtype"], "initialize");
+    // The CLI's answer to `initialize` (2.1.316 [F:remote]), under the query's id.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/2.1.316/remote.jsonl");
+    let text = std::fs::read_to_string(path).unwrap();
+    let answer = (text.lines())
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["msg"].clone())
+        .find(|m| m["type"] == "control_response" && m["response"]["request_id"] == "q_1")
+        .unwrap();
+    let mut answer = answer;
+    answer["response"]["request_id"] = asked["request_id"].clone();
+    let models = claude.models_answer(&answer.to_string()).unwrap();
+    // "Default (recommended)" is Opus 5.5 there: that one is marked, not listed twice.
+    assert!(models.iter().all(|m| m.id != "default"));
+    let default: Vec<&str> = (models.iter())
+        .filter(|m| m.default)
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(default, ["Opus 5.5"]);
+    assert!(claude.models_answer("{\"type\":\"system\"}").is_none());
+}

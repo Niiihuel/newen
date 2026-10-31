@@ -280,6 +280,24 @@ impl AgentAdapter for Claude {
         Some(LAUNCH_FILE)
     }
 
+    // The models before any session of it: a short start of the CLI answers `initialize` with
+    // them, as a session's does.
+    fn models_query(&self) -> Option<Vec<String>> {
+        let request = json!({ "type": "control_request", "request_id": MODELS_REQUEST,
+            "request": { "subtype": "initialize" } });
+        Some(vec![request.to_string()])
+    }
+
+    fn models_answer(&self, line: &str) -> Option<Vec<ModelInfo>> {
+        let msg: Value = serde_json::from_str(line).ok()?;
+        let response = &msg["response"];
+        let answered = msg["type"] == "control_response"
+            && response["request_id"] == MODELS_REQUEST
+            && response["subtype"] == "success";
+        let body = &response["response"];
+        answered.then(|| models(body, offers_ultracode(body)))
+    }
+
     fn tested(&self) -> &'static [&'static str] {
         // The versions the fixtures were captured from.
         &["2.1.310"]
@@ -1259,6 +1277,9 @@ fn success(id: &Value, response: Value) -> String {
         .to_string()
 }
 
+/// The id of the `initialize` that asks the CLI for its models outside a session.
+const MODELS_REQUEST: &str = "quill-models";
+
 /// The in-process MCP server that carries quill's own tools ([`HOST_TOOLS`]); the agent sees
 /// them as `mcp__sessions__…`.
 const SERVER: &str = "sessions";
@@ -1383,44 +1404,65 @@ fn context_usage(body: &Value) -> ContextUsage {
 
 /// The answer to `initialize` describes the agent ([F:simple]). With `ultracode`, every model
 /// with effort levels also offers Ultracode above them.
+/// The models the CLI offers, as its `initialize` answer lists them (2.1.316 [F:remote]). Its
+/// `default` entry is the model it runs when none is chosen ("Default (recommended)", resolved to
+/// one of the others): that model is marked default rather than listed twice.
+fn models(body: &Value, ultracode: bool) -> Vec<ModelInfo> {
+    let list: Vec<&Value> = body["models"].as_array().into_iter().flatten().collect();
+    let resolved = |m: &Value| m["resolvedModel"].as_str().map(str::to_owned);
+    let default = list
+        .iter()
+        .find(|m| m["value"] == "default")
+        .and_then(|m| resolved(m));
+    let named = (list.iter())
+        .position(|m| m["value"] != "default" && default.is_some() && resolved(m) == default);
+    (list.iter().enumerate())
+        .filter(|(_, m)| named.is_none() || m["value"] != "default")
+        .map(|(i, m)| ModelInfo {
+            default: Some(i) == named || (named.is_none() && m["value"] == "default"),
+            ..model(m, ultracode)
+        })
+        .collect()
+}
+
+fn model(m: &Value, ultracode: bool) -> ModelInfo {
+    ModelInfo {
+        // `value` is what `--model` and `set_model` take; older entries may lack it.
+        id: m["value"]
+            .as_str()
+            .map_or_else(|| text(&m["resolvedModel"]), str::to_owned),
+        name: text(&m["displayName"]),
+        efforts: {
+            let mut efforts: Vec<String> = m["supportedEffortLevels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(text)
+                .collect();
+            // Every model with effort levels offers it (inferred: Desktop showed it for
+            // Opus 5.5; the person expects it on Haiku 5.5 too). It is applied as
+            // Desktop applies it, whatever the model's own top level.
+            if ultracode && !efforts.is_empty() {
+                efforts.push(ULTRACODE.into());
+            }
+            efforts
+        },
+        // Auto mode is the model's to offer (CLI 2.1.311 `supportsAutoMode`), as Desktop
+        // lists it only for a model that has it.
+        modes: if m["supportsAutoMode"].as_bool() == Some(true) {
+            vec!["auto".into()]
+        } else {
+            vec![]
+        },
+        default: false,
+    }
+}
+
 fn ready(body: &Value, ultracode: bool) -> AgentEvent {
-    let models = body["models"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|m| ModelInfo {
-            // `value` is what `--model` and `set_model` take; older entries may lack it.
-            id: m["value"]
-                .as_str()
-                .map_or_else(|| text(&m["resolvedModel"]), str::to_owned),
-            name: text(&m["displayName"]),
-            efforts: {
-                let mut efforts: Vec<String> = m["supportedEffortLevels"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(text)
-                    .collect();
-                // Every model with effort levels offers it (inferred: Desktop showed it for
-                // Opus 5.5; the person expects it on Haiku 5.5 too). It is applied as
-                // Desktop applies it, whatever the model's own top level.
-                if ultracode && !efforts.is_empty() {
-                    efforts.push(ULTRACODE.into());
-                }
-                efforts
-            },
-            // Auto mode is the model's to offer (CLI 2.1.311 `supportsAutoMode`), as Desktop
-            // lists it only for a model that has it.
-            modes: if m["supportsAutoMode"].as_bool() == Some(true) {
-                vec!["auto".into()]
-            } else {
-                vec![]
-            },
-        });
     AgentEvent::Ready {
         version: text(&body["claude_code_version"]),
         capabilities: AgentCapabilities {
-            models: models.collect(),
+            models: models(body, ultracode),
             modes: MODES.map(String::from).into(),
             unsafe_modes: vec!["bypassPermissions".into()],
             interrupt: true,
