@@ -7868,10 +7868,30 @@ fn changes_card(
         .size(Some(column), None)
 }
 
-/// How many of a diff's files open with their lines; the rest start folded.
-const DIFF_OPEN_FIRST: usize = 12;
+/// A diff with more files or changed lines than these starts with every file folded and says
+/// so, as Desktop's does (the numbers are inferred).
+const LARGE_DIFF_FILES: usize = 300;
+const LARGE_DIFF_LINES: u32 = 20_000;
 
-/// The changes of one request, file by file, as unified diffs.
+/// A changed file as the diff pane's list builds it. The list makes only the rows in view,
+/// after the view is built, so each row owns what it shows.
+struct DiffRow {
+    path: String,
+    added: u32,
+    removed: u32,
+    /// Where its first change is, which "Open in Files" opens.
+    line: u32,
+    /// Its patch while it is open; `None` folded.
+    patch: Option<String>,
+    /// Whether it has lines to show: a binary file has none, and its band does not open.
+    body: bool,
+    binary: bool,
+    /// Its open chip, built with the view while its "Open in" menu is open.
+    menu: Option<Element>,
+}
+
+/// The changes of one request, file by file, as unified diffs. A request can touch hundreds
+/// of files: the list builds only those in view, and a large diff starts folded.
 fn diff_pane(
     store: &Store,
     ui: &Ui,
@@ -7898,49 +7918,103 @@ fn diff_pane(
         .gap(8.0)
     };
     let header = pane_header(title, pane_tools(Pane::Diff, ui, palette), width);
-    let mut blocks = vec![];
+    let changed: u32 = files.iter().map(|f| f.added + f.removed).sum();
+    let large = files.len() > LARGE_DIFF_FILES || changed > LARGE_DIFF_LINES;
+    let toggled: std::collections::HashSet<&str> = (ui.expanded.iter())
+        .filter_map(|k| k.strip_prefix(DIFF_FOLD))
+        .collect();
+    let rows: Vec<DiffRow> = files
+        .iter()
+        .map(|file| {
+            let body = file.patch.lines().any(|l| l.starts_with("@@ "));
+            // A click flips a file from where it starts: open, or folded in a large diff.
+            let folded = large != toggled.contains(file.path.as_str());
+            let open = body && !folded;
+            let line = first_changed_line(&file.patch);
+            DiffRow {
+                path: file.path.clone(),
+                added: file.added,
+                removed: file.removed,
+                line,
+                patch: open.then(|| file.patch.clone()),
+                body,
+                binary: !body
+                    && (file.patch.contains("Binary files ")
+                        || file.patch.contains("GIT binary patch")),
+                menu: open_in_menu(&file.path, line, ui)
+                    .map(|rows| open_file_chip(&file.path, line, Some(rows), palette)),
+            }
+        })
+        .collect();
+    let mut pane = vec![header];
     if files.is_empty() {
-        blocks.push(pad(muted("No uncommitted changes"), 8.0, 8.0));
+        pane.push(pad(muted("No uncommitted changes"), 8.0, 8.0));
     }
-    for (index, file) in files.iter().enumerate() {
-        // Only the first files open with their diff: an open one is parsed and laid out on
-        // every frame, and a request can touch hundreds. A click flips each from its default.
-        let toggled = (ui.expanded.iter()).any(|k| *k == format!("{DIFF_FOLD}{}", file.path));
-        let folded = toggled != (index >= DIFF_OPEN_FIRST);
-        blocks.push(diff_file_band(file, folded, ui, width, palette));
-        if folded {
-            continue;
-        }
-        // A binary file (an image) has no lines to show.
-        if file.patch.trim().is_empty() {
-            blocks.push(pad(muted("No text changes").font_size(SMALL), 16.0, 8.0));
-            continue;
-        }
-        let lines = parse_patch(&file.patch);
-        let rows = lines.len().max(1) as f32;
-        let words = word_ranges(&lines);
-        blocks.push(
-            limn::CodeDiff::new(format!("diff:{index}"), lines)
-                .word_ranges(words)
-                .palette(palette)
-                .font_size(12.0)
-                .height((rows * 19.0 + 16.0).min(600.0))
-                .render(),
-        );
+    if large {
+        let note = "Files are collapsed for large diffs. Select a file to expand it.";
+        pane.push(pad(muted(note).font_size(SMALL), 16.0, 8.0));
     }
-    let body = Element::scroll(
+    let rows = std::sync::Arc::new(rows);
+    let keys = rows.clone();
+    let list = Element::measured_list(
         "diff:scroll",
-        Element::column(blocks).size(Some(width), None),
+        rows.len(),
+        32.0,
+        move |at| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            keys[at].path.hash(&mut hasher);
+            hasher.finish()
+        },
+        move |at| diff_row(&rows[at], at, width, palette),
     );
-    Element::column(vec![header, body.flex(1.0)])
+    pane.push(list.flex(1.0));
+    Element::column(pane)
         .background(look::theme().background)
         .size(Some(width), Some(height))
+}
+
+/// One file of the diff pane: its band, and its lines under it while it is open.
+fn diff_row(row: &DiffRow, at: usize, width: f32, palette: ComponentPalette) -> Element {
+    let band = diff_file_band(row, width, palette);
+    let Some(patch) = &row.patch else {
+        return band;
+    };
+    let lines = parse_patch(patch);
+    let height = (lines.len().max(1) as f32 * 19.0 + 16.0).min(600.0);
+    let words = word_ranges(&lines);
+    Element::column(vec![
+        band,
+        limn::CodeDiff::new(format!("diff:{at}"), lines)
+            .word_ranges(words)
+            .palette(palette)
+            .font_size(12.0)
+            .height(height)
+            .render(),
+    ])
+    .size(Some(width), None)
 }
 
 /// A changed file's open, a split button drawn as Create PR's: the file at `line` in quill's
 /// own Files pane, and its menu with every other place, "Open in" as a session's menu lists
 /// them (quill-ide, the editors found, the default app, the file manager).
 fn open_file(path: &str, line: u32, ui: &Ui, palette: ComponentPalette) -> Element {
+    open_file_chip(path, line, open_in_menu(path, line, ui), palette)
+}
+
+/// The "Open in" rows of `path`'s menu, aimed at its file and line, while that menu is open.
+fn open_in_menu(path: &str, line: u32, ui: &Ui) -> Option<Vec<limn::DropdownMenuEntry>> {
+    (ui.diff_menu.as_deref() == Some(path))
+        .then(|| open_in_rows(OPEN_FILE_IN, &format!("{line}:{path}"), ui))
+}
+
+/// [`open_file`] with its menu's rows: `Some` while the menu is open.
+fn open_file_chip(
+    path: &str,
+    line: u32,
+    rows: Option<Vec<limn::DropdownMenuEntry>>,
+    palette: ComponentPalette,
+) -> Element {
     let hover = ComponentPalette {
         hover: look::branch_chip_hover(),
         ..palette
@@ -7964,7 +8038,7 @@ fn open_file(path: &str, line: u32, ui: &Ui, palette: ComponentPalette) -> Eleme
     )
     .render();
     let id = format!("{OPEN_FILE_MENU}{path}");
-    let shown = ui.diff_menu.as_deref() == Some(path);
+    let shown = rows.is_some();
     let caret = hover
         .interactive_surface(Element::clickable(
             id.clone(),
@@ -7977,11 +8051,9 @@ fn open_file(path: &str, line: u32, ui: &Ui, palette: ComponentPalette) -> Eleme
     } else {
         caret
     };
-    // The session's own "Open in" rows, aimed at this file and line.
-    let entries = open_in_rows(OPEN_FILE_IN, &format!("{line}:{path}"), ui);
     let caret = menu(
         caret,
-        entries,
+        rows.unwrap_or_default(),
         shown,
         &id,
         220.0,
@@ -8014,45 +8086,47 @@ fn first_changed_line(patch: &str) -> u32 {
 }
 
 /// A file's band over its diff, as Desktop's: #F2F2F2, the name in #616161 after
-/// a caret and the code mark, then its added and removed lines.
-fn diff_file_band(
-    file: &FileEffect,
-    folded: bool,
-    ui: &Ui,
-    width: f32,
-    palette: ComponentPalette,
-) -> Element {
-    let name = file
-        .path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&file.path)
-        .to_owned();
+/// a caret and the code mark, then its added and removed lines. A file with no lines to show
+/// (a binary one) keeps its band, dimmed caret and counts, and does not open.
+fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Element {
+    let name = row.path.rsplit('/').next().unwrap_or(&row.path).to_owned();
+    let dim = look::muted();
+    let mut words = vec![
+        if row.body {
+            caret(row.patch.is_some())
+        } else {
+            caret(false).foreground(limn::Color {
+                a: dim.a / 3,
+                ..dim
+            })
+        },
+        Element::icon(icons::of(icons::CODE))
+            .foreground(look::muted())
+            .size(Some(14.0), Some(14.0))
+            .centered_y(),
+        text(name).foreground(look::command_ink()).centered_y(),
+    ];
+    if row.binary {
+        words.push(muted("Binary file").font_size(SMALL).centered_y());
+    }
+    let words = Element::row(words).gap(6.0).size(None, Some(32.0));
     // The caret and the name fold the file's lines away and back, as Desktop's band does.
-    let fold = Element::clickable(
-        format!("{DIFF_FOLD}{}", file.path),
-        Element::row(vec![
-            caret(!folded),
-            Element::icon(icons::of(icons::CODE))
-                .foreground(look::muted())
-                .size(Some(14.0), Some(14.0))
-                .centered_y(),
-            text(name).foreground(look::command_ink()).centered_y(),
-        ])
-        .gap(6.0)
-        .size(None, Some(32.0)),
-    );
+    let fold = if row.body {
+        Element::clickable(format!("{DIFF_FOLD}{}", row.path), words)
+    } else {
+        words
+    };
     Element::row(vec![
         hgap(16.0),
         fold,
         Element::spacer().flex(1.0),
-        text(format!("+{}", file.added))
+        text(format!("+{}", row.added))
             .foreground(look::added())
             .centered_y(),
-        text(format!("−{}", file.removed))
+        text(format!("−{}", row.removed))
             .foreground(look::removed())
             .centered_y(),
-        open_file(&file.path, first_changed_line(&file.patch), ui, palette),
+        (row.menu.clone()).unwrap_or_else(|| open_file_chip(&row.path, row.line, None, palette)),
         hgap(10.0),
     ])
     .gap(6.0)

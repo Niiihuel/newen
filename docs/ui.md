@@ -565,6 +565,7 @@ Medidas: ancho 206, a 4 px del borde derecho, tarjetas radio 8, gap 7, padding h
 
 **Estados:** sin cambios (`Empty` "No changes"); cargando patch (`Skeleton` por archivo); archivo enorme (colapsado con "Load diff"); binario ("Binary file"); error de git (`Notice` "Git isn't working").
 **Interacciones:** clic en cabecera colapsa; ↗ abre en editor externo (`Intent::OpenInEditor`); expandir maximiza el panel (oculta el chat); ✕ cierra; tamaño persistido en `Ui`.
+**Muchos archivos (hecho):** la lista es virtual (`Element::measured_list` de limn, `diff:scroll`): solo se arman las filas a la vista, cada una la banda del archivo y, abierta, su diff. El menú "Open in" se arma solo para la fila que lo tiene abierto. Un diff de más de 300 archivos o 20 000 líneas cambiadas empieza con todo plegado y el aviso "Files are collapsed for large diffs. Select a file to expand it." (umbrales inferidos); uno menor empieza con todo abierto. Un clic en la banda invierte el estado inicial de ese archivo. Un archivo sin líneas que mostrar (binario: "Binary file" junto al nombre) conserva su banda, la flecha atenuada y "+0 −0", y no se abre. Con 557 archivos, un cuadro (vista y layout, release) bajó de ~17 ms a ~2 ms.
 **Atajos:** toggle del diff (combinación desconocida) → quill propone Ctrl+Shift+D; Esc cierra si tiene foco.
 
 | Usar de limn | Crear |

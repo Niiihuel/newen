@@ -7114,39 +7114,53 @@ fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
 }
 
 #[test]
-fn a_request_with_many_files_opens_only_the_first_diffs() {
+fn a_diff_opens_its_files_and_a_large_one_starts_folded() {
     let (mut store, mut ui) = store_with_session();
     let file = |n: usize| quill_model::FileEffect {
         path: format!("src/f{n}.txt"),
         kind: quill_model::ChangeKind::Added,
         added: 1,
         removed: 0,
-        // The first is an image: no text.
+        // The first is an image: git has no lines for it.
         patch: if n == 0 {
-            String::new()
+            "diff --git a/src/f0.txt b/src/f0.txt\nBinary files /dev/null and b/src/f0.txt differ\n"
+                .into()
         } else {
             format!("@@ -0,0 +1 @@\n+line-{n}\n")
         },
     };
-    store.apply(Event::Changes {
-        session: 1,
-        request: "r1".into(),
-        files: (0..15).map(file).collect(),
-        snapshot: String::new(),
-    });
-    click(&store, &mut ui, "changes:r1:view");
-    settle(&store, &mut ui);
+    for (request, count) in [("r1", 15), ("r2", 301)] {
+        store.apply(Event::Changes {
+            session: 1,
+            request: request.into(),
+            files: (0..count).map(file).collect(),
+            snapshot: String::new(),
+        });
+    }
     let window = limn::Size::new(1408.0, 4000.0);
+    let frame = |ui: &Ui| UiTree::new(view(&store, ui, window)).layout(window);
     let drawn = |ui: &Ui, words: &str| {
-        let frame = UiTree::new(view(&store, ui, window)).layout(window);
-        (frame.commands.iter()).any(|command| {
+        (frame(ui).commands.iter()).any(|command| {
             matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
         })
     };
-    assert!(drawn(&ui, "No text changes"));
-    assert!(drawn(&ui, "line-11"));
-    assert!(!drawn(&ui, "line-12"));
-    // A folded one opens with a click on its band.
-    click(&store, &mut ui, &format!("{}src/f12.txt", view::DIFF_FOLD));
-    assert!(drawn(&ui, "line-12"));
+    let folds = |ui: &Ui, path: &str| {
+        let id = format!("{}{path}", view::DIFF_FOLD);
+        frame(ui).regions.iter().any(|r| r.id == id)
+    };
+    // A small diff opens every file; a binary one says so and has nothing to open.
+    click(&store, &mut ui, "changes:r1:view");
+    settle(&store, &mut ui);
+    assert!(drawn(&ui, "line-2"));
+    assert!(drawn(&ui, "line-14"));
+    assert!(drawn(&ui, "Binary file"));
+    assert!(folds(&ui, "src/f2.txt"));
+    assert!(!folds(&ui, "src/f0.txt"));
+    // Over 300 files, every file starts folded and the pane says so; a click opens one.
+    click(&store, &mut ui, "changes:r2:view");
+    settle(&store, &mut ui);
+    assert!(drawn(&ui, "Files are collapsed for large diffs"));
+    assert!(!drawn(&ui, "line-2"));
+    click(&store, &mut ui, &format!("{}src/f2.txt", view::DIFF_FOLD));
+    assert!(drawn(&ui, "line-2"));
 }
