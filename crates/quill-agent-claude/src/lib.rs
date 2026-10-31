@@ -250,6 +250,15 @@ impl Claude {
             interrupted: structured["interrupted"] == true,
         });
         let web = (name == "WebSearch").then(|| web_run(&input, structured, &output));
+        // Its pictures (a Read image, a screenshot, an MCP tool's), in the Messages API's
+        // blocks, which the engine keeps as files.
+        let inline = (block["content"].as_array().into_iter().flatten())
+            .filter(|part| part["type"] == "image" && part["source"]["type"] == "base64")
+            .map(|part| ToolContent::Image {
+                mime: text(&part["source"]["media_type"]),
+                data: text(&part["source"]["data"]),
+            })
+            .collect();
         AgentEvent::ToolResult {
             call,
             output,
@@ -257,6 +266,8 @@ impl Claude {
             files,
             command,
             web,
+            images: vec![],
+            inline,
         }
     }
 }

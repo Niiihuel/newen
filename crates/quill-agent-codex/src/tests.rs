@@ -1308,6 +1308,25 @@ fn a_tool_the_client_declared_is_a_step_by_its_name() {
 }
 
 #[test]
+fn an_mcp_tool_s_pictures_are_read_for_the_engine_to_keep() {
+    // Inferred from MCP's image blocks: no capture has an MCP tool that answers with one.
+    let mut run = run_of("simple");
+    run.feed(&json!({ "method": "item/completed", "params": { "item": {
+        "type": "mcpToolCall", "id": "m1", "server": "shots", "tool": "take", "arguments": {},
+        "status": "completed", "error": null, "result": { "content": [
+            { "type": "text", "text": "taken" },
+            { "type": "image", "data": "iVBORw0K", "mimeType": "image/png" }] } } } }));
+    let picture = ToolContent::Image {
+        mime: "image/png".into(),
+        data: "iVBORw0K".into(),
+    };
+    assert!(
+        matches!(run.events.last(), Some(ToolResult { output, inline, .. })
+        if output == "taken" && *inline == [picture])
+    );
+}
+
+#[test]
 fn an_unauthorized_turn_asks_to_sign_in() {
     // SYNTHETIC (docs/codex.md): no capture has a turn without an account. The fixture is
     // simple.jsonl up to the person's message, then the `error` and the failed `turn/completed`

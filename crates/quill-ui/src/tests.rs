@@ -710,6 +710,7 @@ fn steps_are_named_in_desktops_words() {
         files: vec![],
         stopped: false,
         web: None,
+        images: vec![],
     };
     let read = serde_json::json!({ "file_path": "/work/saludo.py" });
     let bash =
@@ -806,6 +807,8 @@ fn result(store: &mut Store, call: &str, output: &str) {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
 }
@@ -928,6 +931,7 @@ fn a_helper_agent_keeps_its_steps_and_counts_as_running_work() {
         files: vec![],
         stopped: false,
         web: None,
+        images: vec![],
     };
     let stop = view::Step {
         call: "k1",
@@ -965,6 +969,7 @@ fn a_finished_group_counts_agents_and_other_tools() {
         files: vec![],
         stopped: false,
         web: None,
+        images: vec![],
     };
     let read = serde_json::json!({ "file_path": "/work/saludo.py" });
     let agent_input = serde_json::json!({ "description": "List files" });
@@ -2596,6 +2601,8 @@ fn outputs_open_in_a_document_pane_that_saves_and_follows_the_agent() {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     };
     assert!(ui.applied(&wrote).contains(&Intent::ReadFile {
@@ -2663,6 +2670,8 @@ fn a_passed_on_message_says_so_on_both_sides_and_new_work_is_marked() {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
     let session = store.session(1).unwrap();
@@ -3099,6 +3108,7 @@ fn browser_steps_read_in_desktops_words_and_fold_into_what_they_did() {
         files: vec![],
         stopped: false,
         web: None,
+        images: vec![],
     };
     let inputs = [
         serde_json::json!({ "url": "https://www.example.com/a" }),
@@ -4795,6 +4805,8 @@ fn a_web_search_shows_its_pill_then_its_cards_and_the_more_card_expands_them() {
                 query: "rust release".into(),
                 sources,
             }),
+            images: vec![],
+            inline: vec![],
         },
     );
     let window = limn::Size::new(1408.0, 844.0);
@@ -4870,6 +4882,8 @@ fn a_running_web_search_says_it_is_searching_and_an_errored_one_stays_a_step() {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
     let frame = UiTree::new(view(&store, &ui, window)).layout(window);
@@ -6193,6 +6207,7 @@ fn the_steps_of_a_review_a_compaction_a_wait_and_an_image_say_what_they_did() {
             files: vec![],
             stopped: false,
             web: None,
+            images: vec![],
         };
         let step = view::Step {
             call: "s1",
@@ -6256,6 +6271,8 @@ fn a_generated_image_opens_in_the_viewer_and_a_read_one_too() {
             }],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
     tool(
@@ -6323,9 +6340,196 @@ fn a_generated_image_opens_in_the_viewer_and_a_read_one_too() {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
     assert_eq!(image_paths(&store, &ui).len(), 2);
+}
+
+/// A tool's result that gave back `images`, as the engine kept them.
+fn pictured(store: &mut Store, call: &str, images: &[&str], is_error: bool) {
+    agent(
+        store,
+        AgentEvent::ToolResult {
+            call: call.into(),
+            output: String::new(),
+            is_error,
+            files: vec![],
+            command: None,
+            web: None,
+            images: images.iter().map(PathBuf::from).collect(),
+            inline: vec![],
+        },
+    );
+}
+
+fn screenshot(store: &mut Store, call: &str, images: &[&str]) {
+    let input = serde_json::json!({ "action": "screenshot" });
+    tool(store, call, "mcp__browser__computer", input, None);
+    pictured(store, call, images, false);
+}
+
+fn region(frame: &limn::Frame, id: &str) -> Option<limn::Rect> {
+    frame.regions.iter().find(|r| r.id == id).map(|r| r.rect)
+}
+
+/// The step pictures a frame shows, in order.
+fn thumbnails(frame: &limn::Frame) -> Vec<String> {
+    let mut ids: Vec<String> = vec![];
+    for region in &frame.regions {
+        if region.id.starts_with("image:step:") && !ids.contains(&region.id) {
+            ids.push(region.id.clone());
+        }
+    }
+    ids
+}
+
+/// The frame of `view`, its motion settled at once.
+fn still(store: &Store, ui: &Ui) -> limn::Frame {
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(store, ui, window));
+    tree.set_reduced_motion(true);
+    tree.layout(window)
+}
+
+fn painted(frame: &limn::Frame, words: &str) -> Option<limn::Point> {
+    frame.commands.iter().find_map(|command| match command {
+        limn::DrawCommand::Text { text, position, .. } if text == words => Some(*position),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_run_s_pictures_sit_at_its_line_s_end_and_the_viewer_steps_through_them() {
+    let (mut store, mut ui) = store_with_session();
+    screenshot(&mut store, "c1", &["/work/a.png"]);
+    tool(
+        &mut store,
+        "c2",
+        "Bash",
+        serde_json::json!({ "command": "ls" }),
+        None,
+    );
+    result(&mut store, "c2", "a.png");
+    screenshot(&mut store, "c3", &["/work/b.png"]);
+    // A failed step's picture is not shown, as Desktop's.
+    let input = serde_json::json!({ "action": "screenshot" });
+    tool(&mut store, "c4", "mcp__browser__computer", input, None);
+    pictured(&mut store, "c4", &["/work/failed.png"], true);
+    // A message ends the run: what follows is counted apart.
+    agent(
+        &mut store,
+        AgentEvent::Text {
+            text: "Here it is".into(),
+            parent: None,
+            id: None,
+            at: None,
+        },
+    );
+    screenshot(&mut store, "c5", &["/work/later.png"]);
+    // Their thumbnails are decoded as a message's pictures are.
+    assert_eq!(
+        image_paths(&store, &ui),
+        ["/work/a.png", "/work/b.png", "/work/later.png"].map(PathBuf::from)
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert_eq!(
+        thumbnails(&frame),
+        ["image:step:c1:0", "image:step:c3:0", "image:step:c5:0"]
+    );
+    // At the end of the run's line, 24 px tall, 4 px apart.
+    let line = region(&frame, "steps:c1").expect("the run's line");
+    let (a, b) = (
+        region(&frame, "image:step:c1:0").unwrap(),
+        region(&frame, "image:step:c3:0").unwrap(),
+    );
+    assert!(a.x > line.x + line.width, "{a:?} after {line:?}");
+    assert_eq!(a.height, 24.0);
+    assert!((b.x - (a.x + a.width) - 4.0).abs() < 0.5, "{a:?} {b:?}");
+    let middle = |r: limn::Rect| r.y + r.height / 2.0;
+    assert!((middle(a) - middle(line)).abs() < 1.0);
+    // A click opens the viewer on it, among the run's pictures, each named by its step. The
+    // host has read their sizes, which fit them in the window.
+    for path in ["/work/a.png", "/work/b.png", "/work/later.png"] {
+        ui.sizes.insert(path.into(), (1280.0, 720.0));
+    }
+    click(&store, &mut ui, "image:step:c3:0");
+    let viewer = ui.viewer.as_ref().expect("the viewer opened");
+    assert_eq!(
+        (viewer.path.clone(), viewer.index, viewer.annotatable),
+        (PathBuf::from("/work/b.png"), 1, false)
+    );
+    let named = |path: &str| (PathBuf::from(path), "Captured page".to_owned());
+    assert_eq!(viewer.gallery, [named("/work/a.png"), named("/work/b.png")]);
+    let frame = still(&store, &ui);
+    assert!(painted(&frame, "2 of 2").is_some() && painted(&frame, "Captured page").is_some());
+    assert!(region(&frame, view::IMAGE_PREVIOUS).is_some());
+    // Its arrows step through them and stop at either end.
+    click(&store, &mut ui, view::IMAGE_NEXT);
+    assert_eq!(ui.viewer.as_ref().unwrap().index, 1);
+    click(&store, &mut ui, view::IMAGE_PREVIOUS);
+    let viewer = ui.viewer.as_ref().unwrap();
+    assert_eq!(
+        (viewer.index, viewer.path.clone()),
+        (0, PathBuf::from("/work/a.png"))
+    );
+    let frame = still(&store, &ui);
+    assert!(painted(&frame, "1 of 2").is_some());
+    assert!(region(&frame, view::IMAGE_NEXT).is_some());
+    click(&store, &mut ui, view::IMAGE_PREVIOUS);
+    assert_eq!(ui.viewer.as_ref().unwrap().index, 0);
+    // A picture alone in its run has no count and no arrows.
+    click(&store, &mut ui, view::IMAGE_CLOSE);
+    click(&store, &mut ui, "image:step:c5:0");
+    assert_eq!(ui.viewer.as_ref().unwrap().gallery.len(), 1);
+    let frame = still(&store, &ui);
+    assert!(region(&frame, view::IMAGE_NEXT).is_none() && painted(&frame, "1 of 1").is_none());
+}
+
+#[test]
+fn resting_on_a_thumbnail_shows_it_larger_and_a_long_run_keeps_its_last_three() {
+    let (mut store, mut ui) = store_with_session();
+    for n in 1..=5 {
+        screenshot(&mut store, &format!("c{n}"), &[&format!("/work/{n}.png")]);
+    }
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    let frame = tree.layout(window);
+    // The last three, and how many come before them.
+    assert_eq!(
+        thumbnails(&frame),
+        ["image:step:c3:0", "image:step:c4:0", "image:step:c5:0"]
+    );
+    assert!(painted(&frame, "+2").is_some());
+    // Under the pointer, a card above it: the step's label and the picture's place in the run.
+    let thumb = region(&frame, "image:step:c4:0").unwrap();
+    assert!(painted(&frame, "4 of 5").is_none());
+    let center = limn::Point::new(thumb.x + thumb.width / 2.0, thumb.y + thumb.height / 2.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    let frame = tree.layout(window);
+    let count = painted(&frame, "4 of 5").expect("the card counts it");
+    let caption = (frame.commands.iter()).any(|command| {
+        matches!(command, limn::DrawCommand::Text { text, position, .. }
+            if text == "Captured page" && position.y == count.y && position.x < count.x)
+    });
+    assert!(caption, "the card names it by its step");
+    // Below it here: the run is too near the top for the card to fit above.
+    assert!(count.y > thumb.y + thumb.height && count.x < thumb.x + thumb.width);
+    // Open, each step's row shows its own picture, and the run's line none.
+    click(&store, &mut ui, "steps:c1");
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let ids = thumbnails(&frame);
+    assert_eq!(ids.len(), 5, "{ids:?}");
+    assert!(painted(&frame, "+2").is_none());
+    let rows: Vec<f32> = (ids.iter())
+        .map(|id| region(&frame, id).unwrap().y)
+        .collect();
+    assert!(
+        rows.windows(2).all(|pair| pair[1] > pair[0] + 24.0),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -7077,6 +7281,8 @@ fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
             files: vec![],
             command: None,
             web: None,
+            images: vec![],
+            inline: vec![],
         },
     );
     agent(

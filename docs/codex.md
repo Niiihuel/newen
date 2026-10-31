@@ -51,7 +51,7 @@ El adaptador traduce cada ítem al nombre de herramienta que la interfaz ya cono
 |---|---|---|
 | `commandExecution` | `Bash` (`command`, `description`) | `commandActions` clasifica el comando. `read` pasa a `Read`, `search` a `Grep`, `listFiles` a `LS`, y el resto queda en `Bash` |
 | `fileChange` | `Edit` / `Write` por archivo (`add` → creado, `update` → editado, `delete`) | Codex da un diff unificado. `add` trae el contenido completo como `diff`; `update` trae solo el hunk. El antes y el después de `ToolResult.files` se reconstruyen con el repo sombra del motor (confirmado, ver Fase 1) |
-| `mcpToolCall` | `mcp__{server}__{tool}` | Etiqueta y logo del conector como hoy |
+| `mcpToolCall` | `mcp__{server}__{tool}` | Etiqueta y logo del conector como hoy; las imágenes de su `result.content` (bloques de imagen de MCP, *inferido*) van al final de la fila, como las de Claude (engine.md §3.6) |
 | `webSearch` | `WebSearch` con `WebSearchRun` | El bloque de búsqueda web actual |
 | `turn/plan/updated` | La lista de tareas (forma de `TodoWrite`) | El panel de tareas sobre el composer. No hay ítem `plan`, solo la notificación, y el thread debe activar `update_plan` (ver Fase 1) |
 | `subAgentActivity` (`started`) / `collabAgentToolCall` `spawnAgent` | `Agent` + `TaskStarted` | El mismo `Agent` de Claude: la fila "Ran agent", el panel del subagente y el panel de tareas. Ver "Ítems restantes" |

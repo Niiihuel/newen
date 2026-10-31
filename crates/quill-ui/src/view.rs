@@ -29,6 +29,14 @@ use std::time::Instant;
 const IMAGE_TILE: f32 = 85.0;
 /// A generated image's tile, wider than a message's: it is what the turn made.
 const GENERATED_TILE: f32 = 168.0;
+/// The pictures at a step row's end, as Desktop's: 24 px tall and as wide as their shape up
+/// to 44, the last three of them.
+const THUMB_HEIGHT: f32 = 24.0;
+const THUMB_WIDTH: f32 = 44.0;
+const THUMBS_SHOWN: usize = 3;
+/// The card a thumbnail shows under the pointer: 320 px wide, its picture at most 240 tall.
+const PREVIEW_WIDTH: f32 = 320.0;
+const PREVIEW_HEIGHT: f32 = 240.0;
 /// A web search source card, tall (websearch-spec (a)).
 const CARD_HEIGHT: f32 = 84.0;
 
@@ -95,6 +103,9 @@ pub const ATTACH_FILES: &str = "attach:files";
 /// control, which only a composer image has.
 pub const IMAGE_CLOSE: &str = "image:close";
 pub const IMAGE_ANNOTATE: &str = "image:annotate";
+/// The viewer's arrows, through the pictures of a run of steps.
+pub const IMAGE_PREVIOUS: &str = "image:previous";
+pub const IMAGE_NEXT: &str = "image:next";
 pub const ATTACH_FOLDER: &str = "attach:folder";
 pub const SLASH: &str = "attach:slash";
 pub const TERMINAL_TOGGLE: &str = "terminal:toggle";
@@ -2676,7 +2687,7 @@ fn entries<'a>(
     let transcript = crate::current_view(session, &ui.settings);
     let flush = |steps: &mut Vec<Step>, items: &mut Vec<Element>| {
         if !steps.is_empty() {
-            items.push(step_group(steps, ui, transcript, column, palette));
+            items.push(step_group(steps, list, ui, transcript, column, palette));
             steps.clear();
         }
     };
@@ -3542,11 +3553,13 @@ fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
     let Some(viewer) = &ui.viewer else {
         return base;
     };
-    let name = viewer
-        .path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // A step's picture is named by its step, as Desktop's are; another by its file.
+    let name = match viewer.gallery.get(viewer.index) {
+        Some((_, caption)) => caption.clone(),
+        None => (viewer.path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
     let picture = ui.full.get(&viewer.path).or(ui.thumbs.get(&viewer.path));
     // Desktop's lightbox: the picture fitted at most 640 wide, its controls beside it and its
     // name under it, over the dimmed window.
@@ -3554,6 +3567,11 @@ fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
         .viewport(window)
         .lightbox(true)
         .caption(name);
+    if viewer.gallery.len() > 1 {
+        shown = (shown.gallery(viewer.index, viewer.gallery.len()))
+            .previous_action(IMAGE_PREVIOUS)
+            .next_action(IMAGE_NEXT);
+    }
     if let Some(picture) = picture {
         shown = shown.image(picture.clone());
     }
@@ -4110,6 +4128,181 @@ pub fn step_image(name: &str, input: &Value, result: Option<&ToolResult>) -> Opt
         }
         _ => None,
     }
+}
+
+/// The pictures of a step's row: the ones its result gave back, else the image file a Read
+/// opened (Codex sends only its path). A failed step shows none, as Desktop's.
+pub fn step_pictures(name: &str, input: &Value, result: Option<&ToolResult>) -> Vec<PathBuf> {
+    match result {
+        Some(r) if r.is_error => vec![],
+        Some(r) if !r.images.is_empty() => r.images.clone(),
+        Some(_) if name == "Read" => step_image(name, input, result).into_iter().collect(),
+        _ => vec![],
+    }
+}
+
+/// One picture of a run of steps: its step's call and its place among that step's, the file,
+/// and the step's label done ("Captured page"), which names it.
+pub struct StepPicture {
+    pub call: String,
+    pub at: usize,
+    pub path: PathBuf,
+    pub caption: String,
+}
+
+/// The pictures of the run of steps `call` is in: the tool calls between two messages, which
+/// Desktop's viewer steps through and counts. `list` is the transcript or a helper's.
+pub fn run_pictures(list: &[Item], call: &str) -> Vec<StepPicture> {
+    let in_run = |item: &Item| {
+        matches!(
+            item,
+            Item::Tool { .. } | Item::Thinking { .. } | Item::Permission { .. }
+        )
+    };
+    let Some(at) = (list.iter()).position(|i| matches!(i, Item::Tool { call: c, .. } if c == call))
+    else {
+        return vec![];
+    };
+    let start = list[..at]
+        .iter()
+        .rposition(|i| !in_run(i))
+        .map_or(0, |i| i + 1);
+    let end = list[at..]
+        .iter()
+        .position(|i| !in_run(i))
+        .map_or(list.len(), |i| at + i);
+    let mut run = vec![];
+    for item in &list[start..end] {
+        let Item::Tool {
+            call,
+            name,
+            input,
+            result,
+        } = item
+        else {
+            continue;
+        };
+        let pictures = step_pictures(name, input, result.as_ref());
+        if pictures.is_empty() {
+            continue;
+        }
+        let step = Step {
+            call,
+            name,
+            input,
+            result: result.as_ref(),
+            running: false,
+        };
+        let (verb, object) = step_label(&step, true);
+        let caption = format!("{verb} {object}").trim_end().to_owned();
+        run.extend(
+            pictures
+                .into_iter()
+                .enumerate()
+                .map(|(at, path)| StepPicture {
+                    call: call.clone(),
+                    at,
+                    path,
+                    caption: caption.clone(),
+                }),
+        );
+    }
+    run
+}
+
+/// The pictures of `run` that `own` picks, as a row's end shows them: the last three, "+N"
+/// before them for the rest. `None` when it picks none.
+fn picture_strip(
+    run: &[StepPicture],
+    own: impl Fn(&StepPicture) -> bool,
+    ui: &Ui,
+) -> Option<Element> {
+    let mine: Vec<usize> = (0..run.len()).filter(|&i| own(&run[i])).collect();
+    if mine.is_empty() {
+        return None;
+    }
+    let hidden = mine.len().saturating_sub(THUMBS_SHOWN);
+    let mut strip = vec![];
+    if hidden > 0 {
+        strip.push(muted(format!("+{hidden}")).font_size(chat()).centered_y());
+    }
+    let thumbs = mine[hidden..].iter().map(|&i| thumbnail(run, i, ui));
+    strip.push(Element::row(thumbs.collect()).gap(4.0).centered_y());
+    Some(Element::row(strip).gap(8.0))
+}
+
+/// The picture `index` of `run` as a strip shows it, which a click opens in the viewer and the
+/// pointer, resting on it, opens larger on a card above it: the step's label and the picture's
+/// place in the run under it, as Desktop's.
+fn thumbnail(run: &[StepPicture], index: usize, ui: &Ui) -> Element {
+    let picture = &run[index];
+    let id = format!("image:step:{}:{}", picture.call, picture.at);
+    // A screenshot's shape until the host has read the file's.
+    let aspect =
+        (ui.sizes.get(&picture.path)).map_or(16.0 / 9.0, |&(width, height)| width / height);
+    let fill = |image: Option<&limn::RasterImage>, cover: bool, width: f32, height: f32| {
+        let image = match image {
+            Some(image) if cover => Element::raster_image(image.clone().cover()),
+            Some(image) => Element::raster_image(image.clone()),
+            None => Element::spacer(),
+        };
+        Element::panel(image.size(Some(width), Some(height)))
+            .background(look::command_box())
+            .size(Some(width), Some(height))
+    };
+    let count = format!("{} of {}", index + 1, run.len());
+    let named = if run.len() > 1 {
+        format!("{}, {count}", picture.caption)
+    } else {
+        picture.caption.clone()
+    };
+    let width = (THUMB_HEIGHT * aspect).clamp(1.0, THUMB_WIDTH);
+    let thumb = Element::clickable(
+        &id,
+        fill(ui.thumbs.get(&picture.path), true, width, THUMB_HEIGHT)
+            .border(look::card_border(), 1.0)
+            .radius(4.0)
+            .clip_children(),
+    )
+    .accessibility_label(named);
+    let mut line = vec![Element::truncated_text(picture.caption.clone())
+        .font_family(FontFamily::Sans)
+        .font_size(SMALL)
+        .foreground(look::palette().text)
+        .flex(1.0)];
+    if run.len() > 1 {
+        line.push(muted(count).font_size(SMALL));
+    }
+    // shortcut: the card enlarges the 256 px thumbnail a little, soft on a dense screen; a
+    // larger decode of step pictures would sharpen it.
+    let big = ui.full.get(&picture.path).or(ui.thumbs.get(&picture.path));
+    // As wide as the card; a picture too tall for it is fitted in, on the neutral fill.
+    let height = PREVIEW_WIDTH / aspect;
+    let shown = fill(
+        big,
+        height <= PREVIEW_HEIGHT,
+        PREVIEW_WIDTH,
+        height.min(PREVIEW_HEIGHT),
+    );
+    let menu = look::menu_palette();
+    let card = Element::panel(Element::column(vec![
+        shown,
+        pad(Element::row(line).gap(8.0), 12.0, 8.0),
+    ]))
+    .size(Some(PREVIEW_WIDTH), None)
+    .background(menu.raised)
+    .border(menu.border, 1.0)
+    .radius(10.0)
+    .shadow(menu.shadow, limn::Point::new(0.0, 9.0), 22.0, 0.0)
+    .clip_children();
+    Element::popover(
+        thumb,
+        card,
+        format!("{id}:card"),
+        limn::PopoverPlacement::TopEnd,
+    )
+    .popover_on_hover()
+    .popover_gap(6.0)
 }
 
 /// A generated image: its line, which opens the prompt it was made from, over its picture,
@@ -5227,6 +5420,7 @@ pub fn line_diff(before: &str, after: &str) -> Vec<limn::CodeDiffLine> {
 /// removed lines, which unfolds into a card with a row per step; a row unfolds what it did.
 fn step_group(
     steps: &[Step],
+    list: &[Item],
     ui: &Ui,
     view: TranscriptView,
     column: f32,
@@ -5234,6 +5428,13 @@ fn step_group(
 ) -> Element {
     let key = format!("steps:{}", steps[0].call);
     let open = is_open(view, ui, &key);
+    // The pictures its steps gave back, among the run's they are counted in.
+    let pictured = (steps.iter()).any(|s| !step_pictures(s.name, s.input, s.result).is_empty());
+    let run = if pictured {
+        run_pictures(list, steps[0].call)
+    } else {
+        vec![]
+    };
     let running = steps.iter().any(|s| s.running);
     let stopped = !running
         && steps
@@ -5295,6 +5496,18 @@ fn step_group(
         key,
         Element::row(head).gap(8.0).size(None, Some(24.0)),
     );
+    // Folded, they sit at the line's end; open, each step's row shows its own.
+    let mine = |p: &StepPicture| steps.iter().any(|s| s.call == p.call);
+    let strip = if open {
+        None
+    } else {
+        picture_strip(&run, mine, ui)
+    };
+    let head = match strip {
+        Some(strip) => Element::row(vec![head, Element::spacer().flex(1.0), strip])
+            .size(Some(column), Some(24.0)),
+        None => head,
+    };
     // The steps open and close on limn's spring, as the panel's cards do; the gap above
     // them is inside what folds.
     let card = open.then(|| {
@@ -5303,7 +5516,7 @@ fn step_group(
             if i > 0 {
                 rows.push(hline(column, look::card_border()));
             }
-            rows.push(step_row(step, ui, view, column, palette));
+            rows.push(step_row(step, &run, ui, view, column, palette));
         }
         let card = Element::panel(Element::column(rows))
             .background(palette.surface)
@@ -5392,6 +5605,7 @@ fn caret(open: bool) -> Element {
 /// caret: it opens the agent's own pane.
 fn step_row(
     step: &Step,
+    run: &[StepPicture],
     ui: &Ui,
     view: TranscriptView,
     column: f32,
@@ -5435,6 +5649,10 @@ fn step_row(
     }
     if !agent && !bare {
         line.push(caret(open));
+    }
+    // Its pictures at the row's end.
+    if let Some(strip) = picture_strip(run, |p| p.call == step.call, ui) {
+        line.extend([Element::spacer().flex(1.0), strip.centered_y(), hgap(10.0)]);
     }
     let row_palette = ComponentPalette {
         hover: look::row_hover(),

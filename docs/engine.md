@@ -201,6 +201,12 @@ Reglas de transporte (SDK):
 
 Un mensaje lleva archivos de imagen (`Intent::Send.images`, `Event::Queued.images`): PNG, JPEG, GIF o WebP, reconocidos por su contenido y no por la extensión, hasta 20 por mensaje y 30 MB cada una; lo demás se omite con «Only PNG, JPEG, GIF, and WebP images are supported.», lo que pasa de 30 MB con «Some images were too large to attach. Maximum size is 30 MB.» y el resto del límite de 20 con «Maximum of 20 images allowed.». Una imagen de a lo sumo 2000×2000 px y 500 KB va tal cual; si no, se recodifica con lado máximo 2000 px, JPEG a calidad 0.9 y luego 0.7, reduciendo el lado ×0.75 hasta 500 px hasta caber en `min(500 KB, tamaño original)`, y se conserva el original si la recodificación no es menor y el original cabía en 500 KB. Desktop prefiere WebP cuando el canvas lo codifica; quill usa JPEG (sobre blanco si hay transparencia) porque el codificador WebP del crate `image` es solo sin pérdida (equivalencia *inferida*). El procesamiento corre en un hilo bloqueante, después de guardar el `Queued` con las rutas originales; los avisos llegan como `Event::Notice`, que no se guarda. Al CLI, el mensaje va con los bloques `image` base64 (`{"type":"image","source":{"type":"base64","media_type","data"}}`) antes del bloque `text`, o solo el `text` sin imágenes; que el CLI 2.1.310 acepte esos bloques no está verificado con una captura *(inferido)*.
 
+### 3.6 Imágenes en el resultado de una herramienta
+
+Una herramienta puede responder con imágenes: el `Read` de una imagen, una captura del navegador de quill, una herramienta MCP. El adaptador las lee de su protocolo y las deja en `AgentEvent::ToolResult.inline` como `ToolContent::Image` (base64): Claude Code, los bloques `image` de la Messages API (`{"type":"image","source":{"type":"base64","media_type","data"}}`) dentro del `content` del `tool_result`; Codex, los bloques de imagen de MCP (`{"type":"image","data","mimeType"}`) en `result.content` de un `mcpToolCall` *(inferido en los dos: ninguna captura tiene uno)*. Un bloque con otra fuente (una dirección) se omite. El `imageView` de Codex no trae la imagen, solo su ruta: es el `Read` de ese archivo.
+
+El actor guarda las imágenes antes de emitir el evento: en un hilo bloqueante (`images::keep`), las decodifica, reconoce el formato por su contenido (PNG, JPEG, GIF o WebP; lo demás se omite) y escribe cada una en `<Config::pictures>/<sesión>/<uuid>.<ext>`, con nombres propios de quill (nada de lo que manda el agente nombra un archivo). Recién entonces el evento sigue, con las rutas en `images` e `inline` vacío: así se guarda y así le llega a la interfaz. `inline` nunca se serializa (`#[serde(skip)]`), de modo que el registro guarda rutas y no imágenes. Sin `Config::pictures` (las pruebas) no se guarda ninguna. Al borrar una sesión se borra su carpeta de imágenes.
+
 ## 4. Permisos
 
 ### 4.2 quill
@@ -334,6 +340,7 @@ ref      = refs/quill/<session>/<n> (commit-tree) para que gc no lo borre
 | Estado | `$XDG_DATA_HOME/quill/quill.db` | SQLite (WAL, `foreign_keys=ON`, migraciones versionadas), 0600 |
 | Payloads grandes (`tool_result` > 256 KiB, salidas de comandos) | `$XDG_DATA_HOME/quill/blobs/<sha256>` | archivos direccionados por contenido; la fila guarda `*_ref` |
 | Snapshots | `$XDG_DATA_HOME/quill/snapshots/<hash(cwd)>.git` | repo git sombra (§6.4) |
+| Imágenes de las herramientas | `$XDG_DATA_HOME/quill/pictures/<sesión>/<uuid>.<ext>` (`Config::pictures`) | los archivos tal como llegaron (§3.6); el evento guarda sus rutas |
 | Logs | `$XDG_STATE_HOME/quill/logs/{quill.log, cli-<session>.log}` | `tracing-appender`, rotación diaria, retención N días |
 | Transcript del CLI | lo sigue escribiendo el CLI en `~/.claude/projects/…`; quill lo usa **solo** para `--resume` (vía CLI) e importación | no se parsea en el camino normal |
 

@@ -1,9 +1,10 @@
-//! The images a message attaches, read and sized for the agent (docs/engine.md). Runs on a
-//! blocking thread: it decodes and encodes whole files.
+//! The images a message attaches, read and sized for the agent, and the pictures a tool gives
+//! back, kept as files (docs/engine.md). Runs on a blocking thread: it decodes and encodes
+//! whole files.
 
 use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageFormat, RgbImage};
-use quill_agent::PromptImage;
-use std::path::PathBuf;
+use quill_agent::{PromptImage, ToolContent};
+use std::path::{Path, PathBuf};
 
 /// Desktop's limits.
 const MAX_FILE: u64 = 30 * 1024 * 1024;
@@ -42,6 +43,37 @@ pub fn attach(paths: &[PathBuf]) -> (Vec<PromptImage>, Vec<&'static str>) {
         }
     }
     (images, notices)
+}
+
+/// The pictures a tool gave back, written to `dir` in the order they came, under names of
+/// quill's own (what the agent sent never names a file). One that is not base64 of a PNG,
+/// JPEG, GIF or WebP, or cannot be written, is let go.
+pub fn keep(dir: &Path, pictures: Vec<ToolContent>) -> Vec<PathBuf> {
+    use base64::Engine;
+    let mut kept = vec![];
+    for picture in pictures {
+        let ToolContent::Image { data, .. } = picture else {
+            continue;
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else {
+            continue;
+        };
+        let extension = match image::guess_format(&bytes) {
+            Ok(ImageFormat::Png) => "png",
+            Ok(ImageFormat::Jpeg) => "jpg",
+            Ok(ImageFormat::Gif) => "gif",
+            Ok(ImageFormat::WebP) => "webp",
+            _ => continue,
+        };
+        let path = dir.join(format!("{}.{extension}", uuid::Uuid::new_v4().simple()));
+        if std::fs::create_dir_all(dir)
+            .and_then(|()| std::fs::write(&path, &bytes))
+            .is_ok()
+        {
+            kept.push(path);
+        }
+    }
+    kept
 }
 
 /// The image as it goes to the agent: as it is when it fits, otherwise re-encoded.
@@ -171,6 +203,31 @@ mod tests {
         let (images, notices) = attach(&[write("notes.txt", b"just words\n")]);
         assert!(images.is_empty());
         assert_eq!(notices, vec![FORMATS]);
+    }
+
+    #[test]
+    fn a_tool_s_pictures_are_kept_as_files_and_what_is_not_one_is_let_go() {
+        use base64::Engine;
+        let base64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let image = |data: String| ToolContent::Image {
+            mime: "image/png".into(),
+            data,
+        };
+        let dir = std::env::temp_dir().join(format!("quill-keep-{}", std::process::id()));
+        let shot = png(4, 3, false);
+        let kept = keep(
+            &dir,
+            vec![
+                image(base64(&shot)),
+                image(base64(b"not a picture")),
+                image("not base64!".into()),
+                ToolContent::Text("words".into()),
+            ],
+        );
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].starts_with(&dir) && kept[0].extension().unwrap() == "png");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), shot);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

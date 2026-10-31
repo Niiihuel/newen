@@ -118,6 +118,113 @@ fn a_message_keeps_its_images_and_a_text_file_among_them_is_left_out() {
 }
 
 #[test]
+fn a_tool_s_pictures_are_on_disk_and_stored_before_the_ui_hears_of_them() {
+    use base64::Engine as _;
+    let root = std::env::temp_dir().join(format!(
+        "quill-engine-{}-pictures-{}",
+        std::process::id(),
+        uuid_like()
+    ));
+    let (database, pictures) = (root.join("quill.db"), root.join("pictures"));
+    // simple.jsonl's turn, in which a tool answers with a picture before the turn's result.
+    let mut png = std::io::Cursor::new(vec![]);
+    image::RgbImage::new(4, 3)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png = png.into_inner();
+    let data = base64::engine::general_purpose::STANDARD.encode(&png);
+    let call = serde_json::json!({ "dir": "in", "msg": { "type": "assistant", "parent_tool_use_id": null,
+        "message": { "role": "assistant", "content": [
+            { "type": "tool_use", "id": "t1", "name": "mcp__shots__take", "input": {} }] } } });
+    let answer = serde_json::json!({ "dir": "in", "msg": { "type": "user", "parent_tool_use_id": null,
+        "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t1",
+            "content": [{ "type": "text", "text": "Captured" }, { "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": data } }] }] } } });
+    let mut lines = vec![];
+    for line in std::fs::read_to_string(fixture("simple")).unwrap().lines() {
+        let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+        if entry["msg"]["type"] == "result" {
+            lines.extend([call.to_string(), answer.to_string()]);
+        }
+        lines.push(line.to_owned());
+    }
+    let dir = workdir("simple");
+    let capture = dir.join("pictures.jsonl");
+    std::fs::write(&capture, lines.join("\n")).unwrap();
+    std::fs::write(
+        dir.join(".fake-agent"),
+        capture.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    // The sink looks for each picture's file as the event reaches it.
+    let (tx, rx) = channel();
+    let config = quill_engine::Config {
+        programs: HashMap::from([(
+            "claude".to_string(),
+            env!("CARGO_BIN_EXE_fake-agent").to_string(),
+        )]),
+        database: Some(database.clone()),
+        pictures: Some(pictures.clone()),
+        ..Default::default()
+    };
+    let engine = Engine::start_with(
+        move |event| {
+            let on_disk = match &event {
+                Event::Agent {
+                    event: AgentEvent::ToolResult { images, .. },
+                    ..
+                } => images.iter().all(|path| path.is_file()),
+                _ => true,
+            };
+            drop(tx.send((event, on_disk)))
+        },
+        config,
+    );
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir,
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    engine.send(Intent::Send {
+        session: 1,
+        text: "Take a screenshot".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    let (images, on_disk) = loop {
+        let (event, on_disk) = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the tool's result");
+        if let Event::Agent {
+            event: AgentEvent::ToolResult { images, .. },
+            ..
+        } = event
+        {
+            break (images, on_disk);
+        }
+    };
+    assert!(on_disk, "the picture was written before the UI heard of it");
+    assert_eq!(images.len(), 1);
+    assert!(images[0].starts_with(pictures.join("1")));
+    assert_eq!(std::fs::read(&images[0]).unwrap(), png);
+    // Stored with the result as its path; the picture itself is not in the record.
+    let stored = quill_store::Store::open(&database).unwrap().load().unwrap();
+    let kept = (stored.iter().flat_map(|(_, events)| events)).find_map(|event| match event {
+        Event::Agent {
+            event: AgentEvent::ToolResult { images, inline, .. },
+            ..
+        } => Some((images.clone(), inline.is_empty())),
+        _ => None,
+    });
+    assert_eq!(kept, Some((images, true)));
+    drop(engine);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sessions_stream_turns_and_wait_for_decisions() {
     let (engine, rx) = engine();
 

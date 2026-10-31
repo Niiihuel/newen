@@ -115,6 +115,8 @@ pub struct ToolResult {
     pub stopped: bool,
     /// The query and sources of a web search (`None` for other tools).
     pub web: Option<quill_model::WebSearchRun>,
+    /// The pictures it gave back, as the engine kept them.
+    pub images: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -854,6 +856,7 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
             is_error,
             files,
             web,
+            images,
             ..
         } => {
             let (added, removed) = files
@@ -878,6 +881,7 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
                             files,
                             stopped: denied,
                             web,
+                            images,
                         });
                         break;
                     }
@@ -1081,6 +1085,7 @@ pub struct Editor {
 pub type Waiting = (String, Vec<(SessionId, String)>, Vec<PathBuf>);
 
 /// The image the viewer shows over the window.
+#[derive(Default)]
 pub struct Viewer {
     /// The image file.
     pub path: PathBuf,
@@ -1089,6 +1094,10 @@ pub struct Viewer {
     pub origin: Option<limn::Rect>,
     /// Whether the image is still in the composer, so it can be annotated; a sent one is not.
     pub annotatable: bool,
+    /// The pictures of a run of steps the arrows step through, each with its step's label, and
+    /// where `path` is among them; empty for a picture alone.
+    pub gallery: Vec<(PathBuf, String)>,
+    pub index: usize,
 }
 
 /// What the person is doing, apart from what the engine knows.
@@ -2652,13 +2661,14 @@ pub(crate) fn server_logo_name(ui: &Ui, name: &str, label: &str) -> String {
 }
 
 pub fn image_paths(store: &Store, ui: &Ui) -> Vec<PathBuf> {
-    let items = ui
-        .selected
-        .and_then(|id| store.session(id))
-        .map_or(&[][..], |s| &s.items[..]);
-    let shown = items.iter().flat_map(|item| match item {
+    let session = ui.selected.and_then(|id| store.session(id));
+    // Its helpers' too, which their pane shows.
+    let items =
+        (session.into_iter()).flat_map(|s| s.items.iter().chain(s.helpers.values().flatten()));
+    let shown = items.flat_map(|item| match item {
         Item::User { images, .. } => images.clone(),
-        // The pictures of a step: a generated image, an image the agent read.
+        // The pictures of a step: a generated image, an image the agent read, and the ones its
+        // result gave back.
         Item::Tool {
             name,
             input,
@@ -2666,6 +2676,7 @@ pub fn image_paths(store: &Store, ui: &Ui) -> Vec<PathBuf> {
             ..
         } => view::step_image(name, input, result.as_ref())
             .into_iter()
+            .chain((result.iter().filter(|r| !r.is_error)).flat_map(|r| r.images.iter().cloned()))
             .collect(),
         _ => vec![],
     });
@@ -3318,8 +3329,8 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         if let Some(path) = ui.images.get(index).cloned() {
             ui.viewer = Some(Viewer {
                 path,
-                origin: None,
                 annotatable: true,
+                ..Default::default()
             });
         }
         return vec![];
@@ -3338,9 +3349,49 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         });
         ui.viewer = shown.map(|path| Viewer {
             path,
-            origin: None,
-            annotatable: false,
+            ..Default::default()
         });
+        return vec![];
+    }
+    // A step's picture opens among its run's, which the arrows step through.
+    if let Some((call, at)) = id
+        .strip_prefix("image:step:")
+        .and_then(|rest| rest.rsplit_once(':'))
+    {
+        let shown = ui.selected.and_then(|id| store.session(id)).and_then(|s| {
+            let at: usize = at.parse().ok()?;
+            let list = std::iter::once(&s.items)
+                .chain(s.helpers.values())
+                .find(|list| {
+                    (list.iter())
+                        .any(|item| matches!(item, Item::Tool { call: c, .. } if c == call))
+                })?;
+            let run = view::run_pictures(list, call);
+            let index = run.iter().position(|p| p.call == call && p.at == at)?;
+            Some((run, index))
+        });
+        ui.viewer = shown.map(|(run, index)| Viewer {
+            path: run[index].path.clone(),
+            gallery: run.into_iter().map(|p| (p.path, p.caption)).collect(),
+            index,
+            ..Default::default()
+        });
+        return vec![];
+    }
+    if id == view::IMAGE_PREVIOUS || id == view::IMAGE_NEXT {
+        if let Some(viewer) = &mut ui.viewer {
+            let index = if id == view::IMAGE_NEXT {
+                viewer.index + 1
+            } else {
+                viewer.index.wrapping_sub(1)
+            };
+            if let Some((path, _)) = viewer.gallery.get(index) {
+                viewer.path = path.clone();
+                viewer.index = index;
+                // Closed now, it shrinks into no thumbnail but the one it grew from.
+                viewer.origin = None;
+            }
+        }
         return vec![];
     }
     if let Some(rest) = id.strip_prefix("image:msg:") {
@@ -3356,8 +3407,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         });
         ui.viewer = shown.map(|path| Viewer {
             path,
-            origin: None,
-            annotatable: false,
+            ..Default::default()
         });
         return vec![];
     }
@@ -3948,6 +3998,7 @@ fn close_open_permissions(items: &mut [Item]) {
                     files: vec![],
                     stopped: true,
                     web: None,
+                    images: vec![],
                 })
             }
             _ => {}

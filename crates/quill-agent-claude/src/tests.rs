@@ -961,6 +961,37 @@ fn quills_own_tools_are_served_in_process_and_never_ask() {
 }
 
 #[test]
+fn a_tool_result_s_pictures_are_read_for_the_engine_to_keep() {
+    // A screenshot as the Messages API's block, which a Read of an image and an MCP tool's
+    // picture answer with (inferred: no capture holds one); a picture by address is not kept.
+    let result = json!({ "type": "user", "message": { "role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "t1", "content": [
+            { "type": "text", "text": "Captured" },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0K" } },
+            { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } },
+        ] }] } });
+    let events = Claude::new().decode(&result.to_string()).events;
+    let [AgentEvent::ToolResult {
+        output,
+        images,
+        inline,
+        ..
+    }] = &events[..]
+    else {
+        panic!("{events:?}");
+    };
+    assert_eq!(output, "Captured");
+    assert!(images.is_empty(), "the engine keeps them, not the adapter");
+    assert_eq!(
+        inline,
+        &[ToolContent::Image {
+            mime: "image/png".into(),
+            data: "iVBORw0K".into()
+        }]
+    );
+}
+
+#[test]
 fn the_browser_server_lists_its_tools_and_its_calls_never_ask() {
     // The same protocol as the sessions server's capture, for the server named "browser".
     let mut claude = Claude::new();

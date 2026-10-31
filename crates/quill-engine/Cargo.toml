@@ -32,8 +32,10 @@ quill-update = { path = "../quill-update" }
 ureq = "3"
 # Rasterizing an SVG logo to 64 px; no text or fonts, which a logo does not need.
 resvg = { version = "0.48.1", default-features = false }
-# Request ids, as the agent receives them for each prompt.
+# Request ids, as the agent receives them for each prompt, and the names of kept pictures.
 uuid = { version = "1", features = ["v4"] }
+# The pictures a tool gives back arrive base64-encoded (images.rs `keep`; already in the tree).
+base64 = "0.22"
 # The system keychain (Secret Service on Linux) where the secrets of "All agents" servers live,
 # so they reach the agent only as environment variables (global.rs, docs/agents.md).
 keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }

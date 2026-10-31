@@ -805,15 +805,21 @@ impl eframe::App for App {
         if !pasted.is_empty() {
             quill_ui::add_images(&mut self.ui, pasted);
         }
-        // Thumbnails for the images on screen, each decoded once, the new ones in one thread.
+        // Thumbnails for the images on screen, each decoded once, the new ones in one thread,
+        // with their sizes: a step's strip draws each at its shape.
         let todo: Vec<PathBuf> = quill_ui::image_paths(&self.store, &self.ui)
             .into_iter()
             .filter(|p| !self.ui.thumbs.contains_key(p) && self.thumbs_asked.insert(p.clone()))
             .collect();
         if !todo.is_empty() {
-            let (done, ctx) = (self.thumbs_done.clone(), ctx.clone());
+            self.sizes_asked.extend(todo.iter().cloned());
+            let (done, sizes) = (self.thumbs_done.clone(), self.sizes_done.clone());
+            let ctx = ctx.clone();
             std::thread::spawn(move || {
                 for path in todo {
+                    if let Some(size) = images::size(&path) {
+                        sizes.lock().unwrap().push((path.clone(), size));
+                    }
                     // An image that does not decode keeps its file icon.
                     if let Some(thumb) = images::thumbnail(&path) {
                         done.lock().unwrap().push((path, thumb));
@@ -1301,7 +1307,7 @@ impl eframe::App for App {
             // A tile opens the viewer, which grows its picture from the tile: only the frame knows where it is.
             let tile = match &action {
                 limn::UiAction::Clicked { id }
-                    if ["image:open:", "image:msg:", "image:tool:"]
+                    if ["image:open:", "image:msg:", "image:tool:", "image:step:"]
                         .iter()
                         .any(|prefix| id.starts_with(prefix)) =>
                 {
@@ -1793,6 +1799,8 @@ fn main() -> eframe::Result {
                         // The "All agents" layer is kept, but its secrets never reach the
                         // real keychain while programs are stand-ins.
                         extensions: quill_engine::Config::default_database().extensions,
+                        // A replay's pictures last as long as its sessions do.
+                        pictures: Some(std::env::temp_dir().join("quill-pictures")),
                         secrets: Some(Arc::new(quill_engine::MemorySecrets::default())),
                         ..Default::default()
                     },

@@ -629,6 +629,12 @@ pub enum AgentEvent {
         /// The sources of a web search (`None` for other tools).
         #[serde(default)]
         web: Option<WebSearchRun>,
+        /// The pictures it gave back, as the engine kept them: files under quill's data folder.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<PathBuf>,
+        /// The same pictures as the adapter read them, for the engine to keep; never stored.
+        #[serde(skip)]
+        inline: Vec<ToolContent>,
     },
     /// A tool ended. `prompt` is the agent's own id of the request that caused it, the
     /// same for every tool of that request; the engine ties it to quill's request id.
@@ -800,7 +806,7 @@ pub enum AgentCommand {
     },
 }
 
-/// One block of a host tool's answer: words, or a picture (a page's screenshot).
+/// One block of a tool's answer: words, or a picture (a page's screenshot).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ToolContent {
     Text(String),

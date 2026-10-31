@@ -94,6 +94,8 @@ pub struct Config {
     pub settings: Option<PathBuf>,
     /// Where the logos of connectors and plugins are kept; `None` looks none up.
     pub logos: Option<PathBuf>,
+    /// Where the pictures tools give back are kept, a folder per session; `None` keeps none.
+    pub pictures: Option<PathBuf>,
     /// Where the GitHub account's avatar is kept; `None` downloads none.
     pub avatars: Option<PathBuf>,
     /// The built-in browser's Chromium profile; `None` puts one in the temporary folder.
@@ -123,6 +125,7 @@ impl Config {
             snapshots: Some(data.join("quill/snapshots")),
             settings: Some(config.join("quill/settings.json")),
             logos: Some(data.join("quill/logos")),
+            pictures: Some(data.join("quill/pictures")),
             avatars: Some(data.join("quill/avatars")),
             browser: Some(data.join("quill/browser")),
             extensions: Some(config.join("quill/extensions.json")),
@@ -993,6 +996,7 @@ impl Router {
                 actor.queue_changed();
             }
             actor.shadow_root = self.config.snapshots.clone();
+            actor.pictures = self.config.pictures.clone();
             actor.route = Some(self.internal.clone());
             tokio::spawn(actor.run(rx));
             self.sessions.insert(session, tx);
@@ -1071,6 +1075,7 @@ impl Router {
         self.inject(&mut actor);
         self.share(&mut actor, own);
         actor.shadow_root = self.config.snapshots.clone();
+        actor.pictures = self.config.pictures.clone();
         actor.route = Some(self.internal.clone());
         actor.remote_at_start = self.settings.remote_new_sessions;
         if let Some((from, at)) = fork_of {
@@ -1730,12 +1735,20 @@ impl Router {
                     .remove(&session)
                     .is_some_and(|tx| tx.send(Input::Stop(done)).is_ok());
                 let (store, ui) = (self.store.clone(), self.ui.clone());
+                let pictures =
+                    (self.config.pictures.as_ref()).map(|root| root.join(session.to_string()));
                 tokio::spawn(async move {
                     if stopping {
                         let _ = stopped.await;
                     }
                     match store.lock().unwrap().delete(session) {
-                        Ok(()) => ui(Event::Deleted { session }),
+                        Ok(()) => {
+                            // Its pictures go with it.
+                            if let Some(dir) = pictures {
+                                let _ = std::fs::remove_dir_all(dir);
+                            }
+                            ui(Event::Deleted { session })
+                        }
                         Err(error) => ui(Event::Status {
                             session,
                             status: SessionStatus::Failed(format!("not deleted: {error}")),
@@ -2278,6 +2291,8 @@ struct Actor {
     busy: bool,
     /// Where this folder's shadow repository lives, and the shadow once opened.
     shadow_root: Option<PathBuf>,
+    /// Where the pictures of every session are kept (`Config::pictures`).
+    pictures: Option<PathBuf>,
     shadow: Option<Arc<quill_git::Shadow>>,
     /// Requests sent and not finished, oldest first: each finished turn belongs to the first.
     sent: std::collections::VecDeque<RequestId>,
@@ -2347,6 +2362,7 @@ impl Actor {
             running: None,
             busy: false,
             shadow_root: None,
+            pictures: None,
             shadow: None,
             sent: Default::default(),
             start: None,
@@ -3001,6 +3017,21 @@ impl Actor {
                     .filter(|s| self.injected.contains(&s.name))
                 {
                     server.source = quill_agent::McpSource::Global;
+                }
+            }
+            // The pictures a tool gave back are on disk before anyone hears of them.
+            if let AgentEvent::ToolResult {
+                images: kept,
+                inline,
+                ..
+            } = &mut event
+            {
+                let inline = std::mem::take(inline);
+                if let (false, Some(root)) = (inline.is_empty(), &self.pictures) {
+                    let dir = root.join(self.id.to_string());
+                    *kept = tokio::task::spawn_blocking(move || images::keep(&dir, inline))
+                        .await
+                        .unwrap_or_default();
                 }
             }
             let finished = matches!(event, AgentEvent::TurnFinished { .. });

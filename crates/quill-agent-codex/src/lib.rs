@@ -9,7 +9,7 @@ use quill_agent::{
     AgentAdapter, AgentCapabilities, AgentCommand, AgentEvent, AgentId, AgentOption, AuthState,
     Choices, CommandRun, ContextCategory, ContextKind, ContextUsage, Decision, Decoded, FileChange,
     LaunchPlan, ModeWords, ModelInfo, Mux, PlanLimits, ProgramRun, PromptImage, SessionSpec,
-    Suggestion, TaskUsage, Usage, UsageWindow, WebSearchRun, WebSource,
+    Suggestion, TaskUsage, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -911,6 +911,17 @@ impl Codex {
                     None,
                     out,
                 );
+                // Its pictures, as MCP's own image blocks (inferred: the schema leaves the
+                // content's blocks untyped), for the engine to keep.
+                if let Some(AgentEvent::ToolResult { inline, .. }) = out.events.last_mut() {
+                    *inline = (item["result"]["content"].as_array().into_iter().flatten())
+                        .filter(|part| part["type"] == "image")
+                        .map(|part| ToolContent::Image {
+                            mime: text(&part["mimeType"]),
+                            data: text(&part["data"]),
+                        })
+                        .collect();
+                }
             }
             // Opens with an empty query (websearch.jsonl:44): it is drawn once it ends.
             Some("webSearch") if done => {
@@ -1559,6 +1570,8 @@ fn result(
         files,
         command,
         web,
+        images: vec![],
+        inline: vec![],
     }
 }
 
