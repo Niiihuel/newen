@@ -1,9 +1,10 @@
-//! The Terminals card of the right panel: the commands the agent left running in the
-//! background, each with its state and "Stop"; a click shows its output in the Terminal pane,
-//! in a tab that follows the file the agent writes it to.
+//! The Background tasks card of the right panel: what the agent left running beside its turns,
+//! each with how long it has run and a square to stop it. A command's row shows its output in
+//! the Terminal pane, in a tab that follows the file the agent writes it to; a helper agent's
+//! opens its pane.
 
 use crate::{Item, Pane, Session, Store, TerminalRequest, Ui};
-use limn::{Component, Element};
+use limn::Element;
 use quill_components::pieces::{muted, text};
 use quill_components::{icons, look};
 use quill_model::Intent;
@@ -28,59 +29,87 @@ pub(crate) fn output_file(session: &Session, call: &str) -> Option<PathBuf> {
     })
 }
 
-/// The card's rows, when the session ran commands in the background.
+/// How long a task has run, as Desktop's rail writes it: "14h 35m", "9m 4s", "14s".
+fn ran(secs: u64) -> String {
+    match secs {
+        3600.. => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+        _ => crate::view::elapsed(secs),
+    }
+}
+
+/// The Background tasks card, as Desktop's rail has it: each task still running, with how
+/// long it has run and a square to stop it, and the finished ones as one row that opens the
+/// Background tasks pane. `None` while the session has none.
 pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
-    let commands: Vec<_> = (session.tasks.iter().rev())
-        .filter(|t| t.kind == "command")
-        .collect();
-    if commands.is_empty() {
+    if session.tasks.is_empty() {
         return None;
     }
     let palette = look::palette();
-    let rows = commands.into_iter().map(|task| {
-        let state: Element = if task.running {
-            let stop = palette
-                .interactive_surface(Element::clickable(
-                    format!("{STOP}{}", task.id),
-                    text("Stop").font_size(look::SMALL).padding(4.0),
-                ))
-                .radius(6.0);
-            Element::row(vec![
-                limn::StatusDot::new(look::running())
-                    .pulse(true)
-                    .size(6.0)
-                    .render()
-                    .centered_y(),
-                stop.centered_y(),
-            ])
-            .gap(8.0)
-        } else {
-            let word = match (task.failed, task.stopped) {
-                (_, true) => "Stopped",
-                (true, _) => "Failed",
-                _ => "Done",
-            };
-            muted(word).font_size(look::SMALL).centered_y()
-        };
+    let icon = |svg| {
+        Element::icon(icons::of(svg))
+            .foreground(palette.text)
+            .size(Some(16.0), Some(16.0))
+            .centered_y()
+    };
+    let mut rows = vec![];
+    for task in session.tasks.iter().filter(|t| t.running) {
         let words = Element::row(vec![
-            Element::icon(icons::of(icons::TERMINAL))
-                .foreground(palette.text)
-                .size(Some(16.0), Some(16.0))
-                .centered_y(),
-            text(task.description.clone())
+            icon(match task.kind.as_str() {
+                "agent" => icons::AGENTS,
+                "command" => icons::TERMINAL,
+                _ => icons::LIST,
+            }),
+            // One line, cut with an ellipsis: a long description never runs into the next row.
+            Element::truncated_text(task.description.clone())
                 .font_size(look::SMALL)
-                .size(Some(width - 120.0), None)
+                .foreground(palette.text)
+                .size(Some(width - 96.0), Some(18.0))
                 .centered_y(),
         ])
         .gap(10.0);
         let words = palette
             .interactive_surface(Element::clickable(format!("{OPEN}{}", task.id), words))
             .radius(6.0);
-        Element::row(vec![words, Element::spacer().flex(1.0), state])
+        let stop = palette
+            .interactive_surface(Element::clickable(
+                format!("{STOP}{}", task.id),
+                Element::icon(icons::of(icons::STOP))
+                    .foreground(palette.text)
+                    .size(Some(14.0), Some(14.0))
+                    .padding(3.0),
+            ))
+            .radius(6.0)
+            .accessibility_label("Stop");
+        rows.push(
+            Element::row(vec![
+                words,
+                Element::spacer().flex(1.0),
+                muted(ran(task.since.elapsed().as_secs()))
+                    .font_size(look::SMALL)
+                    .centered_y(),
+                stop.centered_y(),
+            ])
             .gap(8.0)
-            .size(None, Some(24.0))
-    });
-    Some(rows.collect())
+            .size(Some(width), Some(24.0)),
+        );
+    }
+    let finished = session.tasks.iter().filter(|t| !t.running).count();
+    if finished > 0 {
+        let words = Element::row(vec![
+            icon(icons::CHECK_CIRCLE),
+            text(format!("{finished} finished"))
+                .font_size(look::SMALL)
+                .centered_y(),
+        ])
+        .gap(10.0);
+        rows.push(
+            palette
+                .interactive_surface(Element::clickable(crate::view::TASKS_OPEN, words))
+                .radius(6.0)
+                .size(None, Some(24.0)),
+        );
+    }
+    Some(rows)
 }
 
 pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
@@ -93,6 +122,12 @@ pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent
     }
     let task = id.strip_prefix(OPEN)?;
     let task = session.tasks.iter().find(|t| t.id == task)?;
+    if let (Some(call), "agent") = (task.call.clone(), task.kind.as_str()) {
+        let click = limn::UiAction::Clicked {
+            id: format!("agent:{call}"),
+        };
+        return Some(crate::update(store, ui, &click));
+    }
     // Without its file (another agent's words), the tasks pane says what it is.
     match task
         .call

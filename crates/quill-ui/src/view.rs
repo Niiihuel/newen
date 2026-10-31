@@ -7758,6 +7758,9 @@ fn changes_card(
                 .centered_y(),
         ]
     };
+    // Each row keeps to the card: the name and its folder give way, ending in "…", so the
+    // counts stay inside however narrow the column gets.
+    let inner = column - 10.0;
     let row = |icon: &'static str, label: String, folder: Option<String>, end: Vec<Element>| {
         let mut items = vec![
             hgap(4.0),
@@ -7769,19 +7772,21 @@ fn changes_card(
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
+                .max_width(inner / 2.0)
                 .centered_y(),
         ];
-        items.extend(folder.map(|f| {
-            Element::truncated_text(f)
+        items.push(match folder {
+            Some(f) => Element::truncated_text(f)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
-                .centered_y()
-        }));
-        items.push(Element::spacer().flex(1.0));
+                .flex(1.0)
+                .centered_y(),
+            None => Element::spacer().flex(1.0),
+        });
         items.extend(end);
         items.push(hgap(4.0));
-        Element::row(items).gap(8.0).size(None, Some(36.0))
+        Element::row(items).gap(8.0).size(Some(inner), Some(36.0))
     };
     let chevron = || caret(false);
     let opens = |id: String, row: Element| {
@@ -7834,6 +7839,9 @@ fn changes_card(
         .size(Some(column), None)
 }
 
+/// How many of a diff's files open with their lines; the rest start folded.
+const DIFF_OPEN_FIRST: usize = 12;
+
 /// The changes of one request, file by file, as unified diffs.
 fn diff_pane(
     store: &Store,
@@ -7866,12 +7874,17 @@ fn diff_pane(
         blocks.push(pad(muted("No uncommitted changes"), 8.0, 8.0));
     }
     for (index, file) in files.iter().enumerate() {
-        let folded = ui
-            .expanded
-            .iter()
-            .any(|k| *k == format!("{DIFF_FOLD}{}", file.path));
+        // Only the first files open with their diff: an open one is parsed and laid out on
+        // every frame, and a request can touch hundreds. A click flips each from its default.
+        let toggled = (ui.expanded.iter()).any(|k| *k == format!("{DIFF_FOLD}{}", file.path));
+        let folded = toggled != (index >= DIFF_OPEN_FIRST);
         blocks.push(diff_file_band(file, folded, ui, width, palette));
         if folded {
+            continue;
+        }
+        // A binary file (an image) has no lines to show.
+        if file.patch.trim().is_empty() {
+            blocks.push(pad(muted("No text changes").font_size(SMALL), 16.0, 8.0));
             continue;
         }
         let lines = parse_patch(&file.patch);
@@ -8396,10 +8409,10 @@ fn right_panel(
             inner,
         ),
     ];
-    // The commands the agent left running, as Desktop's rail lists its terminals.
+    // What the agent left running beside its turns, as Desktop's rail lists it.
     if let Some(rows) = crate::terminals::rows(session, inner - 36.0) {
         cards.push(panel_card(
-            "Terminals",
+            "Background tasks",
             "panel:terminals",
             open("panel:terminals", true),
             vec![],

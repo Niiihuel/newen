@@ -7102,3 +7102,41 @@ fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
         }]
     );
 }
+
+#[test]
+fn a_request_with_many_files_opens_only_the_first_diffs() {
+    let (mut store, mut ui) = store_with_session();
+    let file = |n: usize| quill_model::FileEffect {
+        path: format!("src/f{n}.txt"),
+        kind: quill_model::ChangeKind::Added,
+        added: 1,
+        removed: 0,
+        // The first is an image: no text.
+        patch: if n == 0 {
+            String::new()
+        } else {
+            format!("@@ -0,0 +1 @@\n+line-{n}\n")
+        },
+    };
+    store.apply(Event::Changes {
+        session: 1,
+        request: "r1".into(),
+        files: (0..15).map(file).collect(),
+        snapshot: String::new(),
+    });
+    click(&store, &mut ui, "changes:r1:view");
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 4000.0);
+    let drawn = |ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        (frame.commands.iter()).any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(drawn(&ui, "No text changes"));
+    assert!(drawn(&ui, "line-11"));
+    assert!(!drawn(&ui, "line-12"));
+    // A folded one opens with a click on its band.
+    click(&store, &mut ui, &format!("{}src/f12.txt", view::DIFF_FOLD));
+    assert!(drawn(&ui, "line-12"));
+}
