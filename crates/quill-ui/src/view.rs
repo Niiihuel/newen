@@ -6352,12 +6352,11 @@ fn composer(
     if plan_waiting {
         return composer_footer(store, session, ui, palette).size(Some(column), None);
     }
-    let placeholder = if running {
-        "Enter to send, Ctrl+Enter to queue for later"
-    } else if session.is_some() {
-        "Type / for commands"
-    } else {
-        "Describe a task or ask a question"
+    let placeholder = match session {
+        _ if running => "Enter to send, Ctrl+Enter to queue for later",
+        // The agent's suggested next prompt stands where the placeholder is, as in Desktop.
+        Some(s) => s.suggestion.as_deref().unwrap_or("Type / for commands"),
+        None => "Describe a task or ask a question",
     };
     let box_ = Composer::new(
         COMPOSER,

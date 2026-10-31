@@ -391,7 +391,15 @@ fn skills_and_plugins_are_read_as_the_cli_lists_them() {
 fn the_pages_options_reach_the_cli_as_its_own_settings() {
     let claude = Claude::new();
     let keys: Vec<_> = claude.options().into_iter().map(|o| o.key).collect();
-    assert_eq!(keys, ["output_style", "sandbox", "strict_sandbox"]);
+    assert_eq!(
+        keys,
+        [
+            "output_style",
+            "sandbox",
+            "strict_sandbox",
+            "prompt_suggestions"
+        ]
+    );
     let settings = |pairs: &[(&str, &str)]| {
         let spec = SessionSpec {
             options: pairs
@@ -1387,6 +1395,49 @@ fn the_models_are_asked_outside_a_session_with_the_default_named() {
         .collect();
     assert_eq!(default, ["Opus 5.5"]);
     assert!(claude.models_answer("{\"type\":\"system\"}").is_none());
+}
+
+#[test]
+fn a_suggested_prompt_comes_after_a_turn_but_the_first() {
+    let (_, events, _) = replay_at("2.1.316", "suggest");
+    assert!(unknown(&events).is_empty(), "{:?}", unknown(&events));
+    let turns_and_suggestions: Vec<Option<&str>> = (events.iter())
+        .filter_map(|e| match e {
+            AgentEvent::TurnFinished { .. } => Some(None),
+            AgentEvent::PromptSuggestion { text } => Some(Some(text.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns_and_suggestions, [None, None, Some("add a docstring")]);
+    // One with nothing to say gives nothing.
+    let blank = Claude::new().decode(r#"{"type":"prompt_suggestion","suggestion":"  "}"#);
+    assert!(blank.events.is_empty());
+}
+
+#[test]
+fn a_session_asks_for_suggested_prompts_unless_the_person_turned_them_off() {
+    let asks = |options: &[(&str, &str)]| {
+        let mut claude = Claude::new();
+        claude.launch(&SessionSpec {
+            options: (options.iter())
+                .map(|(k, v)| ((*k).into(), (*v).into()))
+                .collect(),
+            ..SessionSpec::default()
+        });
+        let line = claude.encode(AgentCommand::Start).remove(0);
+        serde_json::from_str::<Value>(&line).unwrap()["request"]["promptSuggestions"] == true
+    };
+    assert!(asks(&[]));
+    assert!(asks(&[("prompt_suggestions", "true")]));
+    assert!(!asks(&[("prompt_suggestions", "false")]));
+    let switch = (Claude::new().options().into_iter())
+        .find(|o| o.key == "prompt_suggestions")
+        .unwrap();
+    assert_eq!(
+        (switch.label.as_str(), switch.default.as_str()),
+        ("Prompt suggestions", "true")
+    );
+    assert!(switch.choices.is_empty());
 }
 
 #[test]

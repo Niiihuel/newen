@@ -5,8 +5,8 @@
 //!
 //! Usage: quill-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
-//! todos, agent, think, remote (by hand, with a phone: `touch <capture>/stop` ends it). With
-//! `--agent codex`, see codex.rs.
+//! todos, agent, think, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
+//! it). With `--agent codex`, see codex.rs.
 
 mod codex;
 
@@ -56,6 +56,8 @@ struct Scenario {
     /// More CLI flags and environment the scenario needs.
     flags: &'static [&'static str],
     env: &'static [(&'static str, &'static str)],
+    /// Switches the scenario turns on in `initialize`.
+    init: &'static [&'static str],
 }
 
 fn scenario(name: &str) -> Option<Scenario> {
@@ -121,6 +123,17 @@ fn scenario(name: &str) -> Option<Scenario> {
             )],
         ),
         "think" => (Policy::Allow, "default", vec![Prompt("Think it through, then answer in one line: is 391 prime?")]),
+        // The suggestion comes after a turn's `result`, so each turn is listened past.
+        "suggest" => (
+            Policy::Allow,
+            "default",
+            vec![
+                Prompt("Reply with exactly the word: ok"),
+                Listen(10),
+                Prompt("Write a one-line Python function that reverses a string. Reply with only the code."),
+                Listen(45),
+            ],
+        ),
         // Run by hand with a phone: the phone sends a message and answers a permission while
         // this listens (docs/remote-control.md).
         "remote" => (
@@ -150,12 +163,17 @@ fn scenario(name: &str) -> Option<Scenario> {
         ],
         _ => &[],
     };
+    let init: &[&str] = match name {
+        "suggest" => &["promptSuggestions"],
+        _ => &[],
+    };
     Some(Scenario {
         policy,
         mode,
         steps,
         flags,
         env,
+        init,
     })
 }
 
@@ -373,10 +391,14 @@ fn run(
         log: log.clone(),
         next_request: 0,
     };
-    let init = cli.request(json!({
+    let mut init = json!({
         "subtype": "initialize",
         "hooks": { "PostToolUse": [{ "hookCallbackIds": ["hook_0"] }] },
-    }));
+    });
+    for switch in scenario.init {
+        init[*switch] = json!(true);
+    }
+    let init = cli.request(init);
     wait(&rx, &mut cli, scenario.policy, |msg| {
         control_response_for(msg, &init)
     })?;
@@ -575,6 +597,7 @@ mod tests {
             "interrupt",
             "resume",
             "rewind",
+            "suggest",
         ] {
             assert!(scenario(name).is_some(), "{name}");
         }

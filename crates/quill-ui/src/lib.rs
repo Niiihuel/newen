@@ -189,6 +189,9 @@ pub struct Session {
     pub remote: Remote,
     /// The code that pairs another device with its agent, and until when it works.
     pub remote_code: Option<(String, u64)>,
+    /// What the agent suggests the person asks next, while the session waits for them: the
+    /// empty composer shows it until a message is sent, a turn starts or the agent stops.
+    pub suggestion: Option<String>,
 }
 
 /// Whether a session can be reached from another device through its agent's own service.
@@ -314,6 +317,7 @@ impl Store {
                 rewound: vec![],
                 remote: Remote::Off,
                 remote_code: None,
+                suggestion: None,
             }),
             Event::Status { session, status } => {
                 if let Some(s) = self.session_mut(session) {
@@ -328,6 +332,9 @@ impl Store {
                         status,
                         SessionStatus::Starting | SessionStatus::Running | SessionStatus::Awaiting
                     );
+                    if status != SessionStatus::Idle {
+                        s.suggestion = None;
+                    }
                     if !busy {
                         s.running_since = None;
                         s.thinking = false;
@@ -357,6 +364,7 @@ impl Store {
                             .collect();
                     }
                     s.rewound.clear();
+                    s.suggestion = None;
                     s.items.push(Item::User {
                         request,
                         text,
@@ -676,6 +684,10 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
             }
         }
         AgentEvent::RemotePairing { code, expires_at } => s.remote_code = Some((code, expires_at)),
+        // One that comes once the next turn began is the last turn's: it is let go.
+        AgentEvent::PromptSuggestion { text } if s.status == SessionStatus::Idle => {
+            s.suggestion = Some(text)
+        }
         // Answered on another device: the card goes, as an answered one does.
         AgentEvent::Withdrawn { id } => {
             for item in &mut s.items {
@@ -2741,6 +2753,33 @@ pub fn queue_key(
         session: session.id,
         id: last.id.clone(),
     }])
+}
+
+/// Tab or → in an empty composer puts the agent's suggested prompt in it, to send or change,
+/// as Desktop takes it.
+pub fn suggestion_key(
+    store: &Store,
+    ui: &mut Ui,
+    focused: Option<&str>,
+    event: &limn::UiEvent,
+) -> bool {
+    let limn::UiEvent::Key {
+        key: limn::Key::Tab | limn::Key::ArrowRight,
+        ctrl: false,
+        shift: false,
+    } = event
+    else {
+        return false;
+    };
+    if focused != Some(view::COMPOSER) || !ui.prompt.is_empty() {
+        return false;
+    }
+    let session = ui.selected.and_then(|id| store.session(id));
+    let Some(text) = session.and_then(|s| s.suggestion.clone()) else {
+        return false;
+    };
+    ui.restore_prompt = Some(text);
+    true
 }
 
 /// Ctrl+Enter in the composer queues its message, a plain Enter steers it into the running

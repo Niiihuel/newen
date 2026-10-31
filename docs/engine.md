@@ -116,7 +116,7 @@ Tipos de mensaje que el adaptador reconoce: `user`, `assistant`, `system`, `resu
 | `system/vcs_state_changed`, `code_change_published` | `kind`, `cwd` / `url`, `action`, `branch` | refrescar git, PR |
 | `system/compact_boundary` | `compactMetadata{trigger, preTokens, postTokens, …}`, `logicalParentUuid` | compactación |
 | `system/hook_started\|hook_progress\|hook_response`, `api_retry`, … | — | informativos |
-| `prompt_suggestion` | `suggestion` | texto fantasma del composer |
+| `prompt_suggestion` | `suggestion`, `uuid`, `session_id` | el siguiente prompt sugerido, en el composer (`AgentEvent::PromptSuggestion`, que el store no guarda). Llega ~1 s después del `result` y nunca tras el primer turno (verificado en 2.1.316, fixture `2.1.316/suggest`) |
 
 Subagentes: un mensaje es de subagente si `isSidechain === true` o `parent_tool_use_id` no vacío.
 
@@ -145,7 +145,7 @@ Envoltorio (en ambos sentidos):
 
 | subtype | request | respuesta | Uso en quill MVP |
 |---|---|---|---|
-| `initialize` | `hooks{<Evento>:[{matcher, hookCallbackIds:["hook_0",…], timeout}]}`, `sdkMcpServers`, `systemPrompt`/`appendSystemPrompt`, `agents`, `promptSuggestions`, `supportedDialogKinds`, `perTaskStopAffordance`, `workspaceTrust`, `plugins`, `planModeInstructions`, `jsonSchema` | success con datos de sesión (pid, commands, models…, forma exacta *(verificar)*) | **sí**, siempre primero |
+| `initialize` | `hooks{<Evento>:[{matcher, hookCallbackIds:["hook_0",…], timeout}]}`, `sdkMcpServers`, `systemPrompt`/`appendSystemPrompt`, `agents`, `promptSuggestions`, `supportedDialogKinds`, `perTaskStopAffordance`, `workspaceTrust`, `plugins`, `planModeInstructions`, `jsonSchema` | success con datos de sesión (pid, commands, models…, forma exacta *(verificar)*) | **sí**, siempre primero; con `promptSuggestions: true` mientras la opción "Prompt suggestions" del adaptador esté prendida (lo está por defecto) |
 | `interrupt` | `cancel_queued?` | `still_queued` / `cancelled` | **sí** |
 | `set_permission_mode` | `mode` | success/error | **sí** |
 | `set_model` | `model` | success | **sí** |
@@ -491,6 +491,7 @@ Otros hallazgos de la captura:
 - **Comandos seguros.** El CLI no pide permiso para comandos de solo lectura como `echo`. Las reglas de la configuración del usuario también evitan pedidos, así que las capturas corren sin `user` en `--setting-sources`.
 - **Plan mode.** `ExitPlanMode` llega como `can_use_tool` con `input.plan`; al aprobarlo el modo vuelve a `default`. El plan se escribe en `~/.claude/plans/`, fuera del repo.
 - **Datos personales en el protocolo.** `initialize` devuelve email y organización, y `system/init` incluye rutas del home. Los fixtures se anonimizan siempre (`scripts/fixtures.mjs` falla si queda algo).
+- **Sugerencia del siguiente prompt** (2026-10-31, Claude Code 2.1.316, escenario `suggest` de `tools/capture`, `[F:suggest]` en `fixtures/2.1.316/`). Con `promptSuggestions: true` en `initialize`, el CLI manda `{type:"prompt_suggestion", suggestion, uuid, session_id}` unos 1,1 s después del `result` del segundo turno ("add a docstring" tras pedir una función de una línea). Tras el primer turno no manda ninguna, y la respuesta de `initialize` no cambia. En una captura anterior, con dos preguntas triviales, tampoco llegó tras el segundo turno *(inferido: el CLI calla cuando no tiene nada que valga sugerir)*.
 
 ## 12. Logos de conectores y plugins
 
