@@ -102,9 +102,9 @@ pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent
     })
 }
 
-/// The Environment card's row, when the session's agent offers it: "Remote Control" and its
-/// switch; on, the words open the dialog with the link.
-pub(crate) fn row(session: &Session, ui: &Ui) -> Option<Element> {
+/// The Environment card's row, `width` wide, when the session's agent offers it: "Remote
+/// Control" and its switch; on (or failed), the words open the dialog with the link (or why).
+pub(crate) fn row(session: &Session, ui: &Ui, width: f32) -> Option<Element> {
     if !offered(session) {
         return None;
     }
@@ -118,14 +118,17 @@ pub(crate) fn row(session: &Session, ui: &Ui) -> Option<Element> {
         text("Remote Control").centered_y(),
     ])
     .gap(10.0);
-    let words = if on {
+    let failed = matches!(session.remote, Remote::Failed(_));
+    let words = if on || failed {
         Element::clickable(OPEN, words)
     } else {
         words
     };
+    // The state is a dot beside the switch, so the row keeps to the card: it pulses while it
+    // connects and turns red when it could not.
     let state = match &session.remote {
-        _ if asking(ui, session.id) => Some(muted("Connecting\u{2026}")),
-        Remote::Failed(_) => Some(muted("Failed")),
+        _ if asking(ui, session.id) => Some(limn::StatusDot::new(look::running()).pulse(true)),
+        Remote::Failed(_) => Some(limn::StatusDot::new(look::failed())),
         _ => None,
     };
     let switch = limn::Switch::new(TOGGLE, on, palette)
@@ -135,9 +138,9 @@ pub(crate) fn row(session: &Session, ui: &Ui) -> Option<Element> {
         .render()
         .centered_y();
     let mut parts = vec![words, Element::spacer().flex(1.0)];
-    parts.extend(state.map(|s| s.font_size(look::SMALL).centered_y()));
+    parts.extend(state.map(|dot| dot.size(6.0).render().centered_y()));
     parts.push(switch);
-    Some(Element::row(parts).gap(8.0).size(None, Some(20.0)))
+    Some(Element::row(parts).gap(8.0).size(Some(width), Some(20.0)))
 }
 
 fn now() -> u64 {

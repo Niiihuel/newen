@@ -8314,7 +8314,7 @@ fn right_panel(
             text(branch.clone()),
         ));
     }
-    environment.extend(crate::remote::row(session, ui));
+    environment.extend(crate::remote::row(session, ui, inner - 36.0));
     // How full the context is, as Desktop's percentage and bar while the card is folded: the
     // window comes from the agent's own report of its model.
     let share = (session.context_window > 0)
