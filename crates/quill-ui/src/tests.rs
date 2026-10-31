@@ -6282,10 +6282,20 @@ fn a_generated_image_opens_in_the_viewer_and_a_read_one_too() {
             PathBuf::from("/work/logo.png")
         ]
     );
-    // Its picture and its prompt are on screen without opening anything.
+    // Its picture is on screen without opening anything; the prompt waits behind its line.
     let window = limn::Size::new(1408.0, 844.0);
     let frame = UiTree::new(view(&store, &ui, window)).layout(window);
     assert!(frame.regions.iter().any(|r| r.id == "image:tool:g1"));
+    let drawn = |ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(drawn(&ui, "Generated an image"));
+    assert!(!drawn(&ui, "A quill pen"));
+    click(&store, &mut ui, "tool:g1");
+    assert!(drawn(&ui, "A quill pen"));
     click(&store, &mut ui, "image:tool:g1");
     let viewer = ui.viewer.as_ref().expect("the viewer opened");
     assert_eq!(viewer.path, PathBuf::from("/work/gen.png"));

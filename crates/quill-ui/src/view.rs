@@ -2761,9 +2761,9 @@ fn entries<'a>(
                 } else if name == "ImageGeneration"
                     && step_image(name, input, result.as_ref()).is_some()
                 {
-                    // The picture it made, with the prompt it came from, on its own.
+                    // The picture it made, on its own.
                     flush(&mut steps, &mut items);
-                    items.push(image_block(&step, ui, column, palette));
+                    items.push(image_block(&step, ui, transcript, column, palette));
                 } else if stands_alone(name) {
                     flush(&mut steps, &mut items);
                     if let Some(element) = lone_step(&step, column, palette) {
@@ -3817,6 +3817,12 @@ fn status_line(
             line.push(muted(elapsed(since)).font_size(chat()).centered_y());
             line.push(caret(open));
             let line = fold(view, key, Element::row(line).gap(8.0));
+            // A picture being made holds its place, pulsing, until it comes.
+            if step.name == "ImageGeneration" {
+                let wait = format!("image:wait:{}", step.call);
+                let place = Skeleton::block(wait, palette, GENERATED_TILE, GENERATED_TILE);
+                return Some(Element::column(vec![line, place.render()]).gap(8.0));
+            }
             if !open {
                 return Some(line);
             }
@@ -4106,21 +4112,44 @@ pub fn step_image(name: &str, input: &Value, result: Option<&ToolResult>) -> Opt
     }
 }
 
-/// A generated image: its picture, which a click opens in the viewer, and the prompt it came
-/// from under it (inferred design: Desktop's own is not captured).
-fn image_block(step: &Step, ui: &Ui, column: f32, palette: ComponentPalette) -> Element {
+/// A generated image: its line, which opens the prompt it was made from, over its picture,
+/// which a click opens in the viewer (inferred design: Desktop makes no pictures).
+fn image_block(
+    step: &Step,
+    ui: &Ui,
+    view: TranscriptView,
+    column: f32,
+    palette: ComponentPalette,
+) -> Element {
     let path = step_image(step.name, step.input, step.result).unwrap_or_default();
     let id = format!("image:tool:{}", step.call);
-    let mut block = vec![picture_tile(&id, &path, GENERATED_TILE, ui, palette)];
-    let caption = step.result.map(|r| r.output.trim()).unwrap_or_default();
-    if !caption.is_empty() {
-        block.push(
-            muted(caption.to_owned())
-                .font_size(SMALL)
-                .size(Some(column.min(480.0)), None),
-        );
-    }
-    Element::column(block).gap(8.0)
+    let key = format!("tool:{}", step.call);
+    let open = is_open(view, ui, step.call);
+    let line = Element::row(vec![
+        muted("Generated an image").font_size(chat()).centered_y(),
+        caret(open),
+    ])
+    .gap(8.0)
+    .size(None, Some(24.0));
+    // Codex's prompt is a brief of a dozen lines: it waits behind the line.
+    let prompt = (step.result.map(|r| r.output.trim()))
+        .filter(|prompt| open && !prompt.is_empty())
+        .map(|prompt| {
+            Element::column(vec![
+                Element::spacer().size(None, Some(4.0)),
+                muted(prompt.to_owned())
+                    .font_size(SMALL)
+                    .size(Some(column.min(480.0)), None),
+            ])
+        });
+    Element::column(vec![
+        fold(view, key.clone(), line),
+        limn::Collapse::new(format!("{key}:body"), prompt)
+            .expand()
+            .render(),
+        Element::spacer().size(None, Some(6.0)),
+        picture_tile(&id, &path, GENERATED_TILE, ui, palette),
+    ])
 }
 
 /// quill's web search block: a pill that says what was searched, with the sources as cards

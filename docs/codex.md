@@ -58,7 +58,7 @@ El adaptador traduce cada ítem al nombre de herramienta que la interfaz ya cono
 | `subAgentActivity` (`completed`) | `TaskEnded` + el `ToolResult` del `Agent` | El resumen es el último mensaje del hilo del subagente |
 | `collabAgentToolCall` (`wait`, `sendInput`, …) | `WaitAgent`, `MessageAgent`, `CloseAgent` | "Waited for agents", "Messaged an agent", "Closed an agent" |
 | `imageView` | `Read` de una imagen | La fila "Read logo.png" y, al abrirla, la imagen |
-| `imageGeneration` | `ImageGeneration` | La imagen en su propio bloque, con el prompt revisado de pie |
+| `imageGeneration` | `ImageGeneration` | La imagen en su propio bloque, bajo una línea que abre el prompt revisado |
 | `contextCompaction` | `Compact` | Una línea "Context compacted" entre dos filetes |
 | `enteredReviewMode` / `exitedReviewMode` | `EnterReviewMode` / `ExitReviewMode` | "Started a review of current changes" / "Finished the review", con los hallazgos al abrirla |
 | `sleep` | `Sleep` | "Waited 1s" |
@@ -267,7 +267,7 @@ Capturas nuevas con `quill-capture --agent codex <escenario>` (`gpt-6-luna`, esf
 
 ### Imágenes
 - **`imageView`** (`view-sleep.jsonl:26`) es `{id, path}`: se muestra como el `Read` de la imagen ("Read logo.png"), y al abrir la fila la imagen como miniatura, que se abre en el visor. Esto vale también para el `Read` de Claude de un archivo `png`/`jpg`/`jpeg`/`gif`/`webp` (antes solo decía "Read x.png").
-- **`imageGeneration`** (`image.jsonl:40-41`): `started` con todo vacío y `completed` con `status: "completed"`, `revisedPrompt`, `savedPath` (bajo `~/.codex/generated_images/`) y `result` (el PNG en base64, que quill no usa: lee el archivo). Es un bloque propio, no una fila dentro del grupo: la miniatura de 168 px (la de los mensajes, más grande) con el prompt revisado debajo; el clic abre el visor. El paso se abre con la entrada vacía (la ruta recién llega al terminar), así que el `ToolResult` lleva el prompt como salida y el archivo en `files`. Mientras corre o si falla, es una fila ("Generating an image", "Generated an image").
+- **`imageGeneration`** (`image.jsonl:40-41`): `started` con todo vacío y `completed` con `status: "completed"`, `revisedPrompt`, `savedPath` (bajo `~/.codex/generated_images/`) y `result` (el PNG en base64, que quill no usa: lee el archivo). Es un bloque propio, no una fila dentro del grupo: la línea "Generated an image ›" y, debajo, la miniatura de 168 px (la de los mensajes, más grande); el clic abre el visor, que crece desde ella. El prompt revisado es un brief de una docena de líneas, así que espera detrás de la línea, que lo abre con el resorte de los pasos (a 480 px de ancho). El paso se abre con la entrada vacía (la ruta recién llega al terminar), así que el `ToolResult` lleva el prompt como salida y el archivo en `files`. Mientras corre, es la línea de estado ("Generating an image 9s") con un cuadrado de 168 px que late en el lugar de la imagen (`Skeleton`); si falla, es una fila.
 - **Inferido:** `failure` (`usageLimitExceeded`, único valor del esquema) y cualquier `status` que no sea `completed` o `in_progress` terminan el paso como error ("Image generation limit reached" / "The image could not be made"), sin imagen. Diseño visual inferido.
 
 ### `sleep` y `dynamicToolCall`

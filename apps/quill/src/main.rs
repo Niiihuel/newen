@@ -1301,7 +1301,9 @@ impl eframe::App for App {
             // A tile opens the viewer, which grows its picture from the tile: only the frame knows where it is.
             let tile = match &action {
                 limn::UiAction::Clicked { id }
-                    if id.starts_with("image:open:") || id.starts_with("image:msg:") =>
+                    if ["image:open:", "image:msg:", "image:tool:"]
+                        .iter()
+                        .any(|prefix| id.starts_with(prefix)) =>
                 {
                     self.tree
                         .frame()
