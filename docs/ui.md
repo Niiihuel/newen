@@ -553,7 +553,7 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
 | Connectors ▸ | 219–255 | "1 connected" muted | `Collapsible` (fuera del MVP: puede ocultarse) |
 | Changes ▾ | 262–320 | ícono ± + `+1 −1` + botón "Commit changes" (secundario, deshabilitado mientras corre) | `Card` + `DiffStat` + `Button` `Mini` |
 
-**Cuentas en vivo.** Los `+N −M` de la barra de la rama (sobre el composer, junto a Create PR) y de la tarjeta Changes son lo sin commitear, y cambian mientras el agente escribe código: el motor lo vuelve a leer tras cada paso que tocó archivos (engine.md §8.2) y cada cifra rueda hasta la nueva con `limn::RollingNumber` (cada dígito gira en su columna, conocido por su lugar desde la derecha; con movimiento reducido salta). Las dos escriben las cifras con separador de miles. Sin repositorio, la tarjeta suma lo que cambiaron los pedidos de la sesión.
+**Cuentas en vivo.** Los `+N −M` de la barra de la rama (sobre el composer, junto a Create PR) y de la tarjeta Changes son lo sin commitear, y cambian mientras el agente escribe código, archivos nuevos incluidos: el motor lo vuelve a leer tras cada paso que tocó archivos (engine.md §8.2) y cada cifra cuenta hacia arriba o hacia abajo hasta la nueva, como en Desktop (`Element::rolling_number`: curva ease-out, un número entero en cada cuadro; con movimiento reducido salta). Un lector de pantalla oye las cifras a las que se llega ("+26 −6", el nombre del control de la barra y del de la tarjeta), no las de paso. Las dos escriben las cifras con separador de miles. Sin repositorio, la tarjeta suma lo que cambiaron los pedidos de la sesión.
 
 Medidas: ancho 206, a 4 px del borde derecho, tarjetas radio 8, gap 7, padding horizontal 14, títulos 11 px semibold con chevron. **Flota** sobre el área principal (no desplaza la columna); a anchos chicos debe colapsar a `PeekPanel` (`peek_panel.rs`) para no tapar la columna (regla quill: si `área − 2·206 < 541`, se colapsa).
 
@@ -563,7 +563,7 @@ Medidas: ancho 206, a 4 px del borde derecho, tarjetas radio 8, gap 7, padding h
 |---|---|---|
 | Panel | 692–1408 (716) con chat 479 a la izquierda; divisor 1 px | `Element::row` + `ResizeHandle::vertical("split:main")` |
 | Cabecera | alto 29: "master → working tree ▾" (rama base → destino, menú de base) ; a la derecha buscar, árbol, ⋯, expandir, cerrar (pitch 23) | `PanelHeader` (`PanelHeaderSizing::PANE`) con `.leading(..)` y `.trailing(..)`, `.dismiss(id, tooltip)` |
-| Cabecera de archivo | alto 24, fondo `#F2F2F2`; ▾ + `<>` + ruta 11 px; a la derecha `+1−1`, "visto" ✓, abrir en editor ↗, ⋯ | **DiffFileHeader (falta)** — hoy `Collapsible` + `DiffStat` + `IconButton` |
+| Cabecera de archivo | alto 24, fondo `#F2F2F2`; ▾ + `<>` + ruta 11 px; a la derecha `+1−1`, "visto" ✓, abrir en editor ↗, ⋯. Un archivo sin líneas que mostrar dice por qué junto a su nombre: "Binary file", o "Too large to show" si tiene cuentas y ningún hunk (un archivo nuevo de más de 2000 líneas) | **DiffFileHeader (falta)** — hoy `Collapsible` + `DiffStat` + `IconButton` |
 | Filas | alto 14, mono ~11; columnas nº viejo x=720, nº nuevo x=744, código x=759 | `CodeDiff::new(id, lines).font_size(11).language(..)` |
 | Fondo de fila | agregado `#E7F4E7`, quitado `#FEEEEF` | `CodeDiff::diff_backgrounds(true)` con colores quill |
 | Resaltado por palabra | agregado `#C8E7CD`, quitado `#F7CFD8` | **falta en `CodeDiff`** |

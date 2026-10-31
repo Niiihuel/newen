@@ -126,14 +126,7 @@ fn effects(
             None => patch(&paths)?,
         };
         let (added, removed) = counts(&patch);
-        if patch.len() > PATCH_LIMIT {
-            let cut = patch
-                .char_indices()
-                .nth(PATCH_LIMIT)
-                .map_or(patch.len(), |(i, _)| i);
-            patch.truncate(cut);
-            patch.push_str("\n… (cut)\n");
-        }
+        cut(&mut patch);
         files.push(FileEffect {
             path: paths.last().unwrap().to_string(),
             kind,
@@ -161,11 +154,24 @@ fn split(all: &str, count: usize) -> Option<Vec<String>> {
     (parts.len() == count).then_some(parts)
 }
 
+/// Cut a patch past [`PATCH_LIMIT`], saying so.
+fn cut(patch: &mut String) {
+    if patch.len() > PATCH_LIMIT {
+        let cut = patch
+            .char_indices()
+            .nth(PATCH_LIMIT)
+            .map_or(patch.len(), |(i, _)| i);
+        patch.truncate(cut);
+        patch.push_str("\n… (cut)\n");
+    }
+}
+
 /// What is uncommitted in `dir`'s own repository, as Desktop's diff shows "master → working
-/// tree": tracked files against HEAD, each with its patch. Desktop leaves files
-/// git does not track out, and so does this.
+/// tree": tracked files against HEAD, each with its patch, then the files git neither tracks
+/// nor ignores, as added ones ([`untracked`]). Paths are from the repository's top, whichever
+/// of its folders `dir` is.
 pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
-    let git = |args: &[&str]| -> io::Result<String> {
+    let run = |dir: &Path, args: &[&str]| -> io::Result<String> {
         let output = Command::new("git")
             .args(["-c", "core.quotePath=false"])
             .args(args)
@@ -179,25 +185,121 @@ pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     };
+    let top = run(dir, &["rev-parse", "--show-toplevel"])?;
+    let top = Path::new(top.trim_end_matches(['\n', '\r']));
+    let git = |args: &[&str]| run(top, args);
     let tracked = git(&["diff", "HEAD", "-M", "--no-color", "--raw", "-p"])?;
-    effects(&tracked, |paths| {
+    let mut files = effects(&tracked, |paths| {
         let mut args = vec!["diff", "HEAD", "-M", "--no-color", "--"];
         args.extend(paths);
         git(&args)
-    })
+    })?;
+    let others = git(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+    // A file taken out of the index but kept is the tracked diff's already.
+    let known: std::collections::HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+    let others = others
+        .split('\0')
+        .filter(|path| !path.is_empty() && !path.ends_with('/') && !known.contains(*path));
+    files.extend(untracked(top, others));
+    Ok(files)
 }
 
-/// Lines added and removed in a unified diff.
-fn counts(patch: &str) -> (u32, u32) {
-    patch.lines().fold((0, 0), |(a, r), line| {
-        if line.starts_with("+++") || line.starts_with("---") {
-            (a, r)
-        } else if line.starts_with('+') {
-            (a + 1, r)
-        } else if line.starts_with('-') {
-            (a, r + 1)
+/// How many untracked files are read, how many more are listed unread, and how large and how
+/// long one is read in full: Desktop's limits, as its diff shows them (inferred).
+const UNTRACKED_READ: usize = 200;
+const UNTRACKED_LISTED: usize = 400;
+const UNTRACKED_SIZE: u64 = 1 << 20;
+const UNTRACKED_LINES: u32 = 2000;
+
+/// Untracked files under `top` as added ones, in the patch git writes for a new file. The
+/// first [`UNTRACKED_READ`] are read: one over [`UNTRACKED_SIZE`] has no lines, and one with
+/// a NUL byte is a binary file, with git's line for one; a text file of up to
+/// [`UNTRACKED_LINES`] lines has all of them, and a longer one its count and no hunk. The
+/// next ones are listed unread, with no lines, up to [`UNTRACKED_LISTED`]; any more are left
+/// out.
+fn untracked<'a>(top: &Path, paths: impl Iterator<Item = &'a str>) -> Vec<FileEffect> {
+    let file = |at: usize, path: &str| {
+        let full = top.join(path);
+        let meta = std::fs::metadata(&full).ok();
+        let mode = if meta.as_ref().is_some_and(executable) {
+            "100755"
         } else {
-            (a, r)
+            "100644"
+        };
+        let mut patch = format!("diff --git a/{path} b/{path}\nnew file mode {mode}\n");
+        let bytes = meta
+            .filter(|meta| at < UNTRACKED_READ && meta.len() <= UNTRACKED_SIZE)
+            .and_then(|_| std::fs::read(&full).ok())
+            .unwrap_or_default();
+        let mut added = 0;
+        if bytes.contains(&0) {
+            patch.push_str(&format!("Binary files /dev/null and b/{path} differ\n"));
+        } else if !bytes.is_empty() {
+            let text = String::from_utf8_lossy(&bytes);
+            added = text.lines().count() as u32;
+            if added <= UNTRACKED_LINES {
+                // As git writes a hunk of one line: "+1", not "+1,1".
+                let lines = if added == 1 {
+                    String::new()
+                } else {
+                    format!(",{added}")
+                };
+                patch.push_str(&format!(
+                    "--- /dev/null\n+++ b/{path}\n@@ -0,0 +1{lines} @@\n"
+                ));
+                for line in text.split_inclusive('\n') {
+                    patch.push('+');
+                    patch.push_str(line);
+                }
+                if !text.ends_with('\n') {
+                    patch.push_str("\n\\ No newline at end of file\n");
+                }
+                cut(&mut patch);
+            }
+        }
+        FileEffect {
+            path: path.to_owned(),
+            kind: ChangeKind::Added,
+            added,
+            removed: 0,
+            patch,
+        }
+    };
+    paths
+        .take(UNTRACKED_LISTED)
+        .enumerate()
+        .map(|(at, path)| file(at, path))
+        .collect()
+}
+
+/// Whether git keeps the file as executable (mode 100755).
+fn executable(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o100 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Lines added and removed in a unified diff: those of its hunks, not the "---" and "+++"
+/// lines a file's part begins with, which a removed "-- note" or an added "++i" looks like.
+fn counts(patch: &str) -> (u32, u32) {
+    let mut hunk = false;
+    patch.lines().fold((0, 0), |(a, r), line| {
+        if line.starts_with("diff --git ") {
+            hunk = false;
+        } else if line.starts_with("@@") {
+            hunk = true;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') if hunk => (a + 1, r),
+            Some(b'-') if hunk => (a, r + 1),
+            _ => (a, r),
         }
     })
 }
@@ -309,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn the_working_tree_is_what_is_uncommitted_in_tracked_files() {
+    fn the_working_tree_is_what_is_uncommitted_new_files_too() {
         let (_, work) = folder("working");
         let git = |args: &[&str]| {
             assert!(Command::new("git")
@@ -339,7 +441,13 @@ mod tests {
             .iter()
             .map(|f| (f.path.as_str(), f.kind.clone(), f.added, f.removed))
             .collect();
-        assert_eq!(summary, [("a.py", ChangeKind::Modified, 1, 1)]);
+        assert_eq!(
+            summary,
+            [
+                ("a.py", ChangeKind::Modified, 1, 1),
+                ("new.txt", ChangeKind::Added, 1, 0)
+            ]
+        );
     }
 
     #[test]
@@ -451,5 +559,109 @@ mod tests {
         assert!(file("mode.sh").patch.contains("new mode 100755"));
         // A session in a folder of the repository reads all of it, as from its top.
         assert_eq!(working_changes(&work.join("sub")).unwrap(), cut);
+    }
+
+    /// `git` with a name to commit as, in `work`; what it printed.
+    fn run(work: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(["-c", "core.quotePath=false"])
+            .args(["-c", "user.name=q", "-c", "user.email=q@q"])
+            .args(args)
+            .current_dir(work)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn new_files_read_as_git_writes_them_once_added() {
+        let (_, work) = folder("untracked");
+        let git = |args: &[&str]| run(&work, args);
+        git(&["init", "-q"]);
+        fs::write(work.join("kept.txt"), "kept\n").unwrap();
+        fs::write(work.join(".gitignore"), "*.log\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        // What an agent leaves beside its edits: text (a line that reads as a header among
+        // them), a line with no end, a script, a picture, an empty file, one over the size
+        // read and one past the lines shown; a log the folder ignores and a repository of
+        // its own; and a file taken out of the index, which the tracked diff has already.
+        fs::write(work.join("notes.txt"), "one\ntwo\n++i;\n").unwrap();
+        fs::write(work.join("one.txt"), "only").unwrap();
+        fs::write(work.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(work.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(work.join("pic.bin"), [1u8, 0, 2]).unwrap();
+        fs::write(work.join("empty.txt"), "").unwrap();
+        fs::write(work.join("huge.txt"), "x\n".repeat(600_000)).unwrap();
+        fs::write(work.join("long.txt"), "line\n".repeat(2_500)).unwrap();
+        fs::write(work.join("debug.log"), "ignored\n").unwrap();
+        fs::create_dir_all(work.join("vendor")).unwrap();
+        run(&work.join("vendor"), &["init", "-q"]);
+        fs::write(work.join("vendor/lib.txt"), "theirs\n").unwrap();
+        git(&["rm", "-q", "--cached", "kept.txt"]);
+
+        let files = working_changes(&work).unwrap();
+        let summary: Vec<_> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.kind.clone(), f.added, f.removed))
+            .collect();
+        let added = ChangeKind::Added;
+        assert_eq!(
+            summary,
+            [
+                ("kept.txt", ChangeKind::Deleted, 0, 1),
+                ("empty.txt", added.clone(), 0, 0),
+                ("huge.txt", added.clone(), 0, 0),
+                ("long.txt", added.clone(), 2_500, 0),
+                ("notes.txt", added.clone(), 3, 0),
+                ("one.txt", added.clone(), 1, 0),
+                ("pic.bin", added.clone(), 0, 0),
+                ("run.sh", added, 2, 0),
+            ]
+        );
+        let file = |path: &str| files.iter().find(|f| f.path == path).unwrap().clone();
+        // Past the lines shown, and over the size read, a file has no hunk.
+        assert!(!file("long.txt").patch.contains("@@"));
+        assert_eq!(
+            file("huge.txt").patch,
+            "diff --git a/huge.txt b/huge.txt\nnew file mode 100644\n"
+        );
+        // Once added, git writes the others as they were read, its blob ids aside.
+        let read = ["notes.txt", "one.txt", "run.sh", "pic.bin", "empty.txt"];
+        git(&[&["add", "-N"][..], &read[..]].concat());
+        let added = working_changes(&work).unwrap();
+        for path in read {
+            let mut by_git = added.iter().find(|f| f.path == path).unwrap().clone();
+            by_git.patch = (by_git.patch.lines())
+                .filter(|line| !line.starts_with("index "))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            assert_eq!(file(path), by_git);
+        }
+    }
+
+    #[test]
+    fn new_files_past_two_hundred_are_listed_unread_and_past_four_hundred_left_out() {
+        let (_, work) = folder("many");
+        let git = |args: &[&str]| run(&work, args);
+        git(&["init", "-q"]);
+        fs::write(work.join("kept.txt"), "kept\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        for n in 0..450 {
+            fs::write(work.join(format!("n{n:03}.txt")), "line\n").unwrap();
+        }
+        let files = working_changes(&work).unwrap();
+        assert_eq!(files.len(), 400);
+        assert!(files[..200].iter().all(|f| (f.added, f.removed) == (1, 0)));
+        assert!(files[200..]
+            .iter()
+            .all(|f| (f.added, f.removed) == (0, 0) && !f.patch.contains("@@")));
+        assert_eq!(files[399].path, "n399.txt");
     }
 }
