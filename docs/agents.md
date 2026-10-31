@@ -34,6 +34,10 @@ Lo que un CLI no tenga se declara en `AgentCapabilities` y la UI lo muestra degr
 
 El contrato cubre CLIs por **stdio con líneas JSON**: Claude Code (stream-json) y Codex (`app-server`, JSON-RPC). Un CLI que expone un **servidor HTTP** (OpenCode) necesita otro transporte en el motor, que entrega al adaptador cada evento SSE como una "línea". Ese segundo transporte se agrega cuando se implemente el primer adaptador HTTP.
 
+## Un proceso para todas las sesiones (`mux`)
+
+Un agente puede correr todas sus sesiones en un solo proceso cuando las opciones de la persona lo piden: `mux(spec)` devuelve un `Mux`, puro como el adaptador, que reparte ese proceso. El motor lo arranca con la primera sesión que lo necesita (`launch` de un spec sin sesión), le pasa cada línea de cada sesión por `outbound` y cada línea del proceso por `inbound`, y cada sesión sigue hablando como si el proceso fuera suyo. Las variables de una sola sesión (el puente de `$BROWSER`) van en `SessionSpec::env`, y el adaptador las pone donde su CLI las toma por sesión. Hoy lo usa Codex para Remote Control ([remote-control.md](remote-control.md) §3).
+
 ## Modos de permiso (`modes`, `default_mode`)
 
 El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Full access.

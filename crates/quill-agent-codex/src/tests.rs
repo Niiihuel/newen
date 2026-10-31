@@ -1316,3 +1316,105 @@ fn an_unauthorized_turn_asks_to_sign_in() {
     // Once, not once for the `error` and again for the turn.
     assert_eq!(run.events.iter().filter(|e| **e == AuthRequired).count(), 1);
 }
+
+/// Remote Control on the shared app-server (docs/remote-control.md §3). Inferred from the
+/// protocol's schema and source (0.163.0) until a capture with a phone has it.
+#[test]
+fn a_shared_session_is_reached_from_the_phone() {
+    let shared = SessionSpec {
+        options: [("remote".to_string(), "true".to_string())].into(),
+        env: vec![("BROWSER".into(), "/tmp/shim".into())],
+        ..Default::default()
+    };
+    assert!(Codex::new().mux(&shared).is_some());
+    assert!(Codex::new().mux(&SessionSpec::default()).is_none());
+    let mut run = Run::started(shared);
+    // The experimental API, which Remote Control needs.
+    assert_eq!(
+        run.written[0]["params"]["capabilities"]["experimentalApi"],
+        true
+    );
+    run.feed(&json!({ "id": 1, "result": { "userAgent": "codex/0.163.0" } }));
+    let thread = (run.written.iter())
+        .find(|m| m["method"] == "thread/start")
+        .unwrap()
+        .clone();
+    // The session's own variables reach its commands, not the shared process's environment.
+    assert_eq!(
+        thread["params"]["config"]["shell_environment_policy"]["set"]["BROWSER"],
+        "/tmp/shim"
+    );
+    run.feed(&json!({ "id": thread["id"], "result": { "thread": { "id": "t1" } } }));
+    let Some(Ready { capabilities, .. }) = run.events.iter().find(|e| matches!(e, Ready { .. }))
+    else {
+        panic!("{:?}", run.events)
+    };
+    assert!(capabilities.remote && capabilities.remote_pairing);
+    // On, runtime-only: quill keeps the choice.
+    run.send(AgentCommand::Remote {
+        on: true,
+        name: None,
+    });
+    let enable = run.written.last().unwrap().clone();
+    assert_eq!(
+        (enable["method"].as_str(), &enable["params"]),
+        (Some("remoteControl/enable"), &json!({ "ephemeral": true }))
+    );
+    run.feed(
+        &json!({ "id": enable["id"], "result": { "status": "connecting", "serverName": "host",
+        "installationId": "i", "environmentId": null } }),
+    );
+    run.feed(
+        &json!({ "method": "remoteControl/status/changed", "params": { "status": "connected",
+        "serverName": "host", "installationId": "i", "environmentId": "e" } }),
+    );
+    let remote: Vec<bool> = (run.events.iter())
+        .filter_map(|e| match e {
+            AgentEvent::Remote { on, .. } => Some(*on),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(remote, [true, true]);
+    // A code to pair the phone with.
+    run.send(AgentCommand::RemotePair);
+    let pair = run.written.last().unwrap().clone();
+    assert_eq!(pair["params"]["manualCode"], true);
+    run.feed(
+        &json!({ "id": pair["id"], "result": { "pairingCode": "p", "manualPairingCode": "ABCD-EFGH",
+        "environmentId": "e", "expiresAt": 1_793_500_000u64 } }),
+    );
+    assert!(run.events.iter().any(|e| matches!(e,
+        AgentEvent::RemotePairing { code, expires_at: 1_793_500_000 } if code == "ABCD-EFGH")));
+    // A turn the phone started: its words are the person's.
+    run.feed(&json!({ "method": "turn/started", "params": { "threadId": "t1", "turn": { "id": "u1" } } }));
+    run.feed(
+        &json!({ "method": "item/completed", "params": { "threadId": "t1", "item": {
+        "type": "userMessage", "id": "m1", "clientId": null,
+        "content": [{ "type": "text", "text": "hola desde el celular" }] } } }),
+    );
+    assert!(run.events.iter().any(|e| matches!(e,
+        AgentEvent::Prompt { request, text } if request == "m1" && text == "hola desde el celular")));
+    // An approval the phone answered leaves quill's card.
+    run.feed(
+        &json!({ "id": 7, "method": "item/commandExecution/requestApproval",
+        "params": { "threadId": "t1", "turnId": "u1", "itemId": "c1", "command": "touch x" } }),
+    );
+    run.feed(&json!({ "method": "serverRequest/resolved", "params": { "threadId": "t1", "requestId": 7 } }));
+    assert!(run
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Withdrawn { id } if *id == key(&json!(7)))));
+    // Turned off, and why it could not be turned on.
+    run.send(AgentCommand::Remote {
+        on: false,
+        name: None,
+    });
+    let disable = run.written.last().unwrap().clone();
+    assert_eq!(disable["method"], "remoteControl/disable");
+    run.feed(&json!({ "id": disable["id"], "error": { "code": -32600,
+        "message": "remote control requires ChatGPT authentication" } }));
+    assert!(
+        matches!(run.events.last(), Some(AgentEvent::Remote { on: false, error: Some(e), .. })
+        if e.contains("ChatGPT"))
+    );
+}

@@ -613,6 +613,10 @@ pub enum Intent {
         on: bool,
         name: Option<String>,
     },
+    /// A code to pair another device with the session's agent, for agents that pair.
+    RemotePair {
+        session: SessionId,
+    },
     /// What is uncommitted in the session's folder, answered by `Event::WorkingTree`.
     WorkingTree {
         session: SessionId,

@@ -877,6 +877,7 @@ impl AgentAdapter for Claude {
             }
             AgentCommand::ReloadSkills => vec![self.request(json!({ "subtype": "reload_skills" }))],
             // Verified on 2.1.316 [F:remote]: on answers `session_url`, off an empty success.
+            AgentCommand::RemotePair => vec![],
             AgentCommand::Remote { on, name } => {
                 let mut request = json!({ "subtype": "remote_control", "enabled": on });
                 if let Some(name) = name.filter(|_| on) {
@@ -1434,6 +1435,8 @@ fn ready(body: &Value, ultracode: bool) -> AgentEvent {
             steer: true,
             commands: slash_commands(&body["commands"]),
             remote: body["remote_control_available"] == true,
+            // Each session has its own link; nothing to pair.
+            remote_pairing: false,
             plan: body["account"]["subscriptionType"]
                 .as_str()
                 .map(str::to_owned),

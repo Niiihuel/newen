@@ -34,27 +34,43 @@ Tres capturas con el CLI real y un celular, la última guardada como `crates/qui
   - que una sesión reanudada (`--resume`) vuelva a conectarse sola, como dice la documentación del CLI. Si pasa, el adaptador lo toma de `bridge_state` y la sesión queda prendida sin link;
   - qué estados trae `bridge_state` al cortarse la red.
 
-## 3. Codex (pendiente: un app-server compartido)
+## 3. Codex (un app-server compartido)
 
-Codex trae Remote Control en su `app-server` (protocolo abierto, Apache-2.0):
+Codex trae Remote Control en su `app-server`, con protocolo abierto (Apache-2.0):
 
-- métodos experimentales `remoteControl/enable|disable {ephemeral?}`, `remoteControl/status/read`, `remoteControl/pairing/start {manualCode?}` → `{pairingCode, manualPairingCode, environmentId, expiresAt}`, `remoteControl/pairing/status` → `{claimed}`, `remoteControl/client/list|revoke`;
-- la notificación `remoteControl/status/changed {status: disabled|connecting|connected|errored, serverName, installationId, environmentId}`.
+- métodos experimentales `remoteControl/enable|disable {ephemeral?}`, `remoteControl/status/read`, `remoteControl/pairing/start {manualCode?}` → `{pairingCode, manualPairingCode, environmentId, expiresAt}`, `remoteControl/pairing/status` → `{claimed}` y `remoteControl/client/list|revoke`;
+- la notificación `remoteControl/status/changed {status: disabled|connecting|connected|errored, serverName, installationId, environmentId}`, que todo app-server manda al arrancar.
 
-Se empareja con la app de ChatGPT del celular, con el código, y solo con login de ChatGPT. Funciona por proceso: dos procesos con la misma inscripción chocan, y un hilo cargado en un proceso no lo puede tomar otro. Por eso, como decidió el dueño, quill va a correr **un app-server compartido** para todas sus sesiones de Codex:
+El celular se empareja con la app de ChatGPT y queda como un cliente más del proceso. Ve los hilos cargados en ese proceso y los maneja. Remote Control funciona por proceso: dos procesos con la misma inscripción chocan (HTTP 409), y un hilo cargado en un proceso no lo puede tomar otro. Por eso, como decidió el dueño, quill corre **un solo `codex app-server` para todas sus sesiones de Codex** cuando la persona lo pide.
 
-- `codex app-server --listen unix://<ruta de quill>`, y cada sesión entra con `codex app-server proxy --sock <ruta>`;
-- `experimentalApi: true` en `initialize`;
-- `remoteControl/enable {ephemeral: true}`, con la decisión guardada por quill;
-- emparejar desde Settings con el código manual. El CLI abierto solo imprime ese código y no un QR;
-- lista de dispositivos y revocarlos;
-- `serverRequest/resolved` para sacar la tarjeta que el celular contestó;
-- los turnos que arranca el celular.
+### 3.1 Cómo lo hace quill
 
-A resolver al hacerlo: las variables y secretos por sesión, que hoy van en el entorno de cada proceso, y qué pasa con todas las sesiones si el proceso compartido se cae.
+- **La opción:** Settings › Codex › "Remote Control" (opción del adaptador, `remote`). Con ella prendida, las sesiones de Codex que arrancan entran al proceso compartido; las ya abiertas siguen en el suyo hasta reiniciarse.
+- **Un proceso por stdio, no `--listen`:** `codex app-server --listen unix://` habla WebSocket por el socket, no líneas JSON, y en ese modo Remote Control se inscribe con una clave vacía, la misma del daemon de Codex y de `codex remote-control`. Las dos cosas chocarían. Por stdio, la inscripción es la de quill (`clientInfo.name = "quill"`), separada de la de la app de escritorio, y el proceso muere con quill.
+- **El reparto (`quill_agent::Mux`, `CodexMux`):** el motor corre el proceso y pasa cada línea por el multiplexor del adaptador (`crates/quill-agent-codex/src/mux.rs`), así cada sesión habla como si el proceso fuera suyo:
+  - cada pedido sale con un id de la conexión y su respuesta vuelve con el de la sesión;
+  - el primer `initialize` contesta a todas las sesiones y solo un `initialized` llega al proceso;
+  - lo de un hilo va a su sesión, y lo de un subagente a la sesión del padre (`thread/started` trae `parentThreadId`);
+  - lo que no es de ningún hilo (`remoteControl/status/changed`, la cuenta) va a todas;
+  - lo de un hilo ajeno (uno que arrancó el celular) no va a nadie.
+- **El entorno:** las variables del agente y los secretos de los servidores "All agents" van en el entorno del proceso, como iban en el de cada sesión. Las del puente de `$BROWSER`, que son de cada sesión, van en la config del hilo (`shell_environment_policy.set`).
+- **Prender y emparejar:** el switch de la sesión manda `remoteControl/enable {ephemeral: true}` (o `disable`), que vale para todo el proceso. "Pair a phone" pide `remoteControl/pairing/start {manualCode: true}` y el diálogo muestra el código y cuántos minutos le quedan. `remoteControl/status/changed` mueve el switch de todas las sesiones.
+- **Lo que hace el celular:** un turno que quill no inició (llega `turn/started` sin un pedido de quill en camino) es del celular, y su ítem `userMessage` se muestra como mensaje de la persona. Una aprobación que contesta el celular llega como `serverRequest/resolved` y saca la tarjeta.
+
+### 3.2 Verificado
+
+- En vivo (codex-cli 0.163.0, cuenta Plus, por stdio con `experimentalApi`): `remoteControl/status/read` responde `disabled`, y `remoteControl/enable {ephemeral: true}` responde `connecting` al instante.
+- Si la inscripción falla, el estado pasa a `errored` y `pairing/start` devuelve el error. Con esta cuenta falló con HTTP 403 `{"detail":"Multi-factor authentication required"}`: la documentación oficial pide MFA en la cuenta de ChatGPT para Remote Control. El adaptador lo dice en palabras.
+- Con un app-server falso (`QUILL_FAKE_APP_SERVER`): dos sesiones en un proceso, cada una con su hilo y sus respuestas, y Remote Control prendido desde una llega a las dos (prueba del motor).
+
+### 3.3 Sin verificar
+
+- El emparejamiento con el celular, el formato y la duración del código, y lo que manda el celular (mensajes, aprobaciones). Las formas vienen del esquema y del código fuente.
+- Si la app del celular lista un host Linux.
 
 ## 4. Pendiente
 
-- Codex (§3).
+- Codex: verificar con el celular (§3.3), la lista de dispositivos y revocarlos, los hilos que arranca el celular (hoy no se muestran) y un mensaje del celular metido en un turno de quill.
+- Codex: el proceso compartido guarda las variables y secretos con que arrancó; un cambio en Settings le llega en su próximo arranque.
 - Mantener la computadora despierta mientras una sesión tiene Remote Control prendido (Desktop tiene un ajuste para eso).
 - Un grupo propio en la barra lateral para las sesiones con Remote Control.

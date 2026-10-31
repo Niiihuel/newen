@@ -6944,3 +6944,54 @@ fn a_permission_answered_on_another_device_leaves_no_card() {
     });
     assert_eq!(decided, Some(Some("Withdrawn")));
 }
+
+#[test]
+fn an_agent_that_pairs_shows_a_code_to_type_on_the_phone() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::Ready {
+            version: "0.163.0".into(),
+            capabilities: quill_model::AgentCapabilities {
+                remote: true,
+                remote_pairing: true,
+                ..Default::default()
+            },
+            mode: None,
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::Remote {
+            on: true,
+            url: None,
+            error: None,
+        },
+    );
+    click(&store, &mut ui, remote::OPEN);
+    assert_eq!(
+        click(&store, &mut ui, "remote:pair"),
+        [Intent::RemotePair { session: 1 }]
+    );
+    agent(
+        &mut store,
+        AgentEvent::RemotePairing {
+            code: "ABCD-EFGH".into(),
+            expires_at: 1,
+        },
+    );
+    assert_eq!(
+        store.session(1).unwrap().remote_code,
+        Some(("ABCD-EFGH".into(), 1))
+    );
+    // Off, the code is gone with it.
+    agent(
+        &mut store,
+        AgentEvent::Remote {
+            on: false,
+            url: None,
+            error: None,
+        },
+    );
+    assert_eq!(store.session(1).unwrap().remote_code, None);
+}

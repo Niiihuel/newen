@@ -5,7 +5,8 @@
 //!
 //! Always `gpt-6-luna` at effort `low`; never `danger-full-access` or approval policy `never`.
 //! Scenarios: simple, edit-bash, deny, deny-patch, always, plan, steer, interrupt, resume, fork, rewind, think,
-//! websearch, ask, account, subagent, image, view-sleep, compact, review.
+//! websearch, ask, account, subagent, image, view-sleep, compact, review, remote (by hand, with
+//! a phone: it prints the pairing code, and `touch <capture>/stop` ends the listening).
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -37,6 +38,11 @@ enum Step {
     Review,
     /// Any request, no thread needed.
     Rpc(&'static str, Value),
+    /// `remoteControl/pairing/start` with a manual code, printed for the person to type.
+    Pair,
+    /// Only listen, for at most this many seconds or until `<capture>/stop` appears: someone
+    /// acts from another device meanwhile.
+    Listen(u64),
 }
 
 /// A 24x24 blue square, for `view_image` to look at.
@@ -178,6 +184,21 @@ fn scenario(name: &str) -> Option<Scenario> {
             vec![Turn("Remember the word: lantern. Reply with exactly: ok"), Compact],
         ),
         "review" => (AUTO, "accept", vec![Review]),
+        // Remote Control on the stdio app-server, as quill's shared one (docs/remote-control.md
+        // §3): every command asks, and the phone answers.
+        "remote" => (
+            UNTRUSTED,
+            "accept",
+            vec![
+                Turn("Reply with exactly the word: ok"),
+                Rpc("remoteControl/status/read", json!({})),
+                Rpc("remoteControl/enable", json!({ "ephemeral": true })),
+                Pair,
+                Listen(1200),
+                Rpc("remoteControl/disable", json!({ "ephemeral": true })),
+                Listen(5),
+            ],
+        ),
         "account" => (
             AUTO,
             "accept",
@@ -324,6 +345,9 @@ struct Driver {
     decline_first: bool,
     /// `turn/start.summary`: reasoning summaries are off unless asked for.
     summary: Option<&'static str>,
+    /// Leave approvals and questions to another client (a phone over Remote Control), and use
+    /// the experimental API that Remote Control is in.
+    remote: bool,
     /// Sent again on resume and fork, which otherwise take the user's own configured defaults.
     approval: &'static str,
     sandbox: &'static str,
@@ -345,7 +369,11 @@ impl Driver {
                 .recv_timeout(left)
                 .map_err(|e| format!("waiting: {e}"))?;
             self.observe(&msg);
-            if msg["method"].is_string() && !msg["id"].is_null() {
+            let held = self.remote
+                && msg["method"].as_str().is_some_and(|m| {
+                    m.ends_with("/requestApproval") || m == "item/tool/requestUserInput"
+                });
+            if msg["method"].is_string() && !msg["id"].is_null() && !held {
                 let reply = self.answer(&msg);
                 self.p.send(reply);
             }
@@ -425,10 +453,12 @@ impl Driver {
     }
 
     fn handshake(&mut self) -> Result<(), String> {
-        self.call(
-            "initialize",
-            json!({ "clientInfo": { "name": "quill", "title": "quill", "version": "0.0.1" } }),
-        )?;
+        let mut params =
+            json!({ "clientInfo": { "name": "quill", "title": "quill", "version": "0.0.1" } });
+        if self.remote {
+            params["capabilities"] = json!({ "experimentalApi": true });
+        }
+        self.call("initialize", params)?;
         self.p.send(json!({ "method": "initialized" }));
         Ok(())
     }
@@ -530,6 +560,7 @@ pub fn run(name: &str) -> Result<(), String> {
         decision: sc.decision,
         decline_first: sc.decline_first,
         summary: (name == "think").then_some("detailed"),
+        remote: name == "remote",
         approval: sc.approval,
         sandbox: sc.sandbox,
     };
@@ -631,6 +662,30 @@ pub fn run(name: &str) -> Result<(), String> {
                 Step::Rpc(method, params) => {
                     d.call(method, params.clone())?;
                 }
+                Step::Pair => {
+                    let r = d.call("remoteControl/pairing/start", json!({ "manualCode": true }))?;
+                    println!(
+                        "pairing code: {}",
+                        r["manualPairingCode"].as_str().unwrap_or("?")
+                    );
+                    let _ = std::io::stdout().flush();
+                }
+                Step::Listen(seconds) => {
+                    let (stop, until) = (
+                        dir.join("stop"),
+                        Instant::now() + Duration::from_secs(*seconds),
+                    );
+                    while Instant::now() < until && !stop.exists() {
+                        // Only a timeout goes on: an app-server that ended ends the listening.
+                        if let Err(error) = d.pump(Duration::from_millis(500), |_, _| false) {
+                            if !error.contains("timed out") {
+                                break;
+                            }
+                        }
+                    }
+                    // `stop` ends this listen only; the next one runs its full time.
+                    let _ = std::fs::remove_file(&stop);
+                }
             }
         }
         Ok(())
@@ -667,6 +722,7 @@ mod tests {
             "view-sleep",
             "compact",
             "review",
+            "remote",
         ] {
             let sc = scenario(name).expect(name);
             assert_ne!(sc.sandbox, "danger-full-access", "{name}");

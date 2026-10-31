@@ -184,6 +184,8 @@ pub struct Session {
     pub rewound: Vec<Item>,
     /// Whether it can be reached from another device (docs/remote-control.md).
     pub remote: Remote,
+    /// The code that pairs another device with its agent, and until when it works.
+    pub remote_code: Option<(String, u64)>,
 }
 
 /// Whether a session can be reached from another device through its agent's own service.
@@ -308,6 +310,7 @@ impl Store {
                 agent_version: None,
                 rewound: vec![],
                 remote: Remote::Off,
+                remote_code: None,
             }),
             Event::Status { session, status } => {
                 if let Some(s) = self.session_mut(session) {
@@ -664,8 +667,12 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
                 })),
                 (false, Some(error)) => Remote::Failed(error),
                 (false, None) => Remote::Off,
+            };
+            if !matches!(s.remote, Remote::On(_)) {
+                s.remote_code = None;
             }
         }
+        AgentEvent::RemotePairing { code, expires_at } => s.remote_code = Some((code, expires_at)),
         // Answered on another device: the card goes, as an answered one does.
         AgentEvent::Withdrawn { id } => {
             for item in &mut s.items {

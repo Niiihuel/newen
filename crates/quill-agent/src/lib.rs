@@ -46,6 +46,10 @@ pub struct SessionSpec {
     /// Folders of skills the session adds (`<folder>/<name>/SKILL.md`).
     #[serde(default)]
     pub skill_roots: Vec<PathBuf>,
+    /// Variables of the session's own when its process is shared with others ([`Mux`]): the
+    /// process's environment cannot carry them for one session.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 /// An "All agents" MCP server as one session gets it. Plain values are written as they are;
@@ -191,6 +195,10 @@ pub struct AgentCapabilities {
     /// agent's own service ([`AgentCommand::Remote`]).
     #[serde(default)]
     pub remote: bool,
+    /// ... where another device is paired once with a code ([`AgentCommand::RemotePair`]) and
+    /// then reaches all of the agent's sessions, not this one alone.
+    #[serde(default)]
+    pub remote_pairing: bool,
 }
 
 /// One MCP server a session's agent loaded, as the agent reports it.
@@ -682,6 +690,11 @@ pub enum AgentEvent {
         request: String,
         text: String,
     },
+    /// The code to type on another device to pair it, until `expires_at` (seconds since 1970).
+    RemotePairing {
+        code: String,
+        expires_at: u64,
+    },
     /// The agent calls one of quill's own tools, the ones that start and propose other
     /// sessions ([`HOST_TOOLS`]). The engine answers with [`AgentCommand::HostToolResult`].
     HostTool {
@@ -773,6 +786,9 @@ pub enum AgentCommand {
         on: bool,
         name: Option<String>,
     },
+    /// Start pairing another device, answered by [`AgentEvent::RemotePairing`]
+    /// ([`AgentCapabilities::remote_pairing`]).
+    RemotePair,
     /// The answer to an [`AgentEvent::HostTool`] call.
     HostToolResult {
         id: String,
@@ -823,6 +839,19 @@ pub const HOST_TOOLS: [(&str, &str, &str); 4] = [
         r#"{"type":"object","properties":{"session_id":{"type":"integer"}},"required":["session_id"]}"#,
     ),
 ];
+
+/// Many sessions over one process of the agent's ([`AgentAdapter::mux`]). Pure, as an adapter
+/// is: the engine runs the process and passes every line through here, so each session's
+/// adapter reads and writes as if the process were its own.
+pub trait Mux: Send {
+    /// `session`'s line for the process: what to write to it, and what to answer the session
+    /// at once.
+    fn outbound(&mut self, session: u64, line: &str) -> (Vec<String>, Vec<String>);
+    /// A line of the process, for each session it is for.
+    fn inbound(&mut self, line: &str) -> Vec<(u64, String)>;
+    /// `session` left the process.
+    fn closed(&mut self, session: u64);
+}
 
 /// What one line from the agent became.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -905,6 +934,11 @@ pub trait AgentAdapter: Send {
     /// The agent's own settings, shown on its page in Settings.
     fn options(&self) -> Vec<AgentOption> {
         vec![]
+    }
+    /// One process for all of the agent's sessions, when the person's options ask for it: how
+    /// to share it among them. The process is the one [`AgentAdapter::launch`] gives for `spec`.
+    fn mux(&self, _spec: &SessionSpec) -> Option<Box<dyn Mux>> {
+        None
     }
     /// The agent's own logo, an SVG drawn in `currentColor`, to name it where quill lists agents (AGENTS.md).
     fn icon(&self) -> Option<&'static str> {

@@ -23,6 +23,9 @@ fn main() {
         Some("plugin") => return ext::plugin(),
         _ => {}
     }
+    if std::env::var_os("QUILL_FAKE_APP_SERVER").is_some() {
+        return app_server();
+    }
     let stdin = std::io::stdin();
     let mut input = stdin.lock().lines();
     let Ok(path) = std::fs::read_to_string(".fake-agent") else {
@@ -74,6 +77,56 @@ fn main() {
             writeln!(out, "{answer}").unwrap();
             out.flush().unwrap();
         }
+    }
+}
+
+/// `QUILL_FAKE_APP_SERVER`: a Codex app-server for any number of threads, as the one quill's
+/// Codex sessions share (docs/remote-control.md §3). Each turn answers "echo: <its text>".
+fn app_server() {
+    use serde_json::json;
+    let mut threads = 0;
+    let mut out = std::io::stdout().lock();
+    for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let (id, params) = (msg["id"].clone(), &msg["params"]);
+        let mut said = vec![];
+        let result = match msg["method"].as_str() {
+            _ if id.is_null() => continue,
+            Some("initialize") => json!({ "userAgent": "codex/0.163.0 (Fake)" }),
+            Some("model/list") => json!({ "data": [] }),
+            Some("thread/start") => {
+                threads += 1;
+                let thread = json!({ "id": format!("t{threads}"), "parentThreadId": null });
+                said.push(json!({ "method": "thread/started", "params": { "thread": thread } }));
+                json!({ "thread": thread, "model": "gpt-6-luna" })
+            }
+            Some("turn/start") => {
+                let thread = params["threadId"].clone();
+                let words = params["input"][0]["text"].as_str().unwrap_or_default();
+                let turn = json!({ "id": format!("u-{}", thread.as_str().unwrap_or_default()) });
+                said.push(json!({ "method": "turn/started", "params": { "threadId": thread, "turn": turn } }));
+                said.push(json!({ "method": "item/completed", "params": { "threadId": thread,
+                    "item": { "type": "agentMessage", "id": "a1", "text": format!("echo: {words}") } } }));
+                said.push(
+                    json!({ "method": "turn/completed", "params": { "threadId": thread,
+                    "turn": { "id": turn["id"], "status": "completed", "items": [] } } }),
+                );
+                json!({ "turn": turn })
+            }
+            Some("remoteControl/enable") => {
+                said.push(json!({ "method": "remoteControl/status/changed",
+                    "params": { "status": "connected", "serverName": "fake", "installationId": "i", "environmentId": "e" } }));
+                json!({ "status": "connecting", "serverName": "fake", "installationId": "i", "environmentId": null })
+            }
+            _ => json!({}),
+        };
+        writeln!(out, "{}", json!({ "id": id, "result": result })).unwrap();
+        for line in said {
+            writeln!(out, "{line}").unwrap();
+        }
+        out.flush().unwrap();
     }
 }
 

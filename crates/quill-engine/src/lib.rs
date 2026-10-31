@@ -21,6 +21,7 @@ mod images;
 mod logos;
 mod registry;
 mod servers;
+mod shared;
 mod update;
 
 pub use quill_browser::{native, Frame, Frames, Native, Pixels, Present};
@@ -334,6 +335,8 @@ struct Router {
     own: Arc<Mutex<HashMap<String, global::Own>>>,
     /// What keeps the computer from idle sleep while an agent works.
     awake: Option<Child>,
+    /// The process each agent's sessions share, for an agent that runs them so.
+    shared: HashMap<String, shared::Shared>,
     /// quill's own updates: checked, downloaded and installed off this thread (update.rs).
     updates: update::Updates,
     /// Each agent's sign-in under way: where the person's code or cancel goes.
@@ -491,6 +494,7 @@ impl Router {
             global,
             own: Arc::default(),
             awake: None,
+            shared: HashMap::new(),
             updates,
             logins: HashMap::new(),
             github_login: None,
@@ -829,6 +833,33 @@ impl Router {
         actor.injected = plan.names;
     }
 
+    /// A session of an agent that runs all of them in one process (`AgentAdapter::mux`) goes
+    /// through that process: `own` (the `$BROWSER` bridge's variables, the session's alone)
+    /// rides in its spec, and the rest of its environment is the process's.
+    fn share(&mut self, actor: &mut Actor, own: Vec<(String, String)>) {
+        if actor.adapter.mux(&actor.spec).is_none() {
+            return;
+        }
+        let agent = actor.adapter.id().to_owned();
+        let program = self.program(&agent);
+        let env: Vec<(String, String)> = (actor.env.iter())
+            .filter(|pair| !own.contains(pair))
+            .cloned()
+            .collect();
+        let spec = SessionSpec {
+            cwd: std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from),
+            options: actor.spec.options.clone(),
+            ..Default::default()
+        };
+        // shortcut: the process keeps the variables and secrets it started with; a change in
+        // Settings reaches it at its next start.
+        let shared = (self.shared.entry(agent.clone())).or_insert_with(|| {
+            shared::Shared::start(adapter(&agent).expect("an adapter"), spec, program, env)
+        });
+        actor.shared = Some(shared.clone());
+        actor.spec.env = own;
+    }
+
     fn bridge_env(&self, session: SessionId) -> Vec<(String, String)> {
         #[cfg(unix)]
         return self
@@ -938,9 +969,11 @@ impl Router {
             }
             actor.spec.allow_unsafe = chosen.allow_unsafe;
             actor.spec.options = chosen.options.clone();
-            actor.env = self.bridge_env(session);
+            let own = self.bridge_env(session);
+            actor.env = own.clone();
             actor.env.extend(env_pairs(&chosen.env));
             self.inject(&mut actor);
+            self.share(&mut actor, own);
             // A fork that has said nothing yet still continues where it was forked from.
             if let (None, Some((from, at))) = (&actor.spec.resume, restored.forked) {
                 let mut ids = self.agent_ids.lock().unwrap();
@@ -1032,9 +1065,11 @@ impl Router {
         );
         actor.spec.allow_unsafe = chosen.allow_unsafe;
         actor.spec.options = chosen.options.clone();
-        actor.env = self.bridge_env(id);
+        let own = self.bridge_env(id);
+        actor.env = own.clone();
         actor.env.extend(env_pairs(&chosen.env));
         self.inject(&mut actor);
+        self.share(&mut actor, own);
         actor.shadow_root = self.config.snapshots.clone();
         actor.route = Some(self.internal.clone());
         actor.remote_at_start = self.settings.remote_new_sessions;
@@ -1260,6 +1295,7 @@ impl Router {
             Intent::Remote { session, on, name } => {
                 (session, Input::Command(AgentCommand::Remote { on, name }))
             }
+            Intent::RemotePair { session } => (session, Input::Command(AgentCommand::RemotePair)),
             Intent::Rewind { session, request } => (session, Input::Rewind(request)),
             Intent::RewindTo {
                 session,
@@ -2271,6 +2307,9 @@ struct Actor {
     remote: bool,
     /// Make it reachable once the agent is ready (Settings' new sessions).
     remote_at_start: bool,
+    /// The process the agent's sessions share, when it runs them so, and whether this one is in it.
+    shared: Option<shared::Shared>,
+    attached: bool,
 }
 
 impl Actor {
@@ -2294,6 +2333,7 @@ impl Actor {
             options: Default::default(),
             servers: Vec::new(),
             skill_roots: Vec::new(),
+            env: Vec::new(),
         };
         Self {
             id,
@@ -2322,6 +2362,8 @@ impl Actor {
             skills_asked: false,
             remote: false,
             remote_at_start: false,
+            shared: None,
+            attached: false,
         }
     }
 
@@ -2623,6 +2665,9 @@ impl Actor {
         if let Some((mut child, _)) = self.process.take() {
             let _ = child.kill().await;
         }
+        if let (true, Some(shared)) = (std::mem::take(&mut self.attached), &self.shared) {
+            shared.detach(self.id);
+        }
         self.generation += 1;
         self.remote_gone();
     }
@@ -2717,6 +2762,7 @@ impl Actor {
                 }
                 Input::Exited { generation, code } if generation == self.generation => {
                     self.process = None;
+                    self.attached = false;
                     self.remote_gone();
                     self.running = None;
                     self.busy = false;
@@ -2739,6 +2785,9 @@ impl Actor {
         if let Some((mut child, _)) = self.process.take() {
             let _ = child.kill().await;
         }
+        if let (true, Some(shared)) = (self.attached, &self.shared) {
+            shared.detach(self.id);
+        }
         if let Some(done) = stopped {
             let _ = done.send(());
         }
@@ -2746,7 +2795,17 @@ impl Actor {
 
     /// Start the agent if it is not running; after an exit it resumes the same conversation.
     async fn ensure_running(&mut self) -> Result<(), String> {
-        if self.process.is_some() {
+        if self.process.is_some() || self.attached {
+            return Ok(());
+        }
+        if let Some(shared) = &self.shared {
+            // The adapter takes the session's spec as it launches, though the process is shared.
+            let _ = self.adapter.launch(&self.spec);
+            self.generation += 1;
+            shared.attach(self.id, self.generation, self.inbox.clone());
+            self.attached = true;
+            self.status(SessionStatus::Starting);
+            self.write(AgentCommand::Start).await;
             return Ok(());
         }
         let plan = self.adapter.launch(&self.spec);
@@ -2803,6 +2862,12 @@ impl Actor {
     }
 
     async fn write_lines(&mut self, lines: Vec<String>) {
+        if let (true, Some(shared)) = (self.attached, &self.shared) {
+            for line in lines {
+                shared.line(self.id, line);
+            }
+            return;
+        }
         let Some((_, stdin)) = self.process.as_mut() else {
             return;
         };

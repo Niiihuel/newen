@@ -1713,3 +1713,85 @@ fn a_session_reached_from_a_phone_shows_its_messages_as_the_persons() {
     });
     let _ = std::fs::remove_dir_all(&snapshots);
 }
+
+#[test]
+fn codex_sessions_share_one_app_server_a_phone_can_reach() {
+    // Codex's Remote Control option on, and the fake answering as an app-server.
+    let dir = workdir("simple");
+    let settings = dir.join("settings.json");
+    let chosen = serde_json::json!({ "agents": { "codex": {
+        "options": { "remote": "true" }, "env": ["QUILL_FAKE_APP_SERVER=1"] } } });
+    std::fs::write(&settings, chosen.to_string()).unwrap();
+    let programs = HashMap::from([(
+        "codex".to_string(),
+        env!("CARGO_BIN_EXE_fake-agent").to_string(),
+    )]);
+    let (tx, rx) = channel();
+    let config = quill_engine::Config {
+        programs,
+        database: None,
+        snapshots: None,
+        settings: Some(settings),
+        ..Default::default()
+    };
+    let engine = Engine::start_with(move |event| drop(tx.send(event)), config);
+    for _ in 0..2 {
+        engine.send(Intent::NewSession(NewSession {
+            agent: "codex".into(),
+            cwd: dir.clone(),
+            model: None,
+            effort: None,
+            mode: None,
+        }));
+    }
+    for session in [1, 2] {
+        engine.send(Intent::Send {
+            session,
+            text: format!("hello {session}"),
+            mentions: vec![],
+            images: vec![],
+            lane: Lane::Steer,
+        });
+    }
+    // One process: each session has a thread of its own in it, and gets its own answers.
+    let (mut threads, mut answered) = (HashMap::new(), HashMap::new());
+    until(&rx, |e| {
+        match e {
+            Event::Agent {
+                session,
+                event: AgentEvent::Session { id },
+                ..
+            } => drop(threads.insert(*session, id.clone())),
+            Event::Agent {
+                session,
+                event: AgentEvent::Text { text, .. },
+                ..
+            } => drop(answered.insert(*session, text.clone())),
+            _ => {}
+        }
+        answered.len() == 2
+    });
+    assert_eq!(answered[&1], "echo: hello 1");
+    assert_eq!(answered[&2], "echo: hello 2");
+    let mut ids: Vec<&String> = threads.values().collect();
+    ids.sort();
+    assert_eq!(ids, ["t1", "t2"]);
+    // Reaching one reaches both: the process tells every session.
+    engine.send(Intent::Remote {
+        session: 1,
+        on: true,
+        name: None,
+    });
+    let mut on = std::collections::HashSet::new();
+    until(&rx, |e| {
+        if let Event::Agent {
+            session,
+            event: AgentEvent::Remote { on: true, .. },
+            ..
+        } = e
+        {
+            on.insert(*session);
+        }
+        on.len() == 2
+    });
+}

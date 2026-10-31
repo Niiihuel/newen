@@ -6,10 +6,10 @@
 //! one waits for, and writes the next request when an answer arrives (`Decoded::replies`).
 
 use quill_agent::{
-    AgentAdapter, AgentCapabilities, AgentCommand, AgentEvent, AgentId, AuthState, Choices,
-    CommandRun, ContextCategory, ContextKind, ContextUsage, Decision, Decoded, FileChange,
-    LaunchPlan, ModeWords, ModelInfo, PlanLimits, ProgramRun, PromptImage, SessionSpec, Suggestion,
-    TaskUsage, Usage, UsageWindow, WebSearchRun, WebSource,
+    AgentAdapter, AgentCapabilities, AgentCommand, AgentEvent, AgentId, AgentOption, AuthState,
+    Choices, CommandRun, ContextCategory, ContextKind, ContextUsage, Decision, Decoded, FileChange,
+    LaunchPlan, ModeWords, ModelInfo, Mux, PlanLimits, ProgramRun, PromptImage, SessionSpec,
+    Suggestion, TaskUsage, Usage, UsageWindow, WebSearchRun, WebSource,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -17,6 +17,11 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 mod extensions;
+mod mux;
+
+/// The option that runs every Codex session in one app-server a phone can reach
+/// (docs/remote-control.md §3).
+const REMOTE: &str = "remote";
 
 /// The permission presets, as Codex's own are (docs/codex.md "Modos de permiso"). Each is an
 /// approval policy and a sandbox; quill always sends both, because a thread that is not told
@@ -33,11 +38,17 @@ const MODELS_ID: &str = "quill-models";
 /// Per-thread config (not `~/.codex/config.toml`): `update_plan` is off by default
 /// (plan.jsonl, two attempts without it) and `request_user_input` only exists in Plan mode
 /// unless this feature is on (ask.jsonl:9).
-fn thread_config(servers: &[quill_agent::InjectedServer]) -> Value {
+fn thread_config(servers: &[quill_agent::InjectedServer], env: &[(String, String)]) -> Value {
     let mut config = json!({
         "tools": { "update_plan": { "enabled": true } },
         "features": { "default_mode_request_user_input": true },
     });
+    // A session's own variables, when its process is shared: its commands get them.
+    if !env.is_empty() {
+        let set: serde_json::Map<String, Value> =
+            env.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+        config["shell_environment_policy"] = json!({ "set": set });
+    }
     // The "All agents" servers ride in the request, not in argv or a file (docs/agents.md).
     if !servers.is_empty() {
         config["mcp_servers"] = extensions::mcp_servers_config(servers);
@@ -46,8 +57,7 @@ fn thread_config(servers: &[quill_agent::InjectedServer]) -> Value {
 }
 
 /// Notifications that carry nothing quill shows; not `Unknown`, not events.
-const QUIET: [&str; 14] = [
-    "remoteControl/status/changed",
+const QUIET: [&str; 13] = [
     "mcpServer/startupStatus/updated",
     "thread/status/changed",
     "thread/started",
@@ -84,6 +94,10 @@ enum Pending {
     McpReload,
     /// `mcpServer/oauth/login` of the server named, told as its sign-in page.
     McpSignIn(String),
+    /// `remoteControl/enable` or `disable`, told as whether a phone can reach it.
+    Remote,
+    /// `remoteControl/pairing/start`, told as the code to type on the phone.
+    Pairing,
     /// Nothing to do with the answer.
     Ignore,
 }
@@ -167,6 +181,8 @@ pub struct Codex {
     turn_out: u64,
     context: u64,
     window: u64,
+    /// The running turn was started from another client (a phone over Remote Control).
+    remote_turn: bool,
 }
 
 impl Codex {
@@ -185,7 +201,7 @@ impl Codex {
         let (approval, sandbox, _) = preset(&self.mode);
         let mut params = json!({
             "cwd": spec.cwd.to_string_lossy(), "approvalPolicy": approval, "sandbox": sandbox,
-            "config": thread_config(&spec.servers),
+            "config": thread_config(&spec.servers, &spec.env),
         });
         if let Some(model) = &self.model {
             params["model"] = json!(model);
@@ -285,6 +301,11 @@ impl Codex {
         vec![json!({ "id": rpc, "result": result }).to_string()]
     }
 
+    /// Its sessions share one app-server a phone can reach (the person's option).
+    fn shared(&self) -> bool {
+        (self.spec.lock().unwrap().options.get(REMOTE)).is_some_and(|v| v == "true")
+    }
+
     fn ready(&self) -> AgentEvent {
         let mut models = self.models.clone();
         if models.is_empty() {
@@ -315,6 +336,8 @@ impl Codex {
                 mcp: true,
                 thinking_text: true,
                 steer: true,
+                remote: self.shared(),
+                remote_pairing: self.shared(),
                 ..Default::default()
             },
             mode: Some(self.mode.clone()),
@@ -401,12 +424,25 @@ impl Codex {
                 url: result["authorizationUrl"].as_str().map(str::to_owned),
                 error: None,
             }),
+            Pending::Remote => out.events.push(remote_state(&result["status"])),
+            Pending::Pairing => out.events.push(AgentEvent::RemotePairing {
+                code: text(&result["manualPairingCode"]),
+                expires_at: result["expiresAt"].as_u64().unwrap_or_default(),
+            }),
             Pending::Ignore => {}
         }
     }
 
     fn failed(&mut self, pending: Pending, msg: &Value, out: &mut Decoded) {
         let error = text(&msg["error"]["message"]);
+        // Why it could not be reached, in Codex's words ("requires ChatGPT authentication").
+        if matches!(pending, Pending::Remote | Pending::Pairing) {
+            return out.events.push(AgentEvent::Remote {
+                on: false,
+                url: None,
+                error: Some(remote_error(&error)),
+            });
+        }
         // Inferred from the schema (codexErrorInfo "unauthorized"): the error's words.
         if error.to_lowercase().contains("unauthorized") {
             out.events.push(AgentEvent::AuthRequired);
@@ -439,6 +475,8 @@ impl Codex {
         match method {
             "turn/started" => {
                 self.turn = p["turn"]["id"].as_str().map(str::to_owned);
+                // No turn of quill's on its way: another client started it.
+                self.remote_turn = self.starting.is_empty();
                 self.turn_requests = std::mem::take(&mut self.starting);
                 events.push(AgentEvent::Running {
                     requests: self.turn_requests.clone(),
@@ -513,6 +551,18 @@ impl Codex {
                 }));
             }
             "account/updated" => self.plan = p["planType"].as_str().map(str::to_owned),
+            // Every app-server tells it at its start; only the shared one is the person's.
+            "remoteControl/status/changed" if self.shared() => {
+                events.push(remote_state(&p["status"]))
+            }
+            "remoteControl/status/changed" => {}
+            // Another client (the phone) answered it: quill's card goes.
+            "serverRequest/resolved" => {
+                let id = key(&p["requestId"]);
+                if self.approvals.remove(&id).is_some() {
+                    events.push(AgentEvent::Withdrawn { id });
+                }
+            }
             "error" => {
                 self.auth_failed |= p["error"]["codexErrorInfo"] == "unauthorized";
             }
@@ -757,6 +807,16 @@ impl Codex {
         let status = text(&item["status"]);
         let failed = status == "failed" || status == "declined";
         match item["type"].as_str() {
+            // A turn started on the phone: its words are the person's, which quill has not seen.
+            Some("userMessage") if done && self.remote_turn => {
+                let words: Vec<&str> = (item["content"].as_array().into_iter().flatten())
+                    .filter_map(|input| input["text"].as_str())
+                    .collect();
+                out.events.push(AgentEvent::Prompt {
+                    request: id,
+                    text: words.join("\n"),
+                });
+            }
             // quill has the person's words already, a steer's too.
             Some("userMessage") => {}
             Some("agentMessage") if done && !text(&item["text"]).is_empty() => {
@@ -1121,6 +1181,23 @@ impl AgentAdapter for Codex {
         DEFAULT_MODE
     }
 
+    fn options(&self) -> Vec<AgentOption> {
+        vec![AgentOption {
+            key: REMOTE.into(),
+            label: "Remote Control".into(),
+            description: "Run every Codex session in one Codex process that the ChatGPT app on \
+                your phone can reach once it is paired. Sessions use it as they start."
+                .into(),
+            choices: vec![],
+            default: "false".into(),
+        }]
+    }
+
+    fn mux(&self, spec: &SessionSpec) -> Option<Box<dyn Mux>> {
+        let shared = spec.options.get(REMOTE).is_some_and(|v| v == "true");
+        shared.then(|| Box::new(mux::CodexMux::default()) as Box<dyn Mux>)
+    }
+
     // svgl.app's "Codex" icon, recolored to currentColor (the same source as Claude's).
     fn icon(&self) -> Option<&'static str> {
         Some(include_str!("../assets/codex.svg"))
@@ -1305,9 +1382,10 @@ impl AgentAdapter for Codex {
                     ..Self::default()
                 };
                 // quill says who it is (docs/codex.md); the answer starts the rest.
+                // Remote Control and the host's own tools are in the experimental API.
                 vec![self.request(
                     "initialize",
-                    json!({ "clientInfo": client() }),
+                    json!({ "clientInfo": client(), "capabilities": { "experimentalApi": true } }),
                     Pending::Init,
                 )]
             }
@@ -1378,6 +1456,21 @@ impl AgentAdapter for Codex {
                 "mcpServer/oauth/login",
                 json!({ "name": name, "threadId": self.thread }),
                 Pending::McpSignIn(name),
+            )],
+            // Process-wide and runtime-only: quill keeps the person's choice in its own settings
+            // (docs/remote-control.md §3).
+            AgentCommand::Remote { on, .. } => {
+                let method = if on {
+                    "remoteControl/enable"
+                } else {
+                    "remoteControl/disable"
+                };
+                vec![self.request(method, json!({ "ephemeral": true }), Pending::Remote)]
+            }
+            AgentCommand::RemotePair => vec![self.request(
+                "remoteControl/pairing/start",
+                json!({ "manualCode": true }),
+                Pending::Pairing,
             )],
             // `Rewind` restores files, which Codex does not do (`thread/revert` leaves them): they
             // stay quill's snapshots, so `capabilities.rewind` is false. The conversation goes
@@ -1505,6 +1598,27 @@ fn context_categories(last: &Value, window: u64) -> Vec<ContextCategory> {
 }
 
 /// Who quill says it is to Codex: itself, never another client (AGENTS.md).
+/// Whether a phone can reach the app-server, from Codex's status (`disabled`, `connecting`,
+/// `connected`, `errored`).
+fn remote_state(status: &Value) -> AgentEvent {
+    AgentEvent::Remote {
+        on: status == "connecting" || status == "connected",
+        url: None,
+        error: (status == "errored").then(|| "Codex could not reach its relay.".to_owned()),
+    }
+}
+
+/// Why Remote Control could not start, in words for the person. Seen live on 0.163.0: the
+/// enrollment answers 403 "Multi-factor authentication required" for an account without it.
+fn remote_error(error: &str) -> String {
+    if error.contains("Multi-factor authentication required") {
+        return "Your ChatGPT account needs multi-factor authentication for this. Turn it on in \
+            ChatGPT's security settings, then sign in to Codex again."
+            .into();
+    }
+    error.to_owned()
+}
+
 fn client() -> Value {
     json!({ "name": "quill", "title": "quill", "version": env!("CARGO_PKG_VERSION") })
 }

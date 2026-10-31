@@ -16,6 +16,7 @@ const CLOSE: &str = "remote:close";
 const COPY: &str = "remote:copy";
 const ON: &str = "remote:on";
 const OFF: &str = "remote:off";
+const PAIR: &str = "remote:pair";
 
 /// Whether `session`'s agent offers it.
 pub fn offered(session: &Session) -> bool {
@@ -59,7 +60,7 @@ fn turn(ui: &mut Ui, session: &Session, on: bool) -> Vec<Intent> {
 }
 
 pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
-    if ![TOGGLE, OPEN, COMMAND, CLOSE, COPY, ON, OFF].contains(&id) {
+    if ![TOGGLE, OPEN, COMMAND, CLOSE, COPY, ON, OFF, PAIR].contains(&id) {
         return None;
     }
     let shown = if [TOGGLE, OPEN, COMMAND].contains(&id) {
@@ -85,6 +86,9 @@ pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent
         }
         ON => turn(ui, session, true),
         OFF => turn(ui, session, false),
+        PAIR => vec![Intent::RemotePair {
+            session: session.id,
+        }],
         COPY => {
             if let Remote::On(Some(url)) = &session.remote {
                 ui.files_copy = Some(url.clone());
@@ -136,6 +140,12 @@ pub(crate) fn row(session: &Session, ui: &Ui) -> Option<Element> {
     Some(Element::row(parts).gap(8.0).size(None, Some(20.0)))
 }
 
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// The dialog: the link to open the session on another device and its QR code, or what is
 /// in the way.
 pub(crate) fn dialog(store: &Store, ui: &Ui, base: Element) -> Element {
@@ -169,6 +179,38 @@ pub(crate) fn dialog(store: &Store, ui: &Ui, base: Element) -> Element {
                 vec![
                     keyed_button(OFF, "Turn off", "", false, true, palette),
                     keyed_button(COPY, "Copy link", "", false, true, palette),
+                    done,
+                ],
+            )
+        }
+        // An agent that pairs a device once: then it reaches all of the agent's sessions.
+        Remote::On(None)
+            if session
+                .capabilities
+                .as_ref()
+                .is_some_and(|c| c.remote_pairing) =>
+        {
+            let mut body = vec![muted(
+                "Every session of this agent can be reached from a paired phone. To pair one, \
+                 type the code in the agent's app on the phone.",
+            )];
+            body.extend(session.remote_code.as_ref().map(|(code, expires)| {
+                let minutes = expires.saturating_sub(now()).div_ceil(60);
+                Element::column(vec![
+                    center(
+                        text(code.clone())
+                            .font_family(limn::FontFamily::MonospaceBold)
+                            .font_size(30.0),
+                    ),
+                    center(muted(format!("It works for {minutes} more minutes."))),
+                ])
+                .gap(6.0)
+            }));
+            (
+                body,
+                vec![
+                    keyed_button(OFF, "Turn off", "", false, true, palette),
+                    keyed_button(PAIR, "Pair a phone", "", false, true, palette),
                     done,
                 ],
             )
