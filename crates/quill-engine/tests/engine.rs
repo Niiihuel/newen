@@ -1902,3 +1902,135 @@ fn codex_sessions_share_one_app_server_a_phone_can_reach() {
         on.len() == 2
     });
 }
+
+#[test]
+fn what_is_uncommitted_is_read_after_each_step_and_a_burst_is_read_once() {
+    use serde_json::{json, Value};
+    let (engine, rx) = engine();
+    let dir = workdir("simple");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=q", "-c", "user.email=q@q"])
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-qm", "one"]);
+    // The capture: a plain turn whose answer is followed by a command that adds a line, a
+    // permission the test answers when it has seen the read, then three more in a burst.
+    let step = |id: &str, line: &str| {
+        let message = |role: &str, content: Value| {
+            json!({ "dir": "in", "msg": { "type": role, "session_id": "s",
+                "parent_tool_use_id": null, "message": { "role": role, "content": [content] },
+                "tool_use_result": { "stdout": "", "stderr": "", "interrupted": false } } })
+        };
+        let command = format!("printf '{line}\\n' >> a.txt");
+        [
+            message(
+                "assistant",
+                json!({ "type": "tool_use", "id": id, "name": "Bash",
+                    "input": { "command": command } }),
+            ),
+            message(
+                "user",
+                json!({ "type": "tool_result", "tool_use_id": id, "content": "" }),
+            ),
+        ]
+    };
+    let mut steps: Vec<Value> = step("t1", "two").into();
+    steps.push(
+        json!({ "dir": "in", "msg": { "type": "control_request", "request_id": "p2",
+        "request": { "subtype": "can_use_tool", "tool_name": "Bash", "tool_use_id": "t2",
+            "input": { "command": "printf" } } } }),
+    );
+    steps.push(json!({ "dir": "out", "msg": {} }));
+    for (id, line) in [("t2", "three"), ("t3", "four"), ("t4", "five")] {
+        steps.extend(step(id, line));
+    }
+    let mut capture = vec![];
+    for line in std::fs::read_to_string(fixture("simple")).unwrap().lines() {
+        let entry: Value = serde_json::from_str(line).unwrap();
+        if entry["msg"]["type"] == "result" {
+            capture.extend(steps.drain(..).map(|s| s.to_string()));
+        }
+        capture.push(line.to_owned());
+    }
+    let replay = dir.join("capture.jsonl");
+    std::fs::write(&replay, capture.join("\n")).unwrap();
+    std::fs::write(dir.join(".fake-agent"), replay.display().to_string()).unwrap();
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.clone(),
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    engine.send(Intent::Send {
+        session: 1,
+        text: "add lines".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    let counts = |e: &Event| match e {
+        Event::WorkingTree { files, repo, .. } if repo.is_some() => Some(
+            files
+                .iter()
+                .map(|f| (f.path.clone(), f.added, f.removed))
+                .collect::<Vec<_>>(),
+        ),
+        _ => None,
+    };
+    // Nobody asked for it: after the step the engine reads the folder, which waits with the
+    // agent for the person, and reads it once.
+    let first = until(&rx, |e| counts(e).is_some());
+    assert_eq!(
+        first.iter().find_map(counts),
+        Some(vec![("a.txt".to_owned(), 1, 0)])
+    );
+    let mut waiting = first.iter().any(|e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::PermissionRequest { .. },
+                ..
+            }
+        )
+    });
+    while let Ok(e) = rx.recv_timeout(Duration::from_millis(600)) {
+        assert_eq!(counts(&e), None, "one step, one read");
+        waiting |= matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::PermissionRequest { .. },
+                ..
+            }
+        );
+    }
+    assert!(waiting);
+    engine.send(Intent::Decide {
+        session: 1,
+        permission: "p2".into(),
+        decision: Decision::Allow,
+    });
+    // Three steps and the turn's end, each a reason to read, come in a burst that settles
+    // into one read (two, at most, on a busy machine).
+    let mut reads = vec![];
+    until(&rx, |e| {
+        reads.extend(counts(e));
+        reads
+            .last()
+            .is_some_and(|r| r == &[("a.txt".to_owned(), 4, 0)])
+    });
+    while let Ok(e) = rx.recv_timeout(Duration::from_millis(800)) {
+        reads.extend(counts(&e));
+    }
+    assert!(reads.len() <= 2, "{reads:?}");
+    assert_eq!(reads.last(), Some(&vec![("a.txt".to_owned(), 4, 0)]));
+}

@@ -2592,22 +2592,17 @@ impl Ui {
                 }];
             }
         }
-        // A finished turn or step may have changed files: what is uncommitted is asked for
-        // again, so the branch bar's counts follow the work as it happens.
+        // The breakdown follows each step and each turn while it is open, so the first turn
+        // shows its share before it ends (Desktop's waits for the end). What is uncommitted
+        // the engine reads again by itself after each step that changed files.
         if let Event::Agent {
             session,
             event: AgentEvent::TurnFinished { .. } | AgentEvent::ToolResult { .. },
             ..
         } = event
         {
-            if self.selected == Some(*session) {
-                let mut intents = vec![Intent::WorkingTree { session: *session }];
-                // The breakdown follows each step and each turn while it is open, so the first
-                // turn shows its share before it ends (Desktop's waits for the end).
-                if self.context_open() {
-                    intents.push(Intent::ContextUsage { session: *session });
-                }
-                return intents;
+            if self.selected == Some(*session) && self.context_open() {
+                return vec![Intent::ContextUsage { session: *session }];
             }
         }
         vec![]

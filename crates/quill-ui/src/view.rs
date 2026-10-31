@@ -8633,7 +8633,7 @@ fn right_panel(
     ui: &Ui,
     width: f32,
     height: f32,
-    _palette: ComponentPalette,
+    palette: ComponentPalette,
 ) -> Element {
     // The cards leave the scrollbar a gutter of its own at the right, off their edges.
     let inner = width - 26.0;
@@ -8691,6 +8691,14 @@ fn right_panel(
     let changes = if files == 0 {
         muted("Nothing changed yet")
     } else {
+        // Each count rolls to the new one as the agent writes, as the branch bar's do.
+        let count = |key: &str, text: String, color: limn::Color| {
+            limn::RollingNumber::new(format!("panel:{}:{key}", session.id), text, palette)
+                .color(color)
+                .font_size(SMALL)
+                .render()
+                .centered_y()
+        };
         // The row opens the diff, as Desktop's does.
         Element::clickable(
             DIFF_TOGGLE,
@@ -8699,14 +8707,12 @@ fn right_panel(
                     .foreground(look::palette().text)
                     .size(Some(16.0), Some(16.0))
                     .centered_y(),
-                text(format!("+{added}"))
-                    .foreground(look::added())
-                    .font_size(SMALL)
-                    .centered_y(),
-                text(format!("−{removed}"))
-                    .foreground(look::removed())
-                    .font_size(SMALL)
-                    .centered_y(),
+                count("added", format!("+{}", thousands(added)), look::added()),
+                count(
+                    "removed",
+                    format!("\u{2212}{}", thousands(removed)),
+                    look::removed(),
+                ),
             ])
             .gap(8.0)
             .size(None, Some(24.0)),

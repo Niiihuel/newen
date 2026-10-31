@@ -551,6 +551,8 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
 | Connectors ▸ | 219–255 | "1 connected" muted | `Collapsible` (fuera del MVP: puede ocultarse) |
 | Changes ▾ | 262–320 | ícono ± + `+1 −1` + botón "Commit changes" (secundario, deshabilitado mientras corre) | `Card` + `DiffStat` + `Button` `Mini` |
 
+**Cuentas en vivo.** Los `+N −M` de la barra de la rama (sobre el composer, junto a Create PR) y de la tarjeta Changes son lo sin commitear, y cambian mientras el agente escribe código: el motor lo vuelve a leer tras cada paso que tocó archivos (engine.md §8.2) y cada cifra rueda hasta la nueva con `limn::RollingNumber` (cada dígito gira en su columna, conocido por su lugar desde la derecha; con movimiento reducido salta). Las dos escriben las cifras con separador de miles. Sin repositorio, la tarjeta suma lo que cambiaron los pedidos de la sesión.
+
 Medidas: ancho 206, a 4 px del borde derecho, tarjetas radio 8, gap 7, padding horizontal 14, títulos 11 px semibold con chevron. **Flota** sobre el área principal (no desplaza la columna); a anchos chicos debe colapsar a `PeekPanel` (`peek_panel.rs`) para no tapar la columna (regla quill: si `área − 2·206 < 541`, se colapsa).
 
 ### 2.9 Panel de diff
