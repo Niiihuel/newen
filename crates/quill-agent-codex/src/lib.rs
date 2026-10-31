@@ -202,6 +202,8 @@ impl Codex {
         let mut params = json!({
             "cwd": spec.cwd.to_string_lossy(), "approvalPolicy": approval, "sandbox": sandbox,
             "config": thread_config(&spec.servers, &spec.env),
+            // Added to Codex's own instructions, as a developer message.
+            "developerInstructions": quill_agent::WORK_GUIDE,
         });
         if let Some(model) = &self.model {
             params["model"] = json!(model);

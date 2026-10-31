@@ -38,6 +38,10 @@ El contrato cubre CLIs por **stdio con líneas JSON**: Claude Code (stream-json)
 
 Un agente puede correr todas sus sesiones en un solo proceso cuando las opciones de la persona lo piden: `mux(spec)` devuelve un `Mux`, puro como el adaptador, que reparte ese proceso. El motor lo arranca con la primera sesión que lo necesita (`launch` de un spec sin sesión), le pasa cada línea de cada sesión por `outbound` y cada línea del proceso por `inbound`, y cada sesión sigue hablando como si el proceso fuera suyo. Las variables de una sola sesión (el puente de `$BROWSER`) van en `SessionSpec::env`, y el adaptador las pone donde su CLI las toma por sesión. Hoy lo usa Codex para Remote Control ([remote-control.md](remote-control.md) §3).
 
+## Cómo trabajar con la persona (`WORK_GUIDE`)
+
+Cada agente recibe la misma guía, escrita por quill (`quill_agent::WORK_GUIDE`): preguntar con su herramienta de preguntas, con opciones y la recomendada primero, antes de trabajar en algo que deja dudas; proponer un plan antes de un cambio grande o riesgoso (plan mode si lo tiene); llevar una lista de tareas en lo que tiene varios pasos, con un último paso que compruebe el resultado; comprobar antes de decir que algo anda; y cerrar con qué cambió, cómo comprobarlo y qué no se verificó, más una sola pregunta si queda algo por decidir. No nombra herramientas de ningún CLI. Claude Code la recibe primera en `appendSystemPrompt`; Codex, como `developerInstructions` del hilo (al abrirlo, reanudarlo o bifurcarlo; codex 0.163.0 la acepta), que se suman a sus propias instrucciones.
+
 ## Modos de permiso (`modes`, `default_mode`)
 
 El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Full access.

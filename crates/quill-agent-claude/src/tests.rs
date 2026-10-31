@@ -1357,3 +1357,12 @@ fn the_models_are_asked_outside_a_session_with_the_default_named() {
     assert_eq!(default, ["Opus 5.5"]);
     assert!(claude.models_answer("{\"type\":\"system\"}").is_none());
 }
+
+#[test]
+fn a_session_is_told_how_to_work_with_the_user_first() {
+    let mut claude = Claude::new();
+    let line = claude.encode(AgentCommand::Start).remove(0);
+    let asked: Value = serde_json::from_str(&line).unwrap();
+    let prompt = asked["request"]["appendSystemPrompt"].as_str().unwrap();
+    assert!(prompt.starts_with(quill_agent::WORK_GUIDE));
+}

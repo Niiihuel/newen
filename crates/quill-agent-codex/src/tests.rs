@@ -406,6 +406,12 @@ fn a_prompt_before_the_thread_waits_for_it() {
             "turn/start"
         ]
     );
+    // The thread is told how to work with the user.
+    let thread = (run.written.iter()).find(|m| m["method"] == "thread/start");
+    assert_eq!(
+        thread.unwrap()["params"]["developerInstructions"],
+        quill_agent::WORK_GUIDE
+    );
     let turn = run.written.last().unwrap();
     assert_eq!(turn["params"]["effort"], "low");
     assert_eq!(turn["params"]["model"], "gpt-6-luna");

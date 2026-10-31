@@ -1129,6 +1129,11 @@ pub const BROWSER_TOOLS: [(&str, &str, &str); 19] = [
     ),
 ];
 
+/// How an agent is asked to work with the user, in words of quill's own: ask before work that
+/// leaves room for doubt, plan what is large, keep a task list, check, and close with what is
+/// left. Every adapter hands it to its agent.
+pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
+
 /// What an agent is told of the built-in browser, in words of quill's own.
 pub const BROWSER_GUIDE: &str = "# Built-in browser\n\nYou have a browser built into this app, with the browser tools (navigate, read_page, find, get_page_text, form_input, computer, javascript_tool, read_console_messages, read_network_requests, tabs_*). The user sees its tab beside the conversation and can use it too. Use it to check what you build for the web: start the dev server, open it, read the console and the page, act on it, and take a screenshot to show the result instead of asking the user to look. Prefer read_page and find to pick elements by ref; use screenshots to see layout. Local addresses are always allowed; other sites may ask the user first. Do not use it for what a plain fetch answers.";
 

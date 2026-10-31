@@ -8,7 +8,7 @@ use quill_agent::{
     ExtensionOp, FileChange, LaunchPlan, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeWords, ModelInfo, PlanLimits, Plugin, PluginOffer, ProgramRun, SessionSpec, Skill,
     Suggestion, TaskUsage, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource, BROWSER_GUIDE,
-    BROWSER_TOOLS, HOST_TOOLS,
+    BROWSER_TOOLS, HOST_TOOLS, WORK_GUIDE,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -780,7 +780,9 @@ impl AgentAdapter for Claude {
                     "subtype": "initialize",
                     "hooks": { "PostToolUse": [{ "hookCallbackIds": [POST_TOOL_HOOK] }] },
                     "sdkMcpServers": [SERVER, BROWSER_SERVER],
-                    "appendSystemPrompt": format!("{SESSIONS_GUIDE}\n\n{BROWSER_GUIDE}\n\n{LAUNCH_GUIDE}"),
+                    "appendSystemPrompt": format!(
+                        "{WORK_GUIDE}\n\n{SESSIONS_GUIDE}\n\n{BROWSER_GUIDE}\n\n{LAUNCH_GUIDE}"
+                    ),
                 }));
                 self.initialize = Some(self.last_request_id());
                 vec![line]
