@@ -1820,6 +1820,82 @@ fn the_branch_bar_writes_its_counts_with_commas() {
     assert_eq!(view::thousands(1_234_567), "1,234,567");
 }
 
+/// The words a frame shows, in the order drawn: of a rolling digit's column, clipped to a
+/// one-line window, only the digit at rest at the window's top.
+fn shown_words(frame: &limn::Frame) -> String {
+    let (mut clips, mut words) = (vec![], String::new());
+    for command in &frame.commands {
+        match command {
+            limn::DrawCommand::PushClip(rect) => clips.push(*rect),
+            limn::DrawCommand::PopClip => drop(clips.pop()),
+            limn::DrawCommand::Text { text, position, .. } => {
+                let rolled_away = clips.last().is_some_and(|window: &limn::Rect| {
+                    window.height < 20.0 && (position.y - window.y).abs() > 0.5
+                });
+                if !rolled_away {
+                    words.push_str(text);
+                }
+            }
+            _ => {}
+        }
+    }
+    words
+}
+
+#[test]
+fn what_is_uncommitted_rolls_to_each_new_count_in_the_bar_and_the_panel() {
+    use quill_model::{ChangeKind, FileEffect, Repo};
+    let (mut store, mut ui) = store_with_session();
+    let read = |added: u32, removed: u32| Event::WorkingTree {
+        session: 1,
+        files: vec![FileEffect {
+            path: "a.py".into(),
+            kind: ChangeKind::Modified,
+            added,
+            removed,
+            patch: String::new(),
+        }],
+        repo: Some(Repo {
+            branch: "main".into(),
+            remote: None,
+            base: None,
+        }),
+    };
+    let window = limn::Size::new(1408.0, 844.0);
+    // The bar's figures and the panel's: each "+N" followed by its "−M".
+    let times = |frame: &limn::Frame, figures: &str| shown_words(frame).matches(figures).count();
+    let start = std::time::Instant::now();
+    store.apply(read(9, 1));
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    assert_eq!(times(&tree.layout_at(window, start), "+9\u{2212}1"), 2);
+    // A step's read comes in while the agent works: both roll to it, digit by digit.
+    store.apply(read(1_204, 13));
+    tree.set_root(view(&store, &ui, window));
+    tree.layout_at(window, start);
+    assert!(tree.is_animating());
+    let moment = std::time::Duration::from_millis(60);
+    let rolling = tree.layout_at(window, start + moment);
+    assert_eq!(times(&rolling, "+1,204\u{2212}13"), 0);
+    let settled = tree.layout_at(window, start + std::time::Duration::from_secs(3));
+    assert_eq!(times(&settled, "+1,204\u{2212}13"), 2);
+    // The engine reads it after each step by itself: a step asks for nothing.
+    let step = Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::ToolResult {
+            call: "t1".into(),
+            output: String::new(),
+            is_error: false,
+            files: vec![],
+            command: None,
+            web: None,
+        },
+    };
+    assert!(!ui
+        .applied(&step)
+        .contains(&Intent::WorkingTree { session: 1 }));
+}
+
 #[test]
 fn the_effort_thumb_follows_a_drag_and_springs_to_the_level_let_go_at() {
     let (mut store, mut ui) = store_with_session();

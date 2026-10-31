@@ -199,6 +199,38 @@ enum Internal {
     PullRequests,
     /// A session's pull request was merged.
     Merged { session: SessionId },
+    /// A step may have changed files in the session's folder.
+    FilesChanged { session: SessionId },
+}
+
+/// How long a folder is left to settle before it is read: the writes of a step, or of
+/// several tools at once, make one read.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Reads what is uncommitted in `cwd`, off the router's thread, each time it is told to.
+/// What it is told while it settles goes into that read, and what it is told while it reads
+/// makes one read more after it: git never runs twice at once for the session, and reads
+/// never pile up.
+fn follow_tree(session: SessionId, cwd: PathBuf, sink: Sink) -> UnboundedSender<()> {
+    let (tx, mut rx) = unbounded_channel();
+    tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            tokio::time::sleep(SETTLE).await;
+            while rx.try_recv().is_ok() {}
+            let cwd = cwd.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                let files = quill_git::working_changes(&cwd).unwrap_or_default();
+                (files, quill_git::repo(&cwd))
+            });
+            let (files, repo) = read.await.unwrap_or_default();
+            sink(Event::WorkingTree {
+                session,
+                files,
+                repo,
+            });
+        }
+    });
+    tx
 }
 
 /// Whether the computer runs on battery: a battery and no mains or USB supply online. Each
@@ -288,6 +320,8 @@ struct Router {
     sessions: HashMap<SessionId, UnboundedSender<Input>>,
     /// Each session's folder, for what is uncommitted in it.
     folders: HashMap<SessionId, std::path::PathBuf>,
+    /// What reads each session's uncommitted changes again when told to ([`follow_tree`]).
+    trees: HashMap<SessionId, UnboundedSender<()>>,
     /// How each session started, which a fork of it or a session it starts starts as too.
     started: HashMap<SessionId, NewSession>,
     /// Each session's own id at its agent, which a fork continues from.
@@ -478,6 +512,7 @@ impl Router {
             site_waits,
             sessions: HashMap::new(),
             folders: HashMap::new(),
+            trees: HashMap::new(),
             started: HashMap::new(),
             agent_ids,
             modes,
@@ -1719,6 +1754,7 @@ impl Router {
                 let browser = self.browser.clone();
                 tokio::spawn(async move { browser.forget(session).await });
                 self.folders.remove(&session);
+                self.trees.remove(&session);
                 self.started.remove(&session);
                 self.pull_requests.remove(&session);
                 self.archived.remove(&session);
@@ -1745,25 +1781,22 @@ impl Router {
                 return;
             }
             Intent::WorkingTree { session } => {
-                if let Some(cwd) = self.folders.get(&session).cloned() {
-                    let sink = self.sink.clone();
-                    tokio::spawn(async move {
-                        let read = tokio::task::spawn_blocking(move || {
-                            let files = quill_git::working_changes(&cwd).unwrap_or_default();
-                            (files, quill_git::repo(&cwd))
-                        });
-                        let (files, repo) = read.await.unwrap_or_default();
-                        sink(Event::WorkingTree {
-                            session,
-                            files,
-                            repo,
-                        });
-                    });
-                }
+                self.read_tree(session);
                 return;
             }
         };
         self.tell(session, input);
+    }
+
+    /// Read again what is uncommitted in the session's folder, answered by
+    /// `Event::WorkingTree`.
+    fn read_tree(&mut self, session: SessionId) {
+        let Some(cwd) = self.folders.get(&session) else {
+            return;
+        };
+        let tree = (self.trees.entry(session))
+            .or_insert_with(|| follow_tree(session, cwd.clone(), self.sink.clone()));
+        let _ = tree.send(());
     }
 
     /// The person answered a proposal on its card.
@@ -1955,7 +1988,10 @@ impl Router {
                     self.archive(session, true);
                 }
             }
+            // What is uncommitted follows the work as it happens, the branch bar's counts with it.
+            Internal::FilesChanged { session } => self.read_tree(session),
             Internal::TurnEnded { session, text } => {
+                self.read_tree(session);
                 if let Some(url) = quill_model::find_pull_request(&text) {
                     if self.pull_requests.get(&session).map(String::as_str) != Some(url) {
                         self.pull_requests.insert(session, url.to_owned());
@@ -2610,6 +2646,7 @@ impl Actor {
                     request,
                     files,
                 });
+                self.tell(Internal::FilesChanged { session: self.id });
             }
             Ok(Err(error)) => self.status(SessionStatus::Failed(format!("rewind failed: {error}"))),
             Err(_) => {}
@@ -3004,11 +3041,19 @@ impl Actor {
                 }
             }
             let finished = matches!(event, AgentEvent::TurnFinished { .. });
+            // A step that wrote files or ran a command, or work beside the turn that ended,
+            // may have changed the folder.
+            let changed = matches!(&event, AgentEvent::ToolResult { files, command, .. }
+                    if !files.is_empty() || command.is_some())
+                || matches!(event, AgentEvent::TaskEnded { .. });
             (self.sink)(Event::Agent {
                 session: self.id,
                 request: self.running.clone(),
                 event,
             });
+            if changed {
+                self.tell(Internal::FilesChanged { session: self.id });
+            }
             if connect {
                 self.write(AgentCommand::Remote {
                     on: true,

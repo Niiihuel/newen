@@ -71,8 +71,8 @@ impl Shadow {
 
     /// What changed from tree `from` to tree `to`, file by file, with each file's patch.
     pub fn changes(&self, from: &str, to: &str) -> io::Result<Vec<FileEffect>> {
-        let listing = self.git(&["diff-tree", "-r", "-M", "--name-status", from, to])?;
-        effects(&listing, |paths| {
+        let diff = self.git(&["diff", "-M", "--no-color", "--raw", "-p", from, to])?;
+        effects(&diff, |paths| {
             let mut args = vec!["diff", "-M", "--no-color", from, to, "--"];
             args.extend(paths);
             self.git(&args)
@@ -88,16 +88,22 @@ impl Shadow {
     }
 }
 
-/// Files of a `--name-status` listing with their patches, which `patch` writes for the
-/// listed paths.
+/// The files a `git diff --raw -p` names, with their patches: its raw lines
+/// (":<modes> <ids> <status>\t<paths>") list them, and its patch is cut at each file's
+/// "diff --git" line, so a thousand files cost one git process. `patch` writes the patch of
+/// the paths it is given, asked file by file only when the cut does not give one part per
+/// listed file (as with an external diff tool).
 fn effects(
-    listing: &str,
+    diff: &str,
     patch: impl Fn(&[&str]) -> io::Result<String>,
 ) -> io::Result<Vec<FileEffect>> {
-    let mut files = vec![];
-    for line in listing.lines() {
+    let mut listed = vec![];
+    for line in diff.lines().map_while(|line| line.strip_prefix(':')) {
+        let Some(line) = line.splitn(5, ' ').nth(4) else {
+            continue;
+        };
         let parts: Vec<&str> = line.split('\t').collect();
-        let (kind, paths) = match parts.as_slice() {
+        listed.push(match parts.as_slice() {
             [status, path] if status.starts_with('A') => (ChangeKind::Added, vec![*path]),
             [status, path] if status.starts_with('D') => (ChangeKind::Deleted, vec![*path]),
             [status, from_path, path] if status.starts_with('R') => (
@@ -108,8 +114,17 @@ fn effects(
             ),
             [_, path] => (ChangeKind::Modified, vec![*path]),
             _ => continue,
+        });
+    }
+    // A blank line parts the raw lines from the patch.
+    let all = diff.split_once("\n\n").map_or("", |(_, all)| all);
+    let mut parts = split(all, listed.len()).map(Vec::into_iter);
+    let mut files = vec![];
+    for (kind, paths) in listed {
+        let mut patch = match parts.as_mut() {
+            Some(parts) => parts.next().unwrap_or_default(),
+            None => patch(&paths)?,
         };
-        let mut patch = patch(&paths)?;
         let (added, removed) = counts(&patch);
         if patch.len() > PATCH_LIMIT {
             let cut = patch
@@ -130,12 +145,32 @@ fn effects(
     Ok(files)
 }
 
+/// The patch `all` of `count` files cut into each file's own, in the order git lists them:
+/// a part begins at a "diff --git" line, but a type change writes its deletion and its
+/// creation under the same one. `None` when that does not give `count` parts.
+fn split(all: &str, count: usize) -> Option<Vec<String>> {
+    let mut parts: Vec<String> = vec![];
+    let mut header = "";
+    for line in all.split_inclusive('\n') {
+        if line.starts_with("diff --git ") && line != header {
+            header = line;
+            parts.push(String::new());
+        }
+        parts.last_mut()?.push_str(line);
+    }
+    (parts.len() == count).then_some(parts)
+}
+
 /// What is uncommitted in `dir`'s own repository, as Desktop's diff shows "master → working
 /// tree": tracked files against HEAD, each with its patch. Desktop leaves files
 /// git does not track out, and so does this.
 pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
     let git = |args: &[&str]| -> io::Result<String> {
-        let output = Command::new("git").args(args).current_dir(dir).output()?;
+        let output = Command::new("git")
+            .args(["-c", "core.quotePath=false"])
+            .args(args)
+            .current_dir(dir)
+            .output()?;
         // `diff --no-index` answers 1 when the files differ.
         if !output.status.success() && output.status.code() != Some(1) {
             return Err(io::Error::other(
@@ -144,7 +179,7 @@ pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     };
-    let tracked = git(&["diff", "HEAD", "-M", "--name-status"])?;
+    let tracked = git(&["diff", "HEAD", "-M", "--no-color", "--raw", "-p"])?;
     effects(&tracked, |paths| {
         let mut args = vec!["diff", "HEAD", "-M", "--no-color", "--"];
         args.extend(paths);
@@ -305,5 +340,116 @@ mod tests {
             .map(|f| (f.path.as_str(), f.kind.clone(), f.added, f.removed))
             .collect();
         assert_eq!(summary, [("a.py", ChangeKind::Modified, 1, 1)]);
+    }
+
+    #[test]
+    fn one_diff_cut_per_file_reads_as_a_diff_per_file() {
+        let (root, work) = folder("cut");
+        let git = |args: &[&str]| -> String {
+            let output = Command::new("git")
+                .args(["-c", "core.quotePath=false"])
+                .args(["-c", "user.name=q", "-c", "user.email=q@q"])
+                .args(args)
+                .current_dir(&work)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        git(&["init", "-q"]);
+        fs::create_dir_all(work.join("sub")).unwrap();
+        let mut names: Vec<String> = (0..40).map(|i| format!("f{i:02}.txt")).collect();
+        names.extend(
+            [
+                "keep.txt",
+                "gone.txt",
+                "old.txt",
+                "mode.sh",
+                "link",
+                "with space.txt",
+                "ñandú.txt",
+                "sub/b.txt",
+                "sub-c.txt",
+                "sub.d.txt",
+            ]
+            .map(String::from),
+        );
+        for name in &names {
+            fs::write(work.join(name), format!("{name}\nsame\n")).unwrap();
+        }
+        fs::write(work.join("bin.dat"), [0u8, 1, 2, 3]).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        let shadow = Shadow::open(&root, &work).unwrap();
+        let before = shadow.snapshot().unwrap();
+
+        // What an agent leaves: edits, a file made and added, one removed, one moved, a binary
+        // changed, a mode and a type changed.
+        let edited = [
+            "keep.txt",
+            "with space.txt",
+            "ñandú.txt",
+            "sub/b.txt",
+            "sub-c.txt",
+        ];
+        for name in names
+            .iter()
+            .take(40)
+            .step_by(3)
+            .chain(&edited.map(String::from))
+        {
+            fs::write(work.join(name), format!("{name}\nmore\nlines\n")).unwrap();
+        }
+        fs::write(work.join("new.txt"), "fresh\n").unwrap();
+        git(&["add", "new.txt"]);
+        fs::remove_file(work.join("gone.txt")).unwrap();
+        git(&["mv", "old.txt", "moved.txt"]);
+        fs::write(work.join("bin.dat"), [0u8, 9, 9, 9]).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(work.join("mode.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+            fs::remove_file(work.join("link")).unwrap();
+            std::os::unix::fs::symlink("keep.txt", work.join("link")).unwrap();
+        }
+        let after = shadow.snapshot().unwrap();
+
+        // As they were read before: the list, then a `git diff` per file.
+        let cut = working_changes(&work).unwrap();
+        let one_by_one = effects(&git(&["diff", "HEAD", "-M", "--raw"]), |paths| {
+            let mut args = vec!["diff", "HEAD", "-M", "--no-color", "--"];
+            args.extend(paths);
+            Ok(git(&args))
+        })
+        .unwrap();
+        assert_eq!(cut, one_by_one);
+        let changes = shadow.changes(&before, &after).unwrap();
+        let listing = shadow.git(&["diff-tree", "-r", "-M", "--raw", &before, &after]);
+        let one_by_one = effects(&listing.unwrap(), |paths| {
+            let mut args = vec!["diff", "-M", "--no-color", &before, &after, "--"];
+            args.extend(paths);
+            shadow.git(&args)
+        })
+        .unwrap();
+        assert_eq!(changes, one_by_one);
+
+        let file = |path: &str| cut.iter().find(|f| f.path == path).unwrap();
+        let listed: Vec<&str> = cut.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(listed.len(), if cfg!(unix) { 25 } else { 23 }, "{listed:?}");
+        assert_eq!((file("f00.txt").added, file("f00.txt").removed), (2, 1));
+        assert_eq!((file("ñandú.txt").added, file("ñandú.txt").removed), (2, 1));
+        assert_eq!(file("new.txt").kind, ChangeKind::Added);
+        assert_eq!(file("gone.txt").kind, ChangeKind::Deleted);
+        assert_eq!(
+            file("moved.txt").kind,
+            ChangeKind::Renamed {
+                from: "old.txt".into()
+            }
+        );
+        assert!(file("bin.dat").patch.contains("Binary files"));
+        #[cfg(unix)]
+        assert!(file("mode.sh").patch.contains("new mode 100755"));
+        // A session in a folder of the repository reads all of it, as from its top.
+        assert_eq!(working_changes(&work.join("sub")).unwrap(), cut);
     }
 }
