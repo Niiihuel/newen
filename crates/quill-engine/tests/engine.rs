@@ -1919,6 +1919,9 @@ fn what_is_uncommitted_is_read_after_each_step_and_a_burst_is_read_once() {
         assert!(status.success(), "git {args:?}");
     };
     git(&["init", "-q"]);
+    // The replay's own files are not the project's: they would count as new ones.
+    let replay_files = "capture.jsonl\n.fake-agent\n.fake-launch\n";
+    std::fs::write(dir.join(".git/info/exclude"), replay_files).unwrap();
     std::fs::write(dir.join("a.txt"), "one\n").unwrap();
     git(&["add", "a.txt"]);
     git(&["commit", "-qm", "one"]);

@@ -47,6 +47,9 @@ pub const REWIND_UNDO: &str = "rewind:undo";
 pub const MODE_MENU: &str = "mode-menu";
 pub const MODEL_MENU: &str = "model-menu";
 pub const DIFF_TOGGLE: &str = "diff:toggle";
+/// The Changes card's counts: they show the diff, as the top bar's button does, and are a
+/// control of their own, heard as the figures they show.
+pub const CHANGES_ROW: &str = "panel:changes:open";
 /// "open-file:<line>:<path>": a file the agent changed, to show in the editor at that line;
 /// a path from the session's folder or absolute.
 /// A changed file of the diff: folded away, opened in the Files pane at a line
@@ -6584,6 +6587,37 @@ fn logo_tile(logo: &limn::RasterImage, side: f32) -> Element {
     .centered_y()
 }
 
+/// Lines added and removed as figures that count up or down to each new one on the frames
+/// between, rounded on each, as Desktop's do; under reduced motion they change at once. `key`
+/// keeps their counts across rebuilds.
+fn counting(key: &str, added: u32, removed: u32, size: f32) -> [Element; 2] {
+    let figure = |what: &str, value: u32, format: fn(f32) -> String, color: limn::Color| {
+        Element::rolling_number(format!("{key}:{what}"), value as f32, format)
+            .foreground(color)
+            .font_size(size)
+            .centered_y()
+    };
+    [
+        figure(
+            "added",
+            added,
+            |n| format!("+{}", thousands(n.round() as u32)),
+            look::added(),
+        ),
+        figure(
+            "removed",
+            removed,
+            |n| format!("\u{2212}{}", thousands(n.round() as u32)),
+            look::removed(),
+        ),
+    ]
+}
+
+/// What [`counting`] counts to, as a screen reader says it while the figures move.
+fn counted(added: u32, removed: u32) -> String {
+    format!("+{} \u{2212}{}", thousands(added), thousands(removed))
+}
+
 /// A count with commas between its thousands, as the branch bar writes them.
 pub(crate) fn thousands(n: u32) -> String {
     let digits = n.to_string();
@@ -6812,7 +6846,7 @@ fn bar_chip(content: Element) -> Element {
 }
 
 /// The bar over a session's composer, as the person's Desktop keeps it: the folder and its branch, the lines added and
-/// removed since the last commit rolling to each new count, the pull
+/// removed since the last commit counting to each new figure, the pull
 /// request in the kind last chosen, and a close. It shows while the folder is a repository.
 fn branch_bar(
     session: &Session,
@@ -6844,32 +6878,23 @@ fn branch_bar(
         .flatten()
         .fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
     if added + removed > 0 && column >= 420.0 {
-        let count = |key: &str, text: String, color: limn::Color| {
-            limn::RollingNumber::new(format!("bar:{}:{key}", session.id), text, palette)
-                .color(color)
-                .font_size(BODY)
-                .render()
-                .centered_y()
-        };
+        let mut figures = vec![hgap(6.0)];
+        figures.extend(counting(
+            &format!("bar:{}", session.id),
+            added,
+            removed,
+            BODY,
+        ));
+        figures.push(hgap(6.0));
         // A click shows the diff, with Desktop's tooltip.
         let counts = ComponentPalette {
             hover: look::branch_chip_hover(),
             ..palette
         }
-        .interactive_surface(Element::clickable(
-            VIEW_CHANGES,
-            Element::row(vec![
-                hgap(6.0),
-                count("added", format!("+{}", thousands(added)), look::added()),
-                count(
-                    "removed",
-                    format!("\u{2212}{}", thousands(removed)),
-                    look::removed(),
-                ),
-                hgap(6.0),
-            ])
-            .gap(4.0),
-        ))
+        .interactive_surface(
+            Element::clickable(VIEW_CHANGES, Element::row(figures).gap(4.0))
+                .accessibility_label(counted(added, removed)),
+        )
         .size(None, Some(28.0));
         row.push(bar_chip(
             limn::Tooltip::new(counts, VIEW_CHANGES, "View changes", look::palette()).render(),
@@ -8420,8 +8445,12 @@ fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Eleme
             .centered_y(),
         text(name).foreground(look::command_ink()).centered_y(),
     ];
+    // A file with no lines to show says why: a binary one, or one too long to show (a new
+    // file past its limit keeps its count).
     if row.binary {
         words.push(muted("Binary file").font_size(SMALL).centered_y());
+    } else if !row.body && row.added + row.removed > 0 {
+        words.push(muted("Too large to show").font_size(SMALL).centered_y());
     }
     let words = Element::row(words).gap(6.0).size(None, Some(32.0));
     // The caret and the name fold the file's lines away and back, as Desktop's band does.
@@ -8753,7 +8782,7 @@ fn right_panel(
     ui: &Ui,
     width: f32,
     height: f32,
-    palette: ComponentPalette,
+    _palette: ComponentPalette,
 ) -> Element {
     // The cards leave the scrollbar a gutter of its own at the right, off their edges.
     let inner = width - 26.0;
@@ -8811,32 +8840,22 @@ fn right_panel(
     let changes = if files == 0 {
         muted("Nothing changed yet")
     } else {
-        // Each count rolls to the new one as the agent writes, as the branch bar's do.
-        let count = |key: &str, text: String, color: limn::Color| {
-            limn::RollingNumber::new(format!("panel:{}:{key}", session.id), text, palette)
-                .color(color)
-                .font_size(SMALL)
-                .render()
-                .centered_y()
-        };
+        let mut row = vec![Element::icon(icons::of(icons::DIFF))
+            .foreground(look::palette().text)
+            .size(Some(16.0), Some(16.0))
+            .centered_y()];
+        row.extend(counting(
+            &format!("panel:{}", session.id),
+            added,
+            removed,
+            SMALL,
+        ));
         // The row opens the diff, as Desktop's does.
         Element::clickable(
-            DIFF_TOGGLE,
-            Element::row(vec![
-                Element::icon(icons::of(icons::DIFF))
-                    .foreground(look::palette().text)
-                    .size(Some(16.0), Some(16.0))
-                    .centered_y(),
-                count("added", format!("+{}", thousands(added)), look::added()),
-                count(
-                    "removed",
-                    format!("\u{2212}{}", thousands(removed)),
-                    look::removed(),
-                ),
-            ])
-            .gap(8.0)
-            .size(None, Some(24.0)),
+            CHANGES_ROW,
+            Element::row(row).gap(8.0).size(None, Some(24.0)),
         )
+        .accessibility_label(counted(added, removed))
     };
     let mut cards = vec![
         panel_card(

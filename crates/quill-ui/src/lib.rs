@@ -3582,7 +3582,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         ui.panel_open = !ui.panel_open;
         return vec![];
     }
-    if id == view::DIFF_TOGGLE {
+    if id == view::DIFF_TOGGLE || id == view::CHANGES_ROW {
         // Desktop's diff is what is uncommitted, "master → working tree".
         if ui.pane_open(Pane::Diff) {
             ui.close_pane(Pane::Diff);

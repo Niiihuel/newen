@@ -2076,30 +2076,8 @@ fn the_branch_bar_writes_its_counts_with_commas() {
     assert_eq!(view::thousands(1_234_567), "1,234,567");
 }
 
-/// The words a frame shows, in the order drawn: of a rolling digit's column, clipped to a
-/// one-line window, only the digit at rest at the window's top.
-fn shown_words(frame: &limn::Frame) -> String {
-    let (mut clips, mut words) = (vec![], String::new());
-    for command in &frame.commands {
-        match command {
-            limn::DrawCommand::PushClip(rect) => clips.push(*rect),
-            limn::DrawCommand::PopClip => drop(clips.pop()),
-            limn::DrawCommand::Text { text, position, .. } => {
-                let rolled_away = clips.last().is_some_and(|window: &limn::Rect| {
-                    window.height < 20.0 && (position.y - window.y).abs() > 0.5
-                });
-                if !rolled_away {
-                    words.push_str(text);
-                }
-            }
-            _ => {}
-        }
-    }
-    words
-}
-
 #[test]
-fn what_is_uncommitted_rolls_to_each_new_count_in_the_bar_and_the_panel() {
+fn what_is_uncommitted_counts_to_each_new_figure_in_the_bar_and_the_panel() {
     use quill_model::{ChangeKind, FileEffect, Repo};
     let (mut store, mut ui) = store_with_session();
     let read = |added: u32, removed: u32| Event::WorkingTree {
@@ -2118,22 +2096,55 @@ fn what_is_uncommitted_rolls_to_each_new_count_in_the_bar_and_the_panel() {
         }),
     };
     let window = limn::Size::new(1408.0, 844.0);
-    // The bar's figures and the panel's: each "+N" followed by its "−M".
-    let times = |frame: &limn::Frame, figures: &str| shown_words(frame).matches(figures).count();
+    // The figures drawn, the bar's and the panel's, in order.
+    let figures = |frame: &limn::Frame| {
+        let mut drawn: Vec<String> = (frame.commands.iter())
+            .filter_map(|command| match command {
+                limn::DrawCommand::Text { text, .. } if text.starts_with(['+', '\u{2212}']) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        drawn.sort();
+        drawn
+    };
+    // What a screen reader hears of the bar's control and the panel's.
+    let heard = |frame: &limn::Frame| {
+        (frame.access.iter())
+            .filter(|node| node.id == view::VIEW_CHANGES || node.id == view::CHANGES_ROW)
+            .map(|node| node.name.clone())
+            .collect::<Vec<_>>()
+    };
     let start = std::time::Instant::now();
     store.apply(read(9, 1));
     let mut tree = UiTree::new(view(&store, &ui, window));
-    assert_eq!(times(&tree.layout_at(window, start), "+9\u{2212}1"), 2);
-    // A step's read comes in while the agent works: both roll to it, digit by digit.
+    let frame = tree.layout_at(window, start);
+    assert_eq!(figures(&frame), ["+9", "+9", "\u{2212}1", "\u{2212}1"]);
+    assert_eq!(heard(&frame), ["+9 \u{2212}1", "+9 \u{2212}1"]);
+    // A step's read comes in while the agent works: both count up to it, a whole number on
+    // every frame, and are heard as what they count to.
     store.apply(read(1_204, 13));
     tree.set_root(view(&store, &ui, window));
     tree.layout_at(window, start);
-    assert!(tree.is_animating());
-    let moment = std::time::Duration::from_millis(60);
-    let rolling = tree.layout_at(window, start + moment);
-    assert_eq!(times(&rolling, "+1,204\u{2212}13"), 0);
-    let settled = tree.layout_at(window, start + std::time::Duration::from_secs(3));
-    assert_eq!(times(&settled, "+1,204\u{2212}13"), 2);
+    let counting = tree.layout_at(window, start + std::time::Duration::from_millis(100));
+    let between = figures(&counting);
+    let added: u32 = between[0][1..].replace(',', "").parse().unwrap();
+    assert!(added > 9 && added < 1_204, "{between:?}");
+    assert_eq!(heard(&counting), ["+1,204 \u{2212}13", "+1,204 \u{2212}13"]);
+    let counted = tree.layout_at(window, start + std::time::Duration::from_secs(2));
+    assert_eq!(
+        figures(&counted),
+        ["+1,204", "+1,204", "\u{2212}13", "\u{2212}13"]
+    );
+    // Under reduced motion the figures change at once.
+    let mut still = UiTree::new(view(&store, &ui, window));
+    still.set_reduced_motion(true);
+    still.layout_at(window, start);
+    store.apply(read(30, 2));
+    still.set_root(view(&store, &ui, window));
+    let frame = still.layout_at(window, start);
+    assert_eq!(figures(&frame), ["+30", "+30", "\u{2212}2", "\u{2212}2"]);
     // The engine reads it after each step by itself: a step asks for nothing.
     let step = Event::Agent {
         session: 1,
@@ -7712,18 +7723,21 @@ fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
 #[test]
 fn a_diff_opens_its_files_and_a_large_one_starts_folded() {
     let (mut store, mut ui) = store_with_session();
-    let file = |n: usize| quill_model::FileEffect {
+    let file = |n: usize| {
+        quill_model::FileEffect {
         path: format!("src/f{n}.txt"),
         kind: quill_model::ChangeKind::Added,
         added: 1,
         removed: 0,
-        // The first is an image: git has no lines for it.
-        patch: if n == 0 {
-            "diff --git a/src/f0.txt b/src/f0.txt\nBinary files /dev/null and b/src/f0.txt differ\n"
-                .into()
-        } else {
-            format!("@@ -0,0 +1 @@\n+line-{n}\n")
+        // The first is an image: git has no lines for it. The second is a new file too long
+        // to show: it keeps its count and has no hunk.
+        patch: match n {
+            0 => "diff --git a/src/f0.txt b/src/f0.txt\nBinary files /dev/null and b/src/f0.txt differ\n"
+                .into(),
+            1 => "diff --git a/src/f1.txt b/src/f1.txt\nnew file mode 100644\n".into(),
+            _ => format!("@@ -0,0 +1 @@\n+line-{n}\n"),
         },
+    }
     };
     for (request, count) in [("r1", 15), ("r2", 301)] {
         store.apply(Event::Changes {
@@ -7750,8 +7764,9 @@ fn a_diff_opens_its_files_and_a_large_one_starts_folded() {
     assert!(drawn(&ui, "line-2"));
     assert!(drawn(&ui, "line-14"));
     assert!(drawn(&ui, "Binary file"));
+    assert!(drawn(&ui, "Too large to show"));
     assert!(folds(&ui, "src/f2.txt"));
-    assert!(!folds(&ui, "src/f0.txt"));
+    assert!(!folds(&ui, "src/f0.txt") && !folds(&ui, "src/f1.txt"));
     // Over 300 files, every file starts folded and the pane says so; a click opens one.
     click(&store, &mut ui, "changes:r2:view");
     settle(&store, &mut ui);
