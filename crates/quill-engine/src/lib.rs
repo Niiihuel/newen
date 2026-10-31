@@ -1037,6 +1037,7 @@ impl Router {
         self.inject(&mut actor);
         actor.shadow_root = self.config.snapshots.clone();
         actor.route = Some(self.internal.clone());
+        actor.remote_at_start = self.settings.remote_new_sessions;
         if let Some((from, at)) = fork_of {
             // Without an id of its own yet, the parent has no conversation to continue.
             let mut ids = self.agent_ids.lock().unwrap();
@@ -1256,6 +1257,9 @@ impl Router {
                 session,
                 Input::Command(AgentCommand::McpToggle { name, enabled }),
             ),
+            Intent::Remote { session, on, name } => {
+                (session, Input::Command(AgentCommand::Remote { on, name }))
+            }
             Intent::Rewind { session, request } => (session, Input::Rewind(request)),
             Intent::RewindTo {
                 session,
@@ -2263,6 +2267,10 @@ struct Actor {
     steers: bool,
     /// Its skills were asked for the `/` menu, once the agent was ready.
     skills_asked: bool,
+    /// The session can be reached from another device, as the agent last said.
+    remote: bool,
+    /// Make it reachable once the agent is ready (Settings' new sessions).
+    remote_at_start: bool,
 }
 
 impl Actor {
@@ -2312,6 +2320,8 @@ impl Actor {
             held: false,
             steers: false,
             skills_asked: false,
+            remote: false,
+            remote_at_start: false,
         }
     }
 
@@ -2614,6 +2624,22 @@ impl Actor {
             let _ = child.kill().await;
         }
         self.generation += 1;
+        self.remote_gone();
+    }
+
+    /// The agent's process ended, and the other device lost the session with it.
+    fn remote_gone(&mut self) {
+        if std::mem::take(&mut self.remote) {
+            (self.sink)(Event::Agent {
+                session: self.id,
+                request: None,
+                event: AgentEvent::Remote {
+                    on: false,
+                    url: None,
+                    error: None,
+                },
+            });
+        }
     }
 
     fn status(&self, status: SessionStatus) {
@@ -2663,6 +2689,13 @@ impl Actor {
                     match &command {
                         AgentCommand::SetModel(model) => self.spec.model = Some(model.clone()),
                         AgentCommand::SetEffort(effort) => self.spec.effort = Some(effort.clone()),
+                        // Reaching the session from another device needs its agent running.
+                        AgentCommand::Remote { on: true, .. } => {
+                            if let Err(error) = self.ensure_running().await {
+                                self.status(SessionStatus::Failed(error));
+                                continue;
+                            }
+                        }
                         _ => {}
                     }
                     let decided = match &command {
@@ -2684,6 +2717,7 @@ impl Actor {
                 }
                 Input::Exited { generation, code } if generation == self.generation => {
                     self.process = None;
+                    self.remote_gone();
                     self.running = None;
                     self.busy = false;
                     self.tell(Internal::Busy {
@@ -2822,6 +2856,34 @@ impl Actor {
                 });
                 continue;
             }
+            // A message from another device is the person's, kept and shown as if typed here,
+            // and what its turn changes is its own.
+            if let AgentEvent::Prompt { request, text } = event {
+                self.unrewind = None;
+                // shortcut: the folder is read once the agent tells of the message, which may
+                // be after its first step; reading it at the agent's own start needs its id first.
+                if self.sent.is_empty() {
+                    self.start = self.snapshot().await;
+                }
+                self.sent.push_back(request.clone());
+                (self.sink)(Event::Queued {
+                    session: self.id,
+                    request,
+                    text,
+                    at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_secs()),
+                    images: vec![],
+                });
+                self.busy = true;
+                self.tell(Internal::Busy {
+                    session: self.id,
+                    busy: true,
+                });
+                self.status(SessionStatus::Running);
+                continue;
+            }
             let mut event = event;
             if let AgentEvent::Text {
                 text, parent, at, ..
@@ -2846,12 +2908,18 @@ impl Actor {
                 // A prompt sent while the agent was starting keeps the session running.
                 AgentEvent::Ready { .. } if !self.busy => self.status(SessionStatus::Idle),
                 AgentEvent::PermissionRequest { .. } => self.status(SessionStatus::Awaiting),
+                // Answered on another device: the turn goes on without the card.
+                AgentEvent::Withdrawn { .. } => self.status(SessionStatus::Running),
+                AgentEvent::Remote { on, .. } => self.remote = *on,
                 // A server's sign-in page opens in the person's browser, as Desktop opens it; only a secure address.
                 AgentEvent::McpSignIn { url: Some(url), .. } if url.starts_with("https://") => {
                     let _ = quill_files::open_in_system(url);
                 }
                 _ => {}
             }
+            // Settings' new sessions are reachable from another device from their start.
+            let connect = matches!(&event, AgentEvent::Ready { capabilities, .. } if capabilities.remote)
+                && std::mem::take(&mut self.remote_at_start);
             if let AgentEvent::Ready { capabilities, .. } = &event {
                 self.steers = capabilities.steer;
                 // An agent whose commands do not name its skills is asked for them apart, so
@@ -2876,6 +2944,13 @@ impl Actor {
                 request: self.running.clone(),
                 event,
             });
+            if connect {
+                self.write(AgentCommand::Remote {
+                    on: true,
+                    name: None,
+                })
+                .await;
+            }
             if finished {
                 self.attribute().await;
                 self.running = None;

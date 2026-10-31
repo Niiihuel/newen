@@ -187,6 +187,10 @@ pub struct AgentCapabilities {
     /// The agent can take a message into a turn already running.
     #[serde(default)]
     pub steer: bool,
+    /// The person can reach the session from another device (a phone, the web) through the
+    /// agent's own service ([`AgentCommand::Remote`]).
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// One MCP server a session's agent loaded, as the agent reports it.
@@ -662,6 +666,22 @@ pub enum AgentEvent {
         url: Option<String>,
         error: Option<String>,
     },
+    /// Whether the session can be reached from another device, and where it opens there
+    /// (unknown when the agent connected by itself); `error` says why it is off.
+    Remote {
+        on: bool,
+        url: Option<String>,
+        error: Option<String>,
+    },
+    /// The agent no longer waits for this permission: another device answered it.
+    Withdrawn {
+        id: String,
+    },
+    /// A message the person sent from another device, which the agent took as `request`.
+    Prompt {
+        request: String,
+        text: String,
+    },
     /// The agent calls one of quill's own tools, the ones that start and propose other
     /// sessions ([`HOST_TOOLS`]). The engine answers with [`AgentCommand::HostToolResult`].
     HostTool {
@@ -747,6 +767,12 @@ pub enum AgentCommand {
     ReloadPlugins,
     /// Load the skills again, after one's state changed.
     ReloadSkills,
+    /// Let the person reach the session from another device, listed there as `name`, or stop
+    /// ([`AgentCapabilities::remote`]); answered by [`AgentEvent::Remote`].
+    Remote {
+        on: bool,
+        name: Option<String>,
+    },
     /// The answer to an [`AgentEvent::HostTool`] call.
     HostToolResult {
         id: String,

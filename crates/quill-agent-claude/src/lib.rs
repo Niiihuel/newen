@@ -56,6 +56,12 @@ pub struct Claude {
     /// quill's tool calls waiting for the engine: the control request's id and the JSON-RPC id
     /// the answer goes back under.
     host_calls: HashMap<String, Value>,
+    /// The `remote_control` request waiting for its answer, and whether it turns it on.
+    remote_request: Option<(String, bool)>,
+    /// Remote Control is on, as the CLI last said.
+    remote: bool,
+    /// quill's own prompts, until the CLI echoes them back (`--replay-user-messages`).
+    prompts: std::collections::HashSet<String>,
 }
 
 impl Claude {
@@ -301,6 +307,9 @@ impl AgentAdapter for Claude {
             "--thinking-display",
             "summarized",
             "--setting-sources=user,project,local",
+            // Without it a message sent from the phone over Remote Control reaches quill as
+            // its id alone (2.1.316 [F:remote]).
+            "--replay-user-messages",
         ]
         .map(String::from)
         .into();
@@ -780,6 +789,7 @@ impl AgentAdapter for Claude {
                     })
                     .collect();
                 content.push(json!({ "type": "text", "text": text }));
+                self.prompts.insert(request.clone());
                 let mut msg = json!({
                     "type": "user", "uuid": request, "session_id": "", "parent_tool_use_id": null,
                     "message": { "role": "user", "content": content },
@@ -866,6 +876,16 @@ impl AgentAdapter for Claude {
                 vec![self.request(json!({ "subtype": "reload_plugins" }))]
             }
             AgentCommand::ReloadSkills => vec![self.request(json!({ "subtype": "reload_skills" }))],
+            // Verified on 2.1.316 [F:remote]: on answers `session_url`, off an empty success.
+            AgentCommand::Remote { on, name } => {
+                let mut request = json!({ "subtype": "remote_control", "enabled": on });
+                if let Some(name) = name.filter(|_| on) {
+                    request["name"] = json!(name);
+                }
+                let line = self.request(request);
+                self.remote_request = Some((self.last_request_id(), on));
+                vec![line]
+            }
             AgentCommand::HostToolResult {
                 id,
                 content,
@@ -913,6 +933,17 @@ impl AgentAdapter for Claude {
                     self.ready = Some(ready(&body, self.ultracode));
                     decoded.events.extend(self.ready.clone());
                 }
+                if let Some((_, on)) = self.remote_request.take_if(|(request, _)| *request == id) {
+                    if ok {
+                        self.remote = on;
+                    }
+                    decoded.events.push(AgentEvent::Remote {
+                        on: self.remote,
+                        url: body["session_url"].as_str().map(str::to_owned),
+                        error: (!ok).then(|| text(&response["error"])),
+                    });
+                    return decoded;
+                }
                 if let Some(server) = self.sign_ins.remove(&id) {
                     let url = (body["authUrl"].as_str())
                         .filter(|_| body["requiresUserAction"] != false)
@@ -957,10 +988,28 @@ impl AgentAdapter for Claude {
                 self.control_request(msg["request_id"].clone(), &msg["request"], &mut decoded)
             }
             ("control_cancel_request", _) => {
-                // The CLI no longer waits for this decision; the engine drops its card.
-                self.pending
-                    .remove(msg["request_id"].as_str().unwrap_or_default());
-                decoded.events.push(AgentEvent::Unknown(msg));
+                // The CLI no longer waits for this decision: another client answered it (a
+                // permission approved on the phone, 2.1.316 [F:remote]) or the turn ended.
+                let id = text(&msg["request_id"]);
+                if self.pending.remove(&id).is_some() {
+                    decoded.events.push(AgentEvent::Withdrawn { id });
+                } else {
+                    decoded.events.push(AgentEvent::Unknown(msg));
+                }
+            }
+            // Verified on 2.1.316 [F:remote]: `ready`, then `connected`, once it is turned on.
+            ("system", Some("bridge_state"))
+                if msg["state"] == "ready" || msg["state"] == "connected" =>
+            {
+                // Connected without being asked: a resumed session reconnects by itself, as
+                // the CLI's docs say (inferred for quill's launch).
+                if self.remote_request.is_none() && !std::mem::replace(&mut self.remote, true) {
+                    decoded.events.push(AgentEvent::Remote {
+                        on: true,
+                        url: None,
+                        error: None,
+                    });
+                }
             }
             ("system", Some("init")) => {
                 decoded.events.push(AgentEvent::Session {
@@ -1115,6 +1164,21 @@ impl AgentAdapter for Claude {
                         }
                         _ => {}
                     }
+                }
+            }
+            // A message from another device comes back as quill's own do, but as a person's
+            // and under an id quill never sent (2.1.316 [F:remote]).
+            ("user", _) if msg["isReplay"] == true => {
+                let request = text(&msg["uuid"]);
+                if !self.prompts.remove(&request) && msg["origin"]["kind"] == "human" {
+                    let text = match &msg["message"]["content"] {
+                        Value::String(text) => text.clone(),
+                        blocks => (blocks.as_array().into_iter().flatten())
+                            .filter_map(|block| block["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    };
+                    decoded.events.push(AgentEvent::Prompt { request, text });
                 }
             }
             ("user", _) => {
@@ -1369,6 +1433,7 @@ fn ready(body: &Value, ultracode: bool) -> AgentEvent {
             thinking_text: true,
             steer: true,
             commands: slash_commands(&body["commands"]),
+            remote: body["remote_control_available"] == true,
             plan: body["account"]["subscriptionType"]
                 .as_str()
                 .map(str::to_owned),

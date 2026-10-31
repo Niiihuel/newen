@@ -272,6 +272,9 @@ pub struct Settings {
     /// Download a new version of quill in the background once one is out; installing always
     /// waits for the person. A mandatory version downloads whatever this says.
     pub auto_update: bool,
+    /// Make every new session reachable from another device as it starts, for agents that
+    /// offer it (Desktop's "Connect new sessions to Remote Control").
+    pub remote_new_sessions: bool,
 }
 
 impl Default for Settings {
@@ -311,6 +314,7 @@ impl Default for Settings {
             agents: Default::default(),
             logos: true,
             auto_update: true,
+            remote_new_sessions: false,
         }
     }
 }
@@ -602,6 +606,12 @@ pub enum Intent {
         session: SessionId,
         name: String,
         enabled: bool,
+    },
+    /// Let the person reach the session from another device, listed there as `name`, or stop.
+    Remote {
+        session: SessionId,
+        on: bool,
+        name: Option<String>,
     },
     /// What is uncommitted in the session's folder, answered by `Event::WorkingTree`.
     WorkingTree {

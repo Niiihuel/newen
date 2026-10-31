@@ -77,6 +77,8 @@ impl Store {
                     | AgentEvent::ContextUsage(_)
                     | AgentEvent::McpServers(_)
                     | AgentEvent::McpSignIn { .. }
+                    // Reachable from another device only while its agent runs.
+                    | AgentEvent::Remote { .. }
             ),
             _ => true,
         }

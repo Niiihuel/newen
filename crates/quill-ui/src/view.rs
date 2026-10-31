@@ -585,6 +585,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
     let root = marketplace_dialog(ui, root, palette);
     let root = server_dialog(ui, root, palette);
     let root = skill_dialog(ui, root, palette);
+    let root = crate::remote::dialog(store, ui, root);
     let root = crate::updates::dialogs(ui, root, palette);
     let root = crate::account::dialogs(ui, root);
     let root = crate::github::dialogs(ui, root);
@@ -8300,6 +8301,7 @@ fn right_panel(
             text(branch.clone()),
         ));
     }
+    environment.extend(crate::remote::row(session, ui));
     // How full the context is, as Desktop's percentage and bar while the card is folded: the
     // window comes from the agent's own report of its model.
     let share = (session.context_window > 0)
@@ -9419,6 +9421,11 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                             "Keep awake on battery power",
                             "",
                             setting_switch("keep_awake_battery", s.keep_awake_on_battery, palette),
+                        ),
+                        setting(
+                            "Connect new sessions to Remote Control",
+                            "Reach every new session from your phone or a browser as it starts, when its agent offers it. Each session's switch is in its Environment card.",
+                            setting_switch("remote_new", s.remote_new_sessions, palette),
                         ),
                         // Desktop's own words and choices.
                         setting(

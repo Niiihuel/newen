@@ -76,6 +76,7 @@ claude --output-format stream-json --verbose --input-format stream-json
        --include-partial-messages
        --thinking-display summarized
        --setting-sources=user,project,local
+       --replay-user-messages                        # los mensajes del celular (remote-control.md)
        --permission-mode <mode>
        [--model <model>] [--effort <level>]
        [--session-id=<uuid>]                         # primer spawn
@@ -158,7 +159,8 @@ Envoltorio (en ambos sentidos):
 | `get_context_usage` | — | uso de contexto | post-MVP |
 | `get_skills_dialog`, `reload_plugins` | — | `{skills: [{name, display_name, description, source, tokens, state, locked_by?, advertised, handles}]}`; `{commands, agents, plugins, mcpServers, error_count}` (2.1.311) | **sí**: los skills, desde un arranque corto del CLI en `$HOME` sin prompt (`Intent::Extensions`); `reload_plugins` a las sesiones corriendo cuando cambia un plugin |
 | `mcp_status`, `mcp_reconnect`, `mcp_toggle`, `mcp_authenticate`, `mcp_clear_auth` | —; `serverName`; `serverName`, `enabled`; `serverName` (sin `redirectUri`: el CLI escucha en localhost); `serverName` | `{mcpServers: [{name, status, scope, source, error?, tools?…}]}`; `null`; — (verificado en 2.1.311, fixture `2.1.311/extensions`) | **sí** (`/mcp`, ui.md §2.11b) |
-| `rename_session`, `generate_session_title`, `side_question`, `seed_read_state`, `set_cwd`, otros `mcp_*`, `get_settings`, `update_settings`, `list_permission_rules`, `remote_control` | varios | varios | no |
+| `remote_control` | `enabled`, `name?` | encendido: `{session_url, connect_url, environment_id, bridge_epoch, bridge_session_id}`; apagado: success sin cuerpo (verificado en 2.1.316, fixture `2.1.316/remote`) | **sí** ([remote-control.md](remote-control.md)) |
+| `rename_session`, `generate_session_title`, `side_question`, `seed_read_state`, `set_cwd`, otros `mcp_*`, `get_settings`, `update_settings`, `list_permission_rules` | varios | varios | no |
 
 **Plugins, marketplaces y skills fuera de la sesión.** Se manejan con los comandos del CLI, sin editar sus archivos. Las salidas `--json` están en `fixtures/2.1.311/README.md`.
 - **Listar:** `claude plugin list --json --available` y `claude plugin marketplace list --json`.
@@ -175,7 +177,7 @@ El adaptador dice qué correr (`AgentAdapter::plugins_query`, `marketplaces_quer
 | `mcp_message` | `server_name`, `message` (JSON-RPC) | `{mcp_response}` | post-MVP (tools propias, p. ej. terminal) |
 | `elicitation` | `mcp_server_name`, `message`, `mode`, `url`, `elicitation_id`, `requested_schema` | decline *(inferido)* | responder decline |
 | `request_user_dialog` | `dialog_kind`, `payload`, `tool_use_id` | según `supportedDialogKinds` | declarar `[]` y responder error |
-| `oauth_token_refresh`, `host_auth_token_refresh`, `remote_control_work_secret` | — | — | error (auth delegada al CLI) |
+| `oauth_token_refresh`, `host_auth_token_refresh`, `remote_control_work_secret` | — | — | error (auth delegada al CLI; con Remote Control prendido desde quill no llegó ninguno, 2.1.316) |
 
 Reglas de transporte (SDK):
 

@@ -118,8 +118,6 @@ pub fn annotated_png(
 
 /// The image at most `side` px on each side, as limn takes it.
 fn scaled(path: &Path, side: u32) -> Option<RasterImage> {
-    use base64::Engine;
-    use sha2::Digest;
     const LIMN_CAP: usize = 8 * 1024 * 1024;
     let decoded = image::ImageReader::open(path)
         .ok()?
@@ -140,12 +138,22 @@ fn scaled(path: &Path, side: u32) -> Option<RasterImage> {
         decoded.to_rgb8().write_with_encoder(encoder).ok()?;
         (RasterImageFormat::Jpeg, jpeg.into_inner())
     };
-    let digest: String = sha2::Sha256::digest(&bytes)
+    raster(
+        format,
+        &bytes,
+        path.file_name()?.to_string_lossy().into_owned(),
+    )
+}
+
+/// Encoded bytes as limn takes them: with their digest, in base64.
+fn raster(format: RasterImageFormat, bytes: &[u8], alt: String) -> Option<RasterImage> {
+    use base64::Engine;
+    use sha2::Digest;
+    let digest: String = sha2::Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let alt = path.file_name()?.to_string_lossy().into_owned();
+    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
     RasterImage::new(
         digest,
         format,
@@ -153,6 +161,28 @@ fn scaled(path: &Path, side: u32) -> Option<RasterImage> {
         data.into(),
         alt,
     )
+}
+
+/// The QR code of `link` as a PNG: dark modules of 8 px on white, inside the four-module
+/// margin a camera needs.
+pub fn qr(link: &str) -> Option<RasterImage> {
+    const MODULE: u32 = 8;
+    const MARGIN: u32 = 4;
+    let code = qrcode::QrCode::new(link).ok()?;
+    let (width, colors) = (code.width() as u32, code.to_colors());
+    let side = (width + 2 * MARGIN) * MODULE;
+    let picture = image::GrayImage::from_fn(side, side, |x, y| {
+        let (x, y) = (x / MODULE, y / MODULE);
+        let inside = (MARGIN..MARGIN + width).contains(&x) && (MARGIN..MARGIN + width).contains(&y);
+        let dark =
+            inside && colors[((y - MARGIN) * width + x - MARGIN) as usize] == qrcode::Color::Dark;
+        image::Luma([if dark { 0 } else { 255 }])
+    });
+    let mut png = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    raster(RasterImageFormat::Png, &png, "QR code of the link".into())
 }
 
 #[cfg(test)]

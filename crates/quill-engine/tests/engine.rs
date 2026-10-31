@@ -1599,3 +1599,117 @@ fn global_skill_file(config_dir: &std::path::Path, name: &str) -> bool {
         .join(format!("quill/skills/{name}/SKILL.md"))
         .is_file()
 }
+
+#[test]
+fn a_session_reached_from_a_phone_shows_its_messages_as_the_persons() {
+    // Remote Control on CLI 2.1.316: the phone sent two messages and approved a permission.
+    let (tx, rx) = channel();
+    let programs = HashMap::from([(
+        "claude".to_string(),
+        env!("CARGO_BIN_EXE_fake-agent").to_string(),
+    )]);
+    let snapshots = std::env::temp_dir().join(format!("quill-snapshots-{}", uuid_like()));
+    let config = quill_engine::Config {
+        programs,
+        database: None,
+        snapshots: Some(snapshots.clone()),
+        settings: None,
+        ..Default::default()
+    };
+    let engine = Engine::start_with(move |event| drop(tx.send(event)), config);
+    let cwd = workdir("remote");
+    std::fs::write(
+        cwd.join(".fake-agent"),
+        fixture("remote").replace("2.1.310", "2.1.316"),
+    )
+    .unwrap();
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd,
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    engine.send(Intent::Send {
+        session: 1,
+        text: "Reply with exactly the word: ok".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::TurnFinished { .. },
+                ..
+            }
+        )
+    });
+    engine.send(Intent::Remote {
+        session: 1,
+        on: true,
+        name: Some("quill capture".into()),
+    });
+    let on = |e: &Event| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::Remote {
+                    on: true,
+                    url: Some(_),
+                    ..
+                },
+                ..
+            }
+        )
+    };
+    let events = until(
+        &rx,
+        |e| matches!(e, Event::Queued { text, .. } if text.starts_with("Escribí")),
+    );
+    assert!(events.iter().any(on), "{events:#?}");
+    let phone = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Queued { request, text, .. } if text.contains("touch remoto.txt") => {
+                Some(request.clone())
+            }
+            _ => None,
+        })
+        .expect("the phone's first message");
+    // Its permission, approved on the phone, leaves quill's card, and its turn is its own.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Agent {
+            event: AgentEvent::Withdrawn { .. },
+            ..
+        }
+    )));
+    assert!(events.iter().any(|e| matches!(e,
+        Event::Changes { request, .. } if *request == phone)));
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::TurnFinished { .. },
+                ..
+            }
+        )
+    });
+    engine.send(Intent::Remote {
+        session: 1,
+        on: false,
+        name: None,
+    });
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                event: AgentEvent::Remote { on: false, .. },
+                ..
+            }
+        )
+    });
+    let _ = std::fs::remove_dir_all(&snapshots);
+}

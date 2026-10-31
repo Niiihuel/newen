@@ -6826,3 +6826,121 @@ fn an_agents_skills_join_its_slash_menu_and_its_mcp_switch_waits_for_a_capabilit
     ui.mcp = Some(crate::McpDialog::new(1));
     assert!(drawn(&store, &ui, "Off in its config") && !drawn(&store, &ui, "Turn on"));
 }
+
+#[test]
+fn remote_control_is_offered_by_agents_that_have_it_and_shows_the_link() {
+    let (mut store, mut ui) = store_with_session();
+    ui.prompt = "/rc".into();
+    assert!(!slash_ids(&store, &ui).contains(&"slash:quill:remote:command".into()));
+    agent(
+        &mut store,
+        AgentEvent::Ready {
+            version: "2.1.316".into(),
+            capabilities: quill_model::AgentCapabilities {
+                remote: true,
+                ..Default::default()
+            },
+            mode: None,
+        },
+    );
+    assert_eq!(
+        slash_ids(&store, &ui).first().map(String::as_str),
+        Some("slash:quill:remote:command")
+    );
+    // The switch asks the agent, named as the session is, and shows it connecting.
+    assert_eq!(
+        click(&store, &mut ui, remote::TOGGLE),
+        [Intent::Remote {
+            session: 1,
+            on: true,
+            name: Some("Fix the bug".into())
+        }]
+    );
+    assert_eq!(ui.remote_asked, Some(1));
+    let on = Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::Remote {
+            on: true,
+            url: Some("https://example.invalid/session_1".into()),
+            error: None,
+        },
+    };
+    store.apply(on.clone());
+    ui.applied(&on);
+    assert_eq!(ui.remote_asked, None);
+    // The dialog shows the link, which the host draws as a QR code; a later word keeps it.
+    assert_eq!(remote::shown_url(&store, &ui), None);
+    click(&store, &mut ui, remote::OPEN);
+    agent(
+        &mut store,
+        AgentEvent::Remote {
+            on: true,
+            url: None,
+            error: None,
+        },
+    );
+    assert_eq!(
+        remote::shown_url(&store, &ui),
+        Some("https://example.invalid/session_1")
+    );
+    click(&store, &mut ui, "remote:copy");
+    assert_eq!(
+        ui.files_copy.as_deref(),
+        Some("https://example.invalid/session_1")
+    );
+    assert_eq!(
+        click(&store, &mut ui, "remote:off"),
+        [Intent::Remote {
+            session: 1,
+            on: false,
+            name: Some("Fix the bug".into())
+        }]
+    );
+    // Why it could not be turned on is the agent's to say.
+    agent(
+        &mut store,
+        AgentEvent::Remote {
+            on: false,
+            url: None,
+            error: Some("not signed in".into()),
+        },
+    );
+    assert_eq!(
+        store.session(1).unwrap().remote,
+        Remote::Failed("not signed in".into())
+    );
+    click(&store, &mut ui, "remote:close");
+    assert_eq!(ui.remote, None);
+    // Settings' new sessions, once the engine told the settings.
+    ui.applied(&Event::Settings {
+        settings: Settings::default(),
+        agents: vec![],
+    });
+    click(&store, &mut ui, view::SETTINGS_OPEN);
+    let saved = click(&store, &mut ui, "set:remote_new");
+    assert!(matches!(saved.as_slice(), [Intent::SaveSettings(s)] if s.remote_new_sessions));
+}
+
+#[test]
+fn a_permission_answered_on_another_device_leaves_no_card() {
+    let (mut store, _) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::PermissionRequest {
+            id: "p1".into(),
+            call: Some("t1".into()),
+            tool: "Bash".into(),
+            input: serde_json::json!({ "command": "touch a" }),
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    );
+    agent(&mut store, AgentEvent::Withdrawn { id: "p1".into() });
+    let decided = (store.session(1).unwrap().items.iter()).find_map(|i| match i {
+        Item::Permission { decided, .. } => Some(*decided),
+        _ => None,
+    });
+    assert_eq!(decided, Some(Some("Withdrawn")));
+}

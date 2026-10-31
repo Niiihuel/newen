@@ -102,6 +102,9 @@ pub const FILE: &str = icon!(
 pub const LAPTOP: &str = icon!(
     "<rect x='3.5' y='3.75' width='13' height='9.25' rx='1.75'/><path d='M1.75 16.25h16.5'/>"
 );
+/// A phone: the session reached from another device.
+pub const PHONE: &str =
+    icon!("<rect x='5.75' y='2' width='8.5' height='16' rx='2'/><path d='M8.75 15h2.5'/>");
 /// The permission modes' marks, as Desktop's menu gives each one:
 /// a raised hand to ask, a scroll to plan, a bolt to decide alone.
 pub const HAND: &str = icon!(

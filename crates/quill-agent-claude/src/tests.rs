@@ -35,6 +35,10 @@ fn replay_at(version: &str, name: &str) -> (Claude, Vec<AgentEvent>, Vec<String>
                     Some("get_skills_dialog") => drop(claude.encode(AgentCommand::Skills)),
                     Some("reload_plugins") => drop(claude.encode(AgentCommand::ReloadPlugins)),
                     Some("reload_skills") => drop(claude.request(json!({}))),
+                    Some("remote_control") => drop(claude.encode(AgentCommand::Remote {
+                        on: msg["request"]["enabled"] == true,
+                        name: msg["request"]["name"].as_str().map(str::to_owned),
+                    })),
                     _ => {}
                 }
             }
@@ -1261,4 +1265,70 @@ fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
         .iter()
         .any(|a| a == "--mcp-config" || a == "--plugin-dir"));
     assert!(Claude::new().session_extras().sse);
+}
+
+#[test]
+fn remote_control_turns_on_and_off_and_brings_the_phones_messages() {
+    let (mut claude, events, _) = replay_at("2.1.316", "remote");
+    assert!(matches!(
+        events.first(),
+        Some(AgentEvent::Ready { capabilities, .. }) if capabilities.remote
+    ));
+    // On, with the session's page on claude.ai, then off.
+    let remote: Vec<_> = (events.iter())
+        .filter_map(|e| match e {
+            AgentEvent::Remote { on, url, error } => Some((*on, url.clone(), error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        remote,
+        [
+            (
+                true,
+                Some("https://claude.ai/code/session_01REMOTE".into()),
+                None
+            ),
+            (false, None, None)
+        ]
+    );
+    // The phone's two messages, and not the echo of the one the capture sent itself.
+    let prompts: Vec<&str> = (events.iter())
+        .filter_map(|e| match e {
+            AgentEvent::Prompt { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        [
+            "Usá la herramienta Bash para correr exactamente: touch remoto.txt",
+            "Escribí una historia de 500 palabras sobre una pluma"
+        ]
+    );
+    // The permission approved on the phone is no longer quill's to answer.
+    let asked = (events.iter())
+        .find_map(|e| match e {
+            AgentEvent::PermissionRequest { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Withdrawn { id } if *id == asked)));
+    // quill's own messages are not taken for the phone's.
+    let mine = claude.encode(AgentCommand::Prompt {
+        request: "r1".into(),
+        text: "hi".into(),
+        steer: false,
+        images: vec![],
+    });
+    assert_eq!(mine.len(), 1);
+    let echo = json!({ "type": "user", "isReplay": true, "uuid": "r1", "origin": { "kind": "human" },
+        "message": { "role": "user", "content": "hi" } });
+    assert!(claude.decode(&echo.to_string()).events.is_empty());
+    assert!(Claude::new()
+        .launch(&SessionSpec::default())
+        .args
+        .contains(&"--replay-user-messages".to_string()));
 }

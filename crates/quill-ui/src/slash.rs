@@ -151,6 +151,14 @@ fn own_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<Own> {
             view::USAGE_MENU,
         ),
     ]);
+    if session.is_some_and(crate::remote::offered) {
+        commands.push(own(
+            "remote-control",
+            &["rc"],
+            "Continue this session from your phone or a browser",
+            crate::remote::COMMAND,
+        ));
+    }
     if let Some(id) = ui.selected {
         commands.extend([
             own("tasks", &[], "Show this session's tasks", view::TASKS_OPEN),

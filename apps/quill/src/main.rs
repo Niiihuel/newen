@@ -65,6 +65,8 @@ struct App {
     /// Thumbnails decoded off the window's thread, and the images asked for so far (each once).
     thumbs_done: Arc<Mutex<Vec<(PathBuf, limn::RasterImage)>>>,
     thumbs_asked: std::collections::HashSet<PathBuf>,
+    /// The link whose QR code was last drawn, so a link is drawn once.
+    qr_for: Option<String>,
     /// The viewer's full-size pictures, decoded like the thumbnails, and the images asked for.
     full_done: Arc<Mutex<Vec<(PathBuf, limn::RasterImage)>>>,
     full_asked: std::collections::HashSet<PathBuf>,
@@ -799,6 +801,15 @@ impl eframe::App for App {
         }
         for (path, thumb) in std::mem::take(&mut *self.thumbs_done.lock().unwrap()) {
             self.ui.thumbs.insert(path, thumb);
+        }
+        // The QR code of the link the Remote Control dialog shows: a millisecond's work, once.
+        let link = quill_ui::remote::shown_url(&self.store, &self.ui).map(str::to_owned);
+        if link != self.qr_for {
+            self.ui.qr = (link.as_deref())
+                .and_then(images::qr)
+                .zip(link.clone())
+                .map(|(picture, link)| (link, picture));
+            self.qr_for = link;
         }
         // The image the viewer shows, at full size, decoded once off the window's thread.
         if let Some(path) = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone()) {
@@ -1815,6 +1826,7 @@ fn main() -> eframe::Result {
                 restored: false,
                 thumbs_done: Arc::default(),
                 thumbs_asked: Default::default(),
+                qr_for: None,
                 full_done: Arc::default(),
                 full_asked: Default::default(),
                 sizes_done: Arc::default(),

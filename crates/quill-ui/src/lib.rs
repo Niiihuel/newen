@@ -11,6 +11,7 @@ mod github;
 mod greeting;
 mod mention;
 mod pixels;
+pub mod remote;
 mod slash;
 pub mod tour;
 mod updates;
@@ -181,6 +182,19 @@ pub struct Session {
     pub agent_version: Option<String>,
     /// The messages the last rewind took out, while it can still be undone.
     pub rewound: Vec<Item>,
+    /// Whether it can be reached from another device (docs/remote-control.md).
+    pub remote: Remote,
+}
+
+/// Whether a session can be reached from another device through its agent's own service.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Remote {
+    #[default]
+    Off,
+    /// On, and where the session opens there when the agent said.
+    On(Option<String>),
+    /// Off: why it could not be turned on.
+    Failed(String),
 }
 
 /// Work the agent runs beside its turns, as Desktop counts "1 running task" and
@@ -293,6 +307,7 @@ impl Store {
                 aside: false,
                 agent_version: None,
                 rewound: vec![],
+                remote: Remote::Off,
             }),
             Event::Status { session, status } => {
                 if let Some(s) = self.session_mut(session) {
@@ -640,6 +655,32 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
             }
         }
         AgentEvent::ModeChanged { mode } => s.mode = mode,
+        AgentEvent::Remote { on, url, error } => {
+            s.remote = match (on, error) {
+                // A later word without the link keeps the one already given.
+                (true, _) => Remote::On(url.or(match &s.remote {
+                    Remote::On(old) => old.clone(),
+                    _ => None,
+                })),
+                (false, Some(error)) => Remote::Failed(error),
+                (false, None) => Remote::Off,
+            }
+        }
+        // Answered on another device: the card goes, as an answered one does.
+        AgentEvent::Withdrawn { id } => {
+            for item in &mut s.items {
+                if let Item::Permission {
+                    id: asked,
+                    decided: decided @ None,
+                    ..
+                } = item
+                {
+                    if *asked == id {
+                        *decided = Some("Withdrawn");
+                    }
+                }
+            }
+        }
         // The turn's end follows, and carries it.
         AgentEvent::AuthRequired => s.sign_in = true,
         AgentEvent::Tokens { tokens } => s.tokens = tokens,
@@ -1244,6 +1285,12 @@ pub struct Ui {
     /// What the Files pane asks of the window: a control to focus, and words to copy.
     pub files_focus: Option<String>,
     pub files_copy: Option<String>,
+    /// The session whose Remote Control dialog shows (docs/remote-control.md).
+    pub remote: Option<SessionId>,
+    /// A session the person asked to make reachable, until its agent answers.
+    pub remote_asked: Option<SessionId>,
+    /// The QR code of the link the dialog shows, drawn by the host: the link and its picture.
+    pub qr: Option<(String, limn::RasterImage)>,
     /// An editor of the Files pane whose caret the window brings into view, once it is laid
     /// out: a line the filter found.
     pub files_reveal: Option<String>,
@@ -1940,6 +1987,9 @@ impl Ui {
             files_focus: None,
             files_reveal: None,
             files_copy: None,
+            remote: None,
+            remote_asked: None,
+            qr: None,
             browser_tabs: Default::default(),
             browser_notice: Default::default(),
             settings: Default::default(),
@@ -2312,6 +2362,7 @@ impl Ui {
         mention::heard(self, event);
         updates::heard(self, event);
         tour::heard(self, event);
+        remote::heard(self, event);
         let mut intents = account::heard(self, event);
         intents.extend(github::heard(self, event));
         intents.extend(files::heard(self, event));
@@ -3319,6 +3370,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = github::clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = remote::clicked(store, ui, id) {
         return intents;
     }
     if let Some(intents) = tour::clicked(ui, id) {
@@ -4920,6 +4974,7 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     match rest {
         "keep_awake" => settings.keep_awake = !settings.keep_awake,
         "keep_awake_battery" => settings.keep_awake_on_battery = !settings.keep_awake_on_battery,
+        "remote_new" => settings.remote_new_sessions = !settings.remote_new_sessions,
         "attention" => settings.attention = !settings.attention,
         "login" => settings.open_at_login = !settings.open_at_login,
         "browser_native" => settings.browser_native = !settings.browser_native,
