@@ -24,6 +24,8 @@ for (const dir of args) {
     for (const e of emails) out = out.split(e).join("user@example.com");
     // What is left of the login: `ls -l` owners, and paths a stream cuts into pieces.
     out = out.replaceAll(os.userInfo().username, "user");
+    // A Remote Control session's ids on claude.ai (`session_…`, `cse_…`) are the person's.
+    out = out.replace(/\b(session|cse)_[0-9A-Za-z]{20,}/g, "$1_01REMOTE");
     return out;
   };
   const scrub = (v) => {

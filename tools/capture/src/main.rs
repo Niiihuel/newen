@@ -5,7 +5,8 @@
 //!
 //! Usage: quill-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
-//! todos, agent, think. With `--agent codex`, see codex.rs.
+//! todos, agent, think, remote (by hand, with a phone: `touch <capture>/stop` ends it). With
+//! `--agent codex`, see codex.rs.
 
 mod codex;
 
@@ -23,6 +24,8 @@ enum Policy {
     /// Allow and accept the CLI's own `permission_suggestions` as rules.
     AllowAlways,
     Deny,
+    /// Leave it unanswered: another client (a phone over Remote Control) answers it.
+    Hold,
 }
 
 /// What a scenario does, in order.
@@ -39,6 +42,11 @@ enum Step {
     Interrupt(&'static str),
     /// `rewind_files` dry run to before the first prompt of this run.
     RewindDryRun,
+    /// Send this control request (its JSON) and wait for its answer.
+    Control(&'static str),
+    /// Only listen, answering what the CLI asks, for at most this many seconds or until a file
+    /// `stop` appears in the capture's folder: someone acts from another device meanwhile.
+    Listen(u64),
 }
 
 struct Scenario {
@@ -113,10 +121,25 @@ fn scenario(name: &str) -> Option<Scenario> {
             )],
         ),
         "think" => (Policy::Allow, "default", vec![Prompt("Think it through, then answer in one line: is 391 prime?")]),
+        // Run by hand with a phone: the phone sends a message and answers a permission while
+        // this listens (docs/remote-control.md).
+        "remote" => (
+            Policy::Hold,
+            "default",
+            vec![
+                Prompt("Reply with exactly the word: ok"),
+                Control(r#"{"subtype":"remote_control","enabled":true,"name":"quill capture"}"#),
+                Listen(1200),
+                Control(r#"{"subtype":"remote_control","enabled":false}"#),
+                Listen(10),
+            ],
+        ),
         _ => return None,
     };
     let flags: &[&str] = match name {
         "think" => &["--effort", "high", "--thinking-display", "summarized"],
+        // Whether the phone's own messages come back on stdout with it.
+        "remote" => &["--replay-user-messages"],
         _ => &[],
     };
     // The CLI offers its task tools (TaskCreate, TaskUpdate…) only with these set.
@@ -214,6 +237,8 @@ fn answer(request: &Value, policy: Policy) -> Value {
                     "behavior": "allow", "updatedInput": input, "toolUseID": tool_use_id,
                     "updatedPermissions": request["permission_suggestions"].clone(),
                 }),
+                // Never sent: `reply` leaves a held request unanswered.
+                Policy::Hold => Value::Null,
             }
         }
         // PostToolUse, registered in `initialize`: an empty output lets the tool's result stand.
@@ -400,6 +425,28 @@ fn run(
                     control_response_for(msg, &id)
                 })?;
             }
+            Step::Control(request) => {
+                let request: Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
+                let id = cli.request(request);
+                wait(&rx, &mut cli, scenario.policy, |msg| {
+                    control_response_for(msg, &id)
+                })?;
+            }
+            Step::Listen(seconds) => {
+                let (stop, deadline) = (
+                    dir.join("stop"),
+                    Instant::now() + Duration::from_secs(*seconds),
+                );
+                while Instant::now() < deadline && !stop.exists() {
+                    match rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(msg) => reply(&mut cli, &msg, scenario.policy),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                // `stop` ends this listen only; the next one runs its full time.
+                let _ = std::fs::remove_file(&stop);
+            }
         }
     }
 
@@ -453,20 +500,28 @@ fn wait_for(
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         let msg = rx.recv_timeout(left).map_err(|e| format!("waiting: {e}"))?;
-        if msg["type"] == "control_request" {
-            let id = msg["request_id"].clone();
-            let response = answer(&msg["request"], policy);
-            let reply = if response.is_null() {
-                json!({ "subtype": "error", "request_id": id, "error": "not supported by quill-capture" })
-            } else {
-                json!({ "subtype": "success", "request_id": id, "response": response })
-            };
-            cli.send(json!({ "type": "control_response", "response": reply }));
-        }
+        reply(cli, &msg, policy);
         if done(&msg) {
             return Ok(());
         }
     }
+}
+
+/// Answer `msg` if it is a control request of the CLI's.
+fn reply(cli: &mut Cli, msg: &Value, policy: Policy) {
+    if msg["type"] != "control_request"
+        || (policy == Policy::Hold && msg["request"]["subtype"] == "can_use_tool")
+    {
+        return;
+    }
+    let id = msg["request_id"].clone();
+    let response = answer(&msg["request"], policy);
+    let reply = if response.is_null() {
+        json!({ "subtype": "error", "request_id": id, "error": "not supported by quill-capture" })
+    } else {
+        json!({ "subtype": "success", "request_id": id, "response": response })
+    };
+    cli.send(json!({ "type": "control_response", "response": reply }));
 }
 
 fn main() {
