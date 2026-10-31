@@ -378,9 +378,11 @@ Lo que la papelera limpia se guarda con la sesión, así que sigue limpio tras r
 
 El adaptador traduce `task_type` del CLI a un tipo genérico y `usage` a `TaskUsage` (`TaskProgress`, `TaskEnded`).
 
+**Terminals** (panel derecho): los comandos que el agente deja corriendo (tareas de tipo `command`), cada uno con su estado y "Stop" mientras corre. Un clic abre su salida en el panel Terminal, en una pestaña con su nombre que sigue el archivo donde el CLI la escribe (`tail -F`; "Output is being written to: …" en el resultado del Bash de Claude Code). Sin ese archivo, abre Background tasks.
+
 **Falta:**
 - El modelo de cada agente: Desktop lo muestra y el CLI no lo informa en las tareas.
-- La salida de los comandos en segundo plano.
+- Los comandos en segundo plano de Codex.
 
 ### 2.4c Vistas del transcript
 

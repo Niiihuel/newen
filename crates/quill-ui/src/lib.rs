@@ -13,6 +13,7 @@ mod mention;
 mod pixels;
 pub mod remote;
 mod slash;
+mod terminals;
 pub mod tour;
 mod updates;
 pub use quill_components::{icons, look};
@@ -1889,7 +1890,15 @@ pub enum TerminalRequest {
     CloseOthers(usize),
     Rename(usize, Option<String>),
     Clear(usize),
-    Move { from: usize, to: usize },
+    Move {
+        from: usize,
+        to: usize,
+    },
+    /// A tab named `name` that follows the file a background command writes its output to.
+    Output {
+        name: String,
+        path: PathBuf,
+    },
 }
 
 impl Ui {
@@ -2584,17 +2593,9 @@ impl Ui {
         {
             if self.selected == Some(*session) {
                 let mut intents = vec![Intent::WorkingTree { session: *session }];
-                // The breakdown follows each turn while it is open, as Desktop's refreshes
-                // "when this turn ends".
-                if self.context_open()
-                    && matches!(
-                        event,
-                        Event::Agent {
-                            event: AgentEvent::TurnFinished { .. },
-                            ..
-                        }
-                    )
-                {
+                // The breakdown follows each step and each turn while it is open, so the first
+                // turn shows its share before it ends (Desktop's waits for the end).
+                if self.context_open() {
                     intents.push(Intent::ContextUsage { session: *session });
                 }
                 return intents;
@@ -3380,6 +3381,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = remote::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = terminals::clicked(store, ui, id) {
         return intents;
     }
     if let Some(intents) = tour::clicked(ui, id) {

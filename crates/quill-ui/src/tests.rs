@@ -7045,3 +7045,60 @@ fn the_agents_default_model_reads_by_name() {
     assert!(drawn(&ui, "Opus 5.5"));
     assert!(!drawn(&ui, "Haiku 5.5 (default)"));
 }
+
+#[test]
+fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::ToolUse {
+            call: "c1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "npm run dev", "run_in_background": true }),
+            parent: None,
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::ToolResult {
+            call: "c1".into(),
+            output: "Command running in background with ID: b1. Output is being written to: /tmp/q/tasks/b1.output".into(),
+            is_error: false,
+            files: vec![],
+            command: None,
+            web: None,
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "b1".into(),
+            call: Some("c1".into()),
+            description: "Start the dev server".into(),
+            kind: "command".into(),
+        },
+    );
+    let session = store.session(1).unwrap();
+    assert_eq!(
+        terminals::output_file(session, "c1"),
+        Some(PathBuf::from("/tmp/q/tasks/b1.output"))
+    );
+    assert_eq!(terminals::rows(session, 200.0).map(|r| r.len()), Some(1));
+    // Its output opens in the Terminal pane, in a tab of its own.
+    assert_eq!(click(&store, &mut ui, "terminals:open:b1"), []);
+    assert!(ui.pane_open(Pane::Terminal));
+    assert_eq!(
+        ui.terminal.requests,
+        [TerminalRequest::Output {
+            name: "Start the dev server".into(),
+            path: "/tmp/q/tasks/b1.output".into()
+        }]
+    );
+    assert_eq!(
+        click(&store, &mut ui, "terminals:stop:b1"),
+        [Intent::StopTask {
+            session: 1,
+            task: "b1".into()
+        }]
+    );
+}

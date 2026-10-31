@@ -5260,27 +5260,33 @@ fn step_group(
         );
     }
     head.push(caret(open));
+    let body_id = format!("{key}:body");
     let head = fold(
         view,
         key,
         Element::row(head).gap(8.0).size(None, Some(24.0)),
     );
-    if !open {
-        return head;
-    }
-    let mut rows = vec![];
-    for (i, step) in steps.iter().enumerate() {
-        if i > 0 {
-            rows.push(hline(column, look::card_border()));
+    // The steps open and close on limn's spring, as the panel's cards do; the gap above
+    // them is inside what folds.
+    let card = open.then(|| {
+        let mut rows = vec![];
+        for (i, step) in steps.iter().enumerate() {
+            if i > 0 {
+                rows.push(hline(column, look::card_border()));
+            }
+            rows.push(step_row(step, ui, view, column, palette));
         }
-        rows.push(step_row(step, ui, view, column, palette));
-    }
-    let card = Element::panel(Element::column(rows))
-        .background(palette.surface)
-        .border(look::card_border(), 1.0)
-        .radius(8.0)
-        .size(Some(column), None);
-    Element::column(vec![head, card]).gap(8.0)
+        let card = Element::panel(Element::column(rows))
+            .background(palette.surface)
+            .border(look::card_border(), 1.0)
+            .radius(8.0)
+            .size(Some(column), None);
+        Element::column(vec![Element::spacer().size(None, Some(8.0)), card])
+    });
+    Element::column(vec![
+        head,
+        limn::Collapse::new(body_id, card).expand().render(),
+    ])
 }
 
 /// Whether a collapsible is open: Verbose holds every one open, else the person's toggle.
@@ -5411,6 +5417,7 @@ fn step_row(
         format!("tool:{}", step.call)
     };
     let line = Element::row(line).gap(6.0).size(Some(column), Some(31.0));
+    let body_id = format!("{id}:body");
     // A helper's row opens its own pane, which Verbose leaves as it is.
     let line = if agent {
         Element::clickable(id, line)
@@ -5420,12 +5427,11 @@ fn step_row(
         fold(view, id, line)
     };
     let row = row_palette.interactive_surface(line);
-    if !open {
-        return row;
-    }
+    // Its body opens and closes on limn's spring.
+    let body = open.then(|| pad(step_body(step, ui, column - 24.0, palette), 12.0, 4.0));
     Element::column(vec![
         row,
-        pad(step_body(step, ui, column - 24.0, palette), 12.0, 4.0),
+        limn::Collapse::new(body_id, body).expand().render(),
     ])
 }
 
@@ -8390,6 +8396,17 @@ fn right_panel(
             inner,
         ),
     ];
+    // The commands the agent left running, as Desktop's rail lists its terminals.
+    if let Some(rows) = crate::terminals::rows(session, inner - 36.0) {
+        cards.push(panel_card(
+            "Terminals",
+            "panel:terminals",
+            open("panel:terminals", true),
+            vec![],
+            rows,
+            inner,
+        ));
+    }
     if let Some(rows) = usage_rows(store, ui, inner - 36.0) {
         cards.push(panel_card(
             "Usage",

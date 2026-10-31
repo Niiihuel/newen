@@ -152,6 +152,29 @@ impl App {
                 TerminalRequest::Rename(tab, name) => tabs.rename(tab, name),
                 TerminalRequest::Clear(tab) => tabs.clear(tab),
                 TerminalRequest::Move { from, to } => tabs.move_tab(from, to),
+                // The output of a command the agent left running, followed as it grows.
+                TerminalRequest::Output { name, path } => {
+                    let path = path.display().to_string();
+                    let follow: Vec<String> = if cfg!(windows) {
+                        let quoted = path.replace('\'', "''");
+                        ["powershell", "-NoProfile", "-Command"]
+                            .map(String::from)
+                            .into_iter()
+                            .chain([format!("Get-Content -Wait -Path '{quoted}'")])
+                            .collect()
+                    } else {
+                        ["tail", "-n", "+1", "-F"]
+                            .map(String::from)
+                            .into_iter()
+                            .chain([path])
+                            .collect()
+                    };
+                    let opened =
+                        tabs.open_running(&folder, &follow, Some(name), cols, rows, wake());
+                    if let Err(error) = opened {
+                        eprintln!("quill: no terminal for that output: {error}");
+                    }
+                }
             }
         }
         tabs.reap();

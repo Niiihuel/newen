@@ -52,6 +52,17 @@ impl Terminal {
         rows: u16,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self> {
+        Self::run(cwd, &[], cols, rows, wake)
+    }
+
+    /// `program` (its name, then its arguments) in `cwd`, or the login shell when it is empty.
+    pub fn run(
+        cwd: &Path,
+        program: &[String],
+        cols: u16,
+        rows: u16,
+        wake: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
         let size = PtySize {
             rows,
             cols,
@@ -68,7 +79,14 @@ impl Terminal {
                 "/bin/sh".into()
             }
         });
-        let mut command = CommandBuilder::new(shell);
+        let mut command = match program {
+            [name, args @ ..] => {
+                let mut command = CommandBuilder::new(name);
+                command.args(args);
+                command
+            }
+            [] => CommandBuilder::new(shell),
+        };
         command.cwd(cwd);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
@@ -287,11 +305,25 @@ impl Tabs {
         rows: u16,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<()> {
-        let terminal = Terminal::spawn(cwd, cols, rows, wake)?;
+        self.open_running(cwd, &[], None, cols, rows, wake)
+    }
+
+    /// Open a tab that runs `program` (the login shell when empty), named `name`, and make it
+    /// the active one.
+    pub fn open_running(
+        &mut self,
+        cwd: &Path,
+        program: &[String],
+        name: Option<String>,
+        cols: u16,
+        rows: u16,
+        wake: impl Fn() + Send + 'static,
+    ) -> std::io::Result<()> {
+        let terminal = Terminal::run(cwd, program, cols, rows, wake)?;
         self.next += 1;
         self.tabs.push(Tab {
             number: self.next,
-            name: None,
+            name,
             terminal,
         });
         self.active = self.tabs.len() - 1;
