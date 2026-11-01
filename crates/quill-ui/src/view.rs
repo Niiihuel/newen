@@ -11813,7 +11813,7 @@ fn agent_page(
                 rows.push(setting(
                     "Allow bypass permissions mode",
                     &format!(
-                        "Bypass all permission checks and let {} work uninterrupted. Letting an agent run any command is risky and can lose data, damage your system or leak it (through prompt injection, for example). Applies to new sessions.",
+                        "Bypass all permission checks and let {} work uninterrupted. Letting an agent run any command is risky and can lose data, damage your system or leak it (through prompt injection, for example). An open session restarts in it when you choose it.",
                         agent.name
                     ),
                     setting_switch(&format!("agent:{mine}:unsafe"), chosen.allow_unsafe, palette),
