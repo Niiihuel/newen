@@ -1928,7 +1928,8 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         nav(CUSTOMIZE_OPEN, icons::BRIEFCASE, "Customize", "", false),
         Element::spacer().size(None, Some(16.0)),
     ];
-    // Sessions another one started are listed under it, not on their own.
+    // Sessions another one started are listed under it, not on their own, unless it was put
+    // away.
     let listed = |pinned: bool| {
         sorted(
             store
@@ -1937,7 +1938,8 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
                 .filter(|s| {
                     s.pinned == pinned
                         && !s.archived
-                        && s.parent.and_then(|p| store.session(p)).is_none()
+                        && (tree_parent(store, s).and_then(|p| store.session(p)))
+                            .is_none_or(|p| p.archived)
                 })
                 .collect(),
             ui,
@@ -1949,12 +1951,13 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         let key = std::path::PathBuf::new();
         let open = !ui.collapsed.contains(&key);
         let waiting = !open && pinned.iter().any(|s| s.status == SessionStatus::Awaiting);
-        rows.push(group_header(
-            "Pinned", &key, open, waiting, None, ui, palette,
-        ));
+        rows.push(
+            group_header("Pinned", &key, open, waiting, None, ui, palette)
+                .animate_move("group:pinned"),
+        );
         if open {
             for s in &pinned {
-                rows.extend(with_children(store, s, ui, palette));
+                rows.push(with_children(store, s, 0, ui, palette));
             }
         }
         rows.push(Element::spacer().size(None, Some(8.0)));
@@ -1998,9 +2001,11 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             })
             .collect();
         let waiting = !open && members.iter().any(|s| s.status == SessionStatus::Awaiting);
-        rows.push(group_header(
-            &label, &key, open, waiting, folder, ui, palette,
-        ));
+        // As the sessions reorder by activity, the groups and their rows glide to their places.
+        rows.push(
+            group_header(&label, &key, open, waiting, folder, ui, palette)
+                .animate_move(format!("group:{}", key.display())),
+        );
         if !open {
             continue;
         }
@@ -2015,7 +2020,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             members.len()
         };
         for s in &members[..shown] {
-            rows.extend(with_children(store, s, ui, palette));
+            rows.push(with_children(store, s, 0, ui, palette));
         }
         if limited {
             let label = if ui.show_more {
@@ -2023,12 +2028,15 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             } else {
                 "Show more"
             };
-            rows.push(side_row(
-                SHOW_MORE.into(),
-                vec![muted(label).centered_y()],
-                false,
-                palette,
-            ));
+            rows.push(
+                side_row(
+                    SHOW_MORE.into(),
+                    vec![muted(label).centered_y()],
+                    false,
+                    palette,
+                )
+                .animate_move(SHOW_MORE),
+            );
         }
     }
     // At its foot over a line, the person: their GitHub picture (else their initials) and
@@ -2122,50 +2130,121 @@ fn status_group(session: &Session) -> &'static str {
     }
 }
 
-/// A session's row and, under it, the rows of the sessions it started, on a tree line that
-/// turns into the last of them.
+/// How deep the sidebar nests sessions started by sessions; a damaged log's loop of links
+/// ends here too.
+const TREE_DEPTH: usize = 8;
+
+/// The session the sidebar nests `session` under: the one that started it, else the one it
+/// waits for, unless that one is under it already, so the tree has no loop.
+fn tree_parent(store: &Store, session: &Session) -> Option<quill_model::SessionId> {
+    if session.parent.is_some() {
+        return session.parent;
+    }
+    let on = session.waits.first()?.on;
+    let mut at = store.session(on);
+    for _ in 0..TREE_DEPTH {
+        let Some(above) = at else { break };
+        if above.id == session.id {
+            return None;
+        }
+        let next = above.parent.or(above.waits.first().map(|w| w.on));
+        at = next.and_then(|id| store.session(id));
+    }
+    Some(on)
+}
+
+/// The sessions under `parent` in the sidebar, in the order they were made: those it started
+/// and those that wait for it.
+fn started_by(store: &Store, parent: quill_model::SessionId) -> Vec<&Session> {
+    (store.sessions.iter())
+        .filter(|s| tree_parent(store, s) == Some(parent) && !s.archived)
+        .collect()
+}
+
+/// How many rows a session takes in the sidebar with those it started, and theirs.
+fn tree_rows(store: &Store, session: &Session, depth: usize) -> usize {
+    let below = started_by(store, session.id).into_iter();
+    1 + if depth < TREE_DEPTH {
+        below.map(|s| tree_rows(store, s, depth + 1)).sum()
+    } else {
+        0
+    }
+}
+
+/// A session's row and, under it, the sessions it started and theirs, each on a guide that
+/// turns into its row as a file tree's does, so the person sees which sessions work together.
+/// They move as one when the list reorders.
 fn with_children(
     store: &Store,
     session: &Session,
+    depth: usize,
     ui: &Ui,
     palette: ComponentPalette,
-) -> Vec<Element> {
-    let mut rows = vec![session_row(session, 0, ui, palette)];
-    let children: Vec<&Session> = store
-        .sessions
-        .iter()
-        .filter(|s| s.parent == Some(session.id) && !s.archived)
-        .collect();
-    if children.is_empty() {
-        return rows;
+) -> Element {
+    let id = format!("family:{}", session.id);
+    let row = session_row(session, depth, ui, palette);
+    let children = started_by(store, session.id);
+    if children.is_empty() || depth >= TREE_DEPTH {
+        return row.animate_move(id);
     }
     let count = children.len();
-    let column: Vec<Element> = children
-        .iter()
-        .map(|child| session_row(child, 1, ui, palette))
-        .collect();
-    // The line runs down to the middle of the last row, then turns towards it.
-    let reach = (count - 1) as f32 * 34.0 + 16.0;
-    let tree = Element::column(vec![
+    let line = |width: f32, height: f32| {
         Element::spacer()
             .background(look::divider())
-            .size(Some(1.0), Some(reach)),
-        Element::spacer()
-            .background(look::divider())
-            .size(Some(6.0), Some(1.0)),
+            .size(Some(width), Some(height))
+    };
+    let blocks = children.iter().enumerate().map(|(at, child)| {
+        // Rows are 32 tall with 2 between: the guide runs on past the gap to the next one,
+        // and at the last it stops at its row's middle, where it turns.
+        let down = if at + 1 == count {
+            17.0
+        } else {
+            tree_rows(store, child, depth + 1) as f32 * 34.0
+        };
+        let guide = Element::row(vec![
+            line(1.0, down),
+            Element::column(vec![
+                Element::spacer().size(None, Some(16.0)),
+                line(5.0, 1.0),
+            ]),
+        ])
+        .size(Some(6.0), None);
+        Element::row(vec![
+            guide,
+            with_children(store, child, depth + 1, ui, palette).flex(1.0),
+        ])
+    });
+    Element::column(vec![
+        row,
+        Element::row(vec![
+            hgap(16.0),
+            Element::column(blocks.collect()).flex(1.0),
+        ]),
     ])
-    .size(Some(6.0), None);
-    rows.push(Element::row(vec![
-        hgap(16.0),
-        tree,
-        Element::column(column).gap(2.0).flex(1.0),
-    ]));
-    rows
+    .gap(2.0)
+    .animate_move(id)
+}
+
+/// Every session in the order the sidebar lists them now, which it keeps while the pointer
+/// is over it (`Ui::sidebar_order`).
+pub fn order(store: &Store, ui: &Ui) -> Vec<quill_model::SessionId> {
+    let list = sorted(store.sessions.iter().collect(), ui);
+    list.into_iter().map(|s| s.id).collect()
 }
 
 /// The sessions in the order the filter menu asks: by last change, by when they were made,
-/// or by name, newest or Z first unless ascending.
+/// or by name, newest or Z first unless ascending. While the pointer is over the sidebar the
+/// order it had then holds, and a session made since goes last.
 fn sorted<'a>(mut list: Vec<&'a Session>, ui: &Ui) -> Vec<&'a Session> {
+    if let Some((_, order)) = &ui.sidebar_order {
+        list.sort_by_key(|s| {
+            order
+                .iter()
+                .position(|id| *id == s.id)
+                .unwrap_or(usize::MAX)
+        });
+        return list;
+    }
     match ui.sort_by {
         crate::SortBy::Updated => list.sort_by_key(|s| (s.touched, s.id)),
         crate::SortBy::Created => list.sort_by_key(|s| s.id),
@@ -2427,6 +2506,8 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
     let indicator = match session.status {
         SessionStatus::Awaiting => mark(icons::WARNING, look::palette().text),
         SessionStatus::Failed(_) => status_dot(session),
+        // It waits for another session's task to end (`wait_for_session`).
+        _ if !session.waits.is_empty() => mark(icons::HOURGLASS, look::muted()),
         // Grouped by folder Desktop marks no place.
         _ if depth == 0 && !working && ui.group_by != crate::GroupBy::Folder => {
             mark(icons::LAPTOP, look::muted())
@@ -2627,6 +2708,7 @@ fn transcript(
         items.push(task_card(&list, column, palette));
     }
     items.extend(waiting_cards(store, session, ui, column, palette));
+    items.extend(wait_rows(store, session, ui, column, palette));
     if let Some(status) = status_line(session, running.as_ref(), ui, column, palette) {
         items.push(status);
     }
@@ -2757,7 +2839,7 @@ fn entries<'a>(
                             muted("Passed your message to")
                                 .font_size(chat())
                                 .centered_y(),
-                            session_chip(store, child).centered_y(),
+                            session_chip(store, child).shrink_to_fit(),
                         ])
                         .gap(8.0),
                     );
@@ -2959,10 +3041,7 @@ fn session_chip(store: &Store, id: quill_model::SessionId) -> Element {
                 .radius(2.5)
                 .size(Some(5.0), Some(5.0))
                 .centered_y(),
-            text(title.clone())
-                .foreground(look::mention())
-                .font_size(chat())
-                .centered_y(),
+            one_line(title.clone(), look::mention()),
             hgap(6.0),
         ])
         .gap(6.0)
@@ -3052,11 +3131,11 @@ fn started_card(store: &Store, session: &Session, input: &Value, column: f32) ->
             .radius(2.5)
             .size(Some(5.0), Some(5.0))
             .centered_y(),
-        text(title.to_owned()).font_size(chat()).centered_y(),
+        one_line(title.to_owned(), look::palette().text),
     ];
     if let Some(doing) = doing {
         row.push(
-            Element::truncated_text(doing)
+            Element::faded_text(doing, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
@@ -3105,7 +3184,7 @@ fn waiting_cards(
             let mut lines = vec![text(session_title(child))];
             if let Some(asks) = asks(child, ui) {
                 lines.push(
-                    Element::truncated_text(asks)
+                    Element::faded_text(asks, FADE)
                         .font_family(FontFamily::Sans)
                         .font_size(SMALL)
                         .foreground(look::muted()),
@@ -3130,6 +3209,68 @@ fn waiting_cards(
             .border(look::card_border(), 1.0)
             .radius(12.0)
             .size(Some(width), None)
+        })
+        .collect()
+}
+
+/// What a "Cancel" of a wait reports: the waiting session and the one it waits for follow.
+pub const WAIT_CANCEL: &str = "wait-cancel:";
+
+/// What the session waits for (`wait_for_session`), under its turns until the wait ends: an
+/// hourglass, "Waiting for «title» · Agent", which shimmers while that session works, or that
+/// it asks the person something or stopped before its task was done; and Cancel. One line,
+/// faded at its end where the column is narrow.
+fn wait_rows(
+    store: &Store,
+    session: &Session,
+    ui: &Ui,
+    column: f32,
+    palette: ComponentPalette,
+) -> Vec<Element> {
+    (session.waits.iter())
+        .map(|wait| {
+            let other = store.session(wait.on);
+            let title = other.map_or_else(|| wait.title.clone(), session_title);
+            let agent = other.map(|o| {
+                let info = ui.agents.iter().find(|a| a.id == o.agent);
+                format!(
+                    " \u{b7} {}",
+                    info.map_or(o.agent.as_str(), |a| a.name.as_str())
+                )
+            });
+            let agent = agent.unwrap_or_default();
+            let words = match other.map(|o| &o.status) {
+                Some(SessionStatus::Running | SessionStatus::Starting) => working_words(
+                    &format!("wait-shimmer:{}:{}", session.id, wait.on),
+                    format!("Waiting for \u{ab}{title}\u{bb}{agent}"),
+                ),
+                Some(SessionStatus::Awaiting) => one_line(
+                    format!("\u{ab}{title}\u{bb} is asking you something{agent}"),
+                    look::muted(),
+                ),
+                _ => one_line(
+                    format!("\u{ab}{title}\u{bb} stopped before its task was done{agent}"),
+                    look::muted(),
+                ),
+            };
+            let cancel = keyed_button(
+                &format!("{WAIT_CANCEL}{}:{}", session.id, wait.on),
+                "Cancel",
+                "",
+                false,
+                true,
+                palette,
+            );
+            Element::row(vec![
+                Element::icon(icons::of(icons::HOURGLASS))
+                    .foreground(look::muted())
+                    .size(Some(14.0), Some(14.0))
+                    .centered_y(),
+                words.flex(1.0).centered_y(),
+                cancel.centered_y(),
+            ])
+            .gap(8.0)
+            .size(Some(column), Some(30.0))
         })
         .collect()
 }
@@ -3177,11 +3318,25 @@ fn sent_line(sent: usize) -> Element {
 /// Where the agent compacted its context, between two hairlines (inferred design: Claude
 /// Code's `compact_boundary` is not drawn, and Desktop's is not captured).
 fn compaction_divider(running: bool, column: f32) -> Element {
-    let words = if running {
-        "Compacting context"
-    } else {
-        "Context compacted"
-    };
+    labeled_divider(
+        if running {
+            "Compacting context"
+        } else {
+            "Context compacted"
+        },
+        column,
+    )
+}
+
+/// Where what the person had not seen begins: "New" between two hairlines, in the muted ink
+/// of the other dividers (Desktop draws its own in orange).
+fn new_divider(column: f32) -> Element {
+    labeled_divider("New", column)
+}
+
+/// `words` between two hairlines across the column, in a 24 px row of its own, as tall as
+/// the step lines around it, so neither reaches into it.
+fn labeled_divider(words: &str, column: f32) -> Element {
     let line = || {
         Element::spacer()
             .size(None, Some(1.0))
@@ -3195,22 +3350,7 @@ fn compaction_divider(running: bool, column: f32) -> Element {
         line(),
     ])
     .gap(10.0)
-    .size(Some(column), None)
-}
-
-/// Where what the person had not seen begins, as Desktop marks it "New" between two orange
-/// lines (straight here, the video's are wavy).
-fn new_divider(column: f32) -> Element {
-    let side = (column - 60.0) / 2.0;
-    Element::row(vec![
-        hline(side, look::spark()).centered_y(),
-        text("New")
-            .foreground(look::spark())
-            .font_size(SMALL)
-            .centered_y(),
-        hline(side, look::spark()).centered_y(),
-    ])
-    .gap(10.0)
+    .size(Some(column), Some(24.0))
 }
 
 /// The annotation editor over the window [spec §3 "Editor"]: the picture under the marks on the
@@ -3793,20 +3933,35 @@ pub(crate) fn ago_from(seconds: u64) -> String {
     format!("{count} {unit}{s} ago")
 }
 
+/// How far a transcript line that does not fit fades out at its end.
+const FADE: f32 = 24.0;
+
+/// One line of a transcript row in `ink`: as wide as its words while the row has room, and
+/// fading out at its end once it has not, never wrapping into the rows around it or running
+/// past the column.
+fn one_line(words: impl Into<String>, ink: Color) -> Element {
+    Element::faded_text(words, FADE)
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
+        .foreground(ink)
+        .shrink_to_fit()
+}
+
+/// Words about work under way, shimmering as a working session's title does in the sidebar,
+/// on one line as `one_line` keeps one.
+fn working_words(id: &str, words: String) -> Element {
+    Element::shimmer_faded_text(id.to_owned(), words, look::palette().text, FADE)
+        .foreground(look::muted())
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
+        .shrink_to_fit()
+}
+
 /// The line under the turn: quill's pen writing (in place of Desktop's orange
 /// dots, as the person chose), then the step running, or the
 /// turn's clock, its tokens, the work running beside it and whether the model thinks, muted,
 /// at the transcript's size. Waiting on the person it says so; with only background work
 /// left, it counts it.
-/// Words about work under way, shimmering as a working session's title does in the sidebar.
-fn working_words(id: &str, words: String) -> Element {
-    Element::shimmer_text(id.to_owned(), words, look::palette().text)
-        .foreground(look::muted())
-        .font_family(FontFamily::Sans)
-        .font_size(chat())
-        .centered_y()
-}
-
 fn status_line(
     session: &Session,
     running: Option<&Step>,
@@ -3875,7 +4030,7 @@ fn status_line(
             line.extend(tasks.map(|tasks| {
                 Element::clickable(TASKS_OPEN, working_words("status:tasks", tasks))
                     .underline_on_hover()
-                    .centered_y()
+                    .shrink_to_fit()
             }));
             Element::row(line).gap(12.0)
         }
@@ -3954,10 +4109,11 @@ fn item(
                 .centered_y(),
             Element::clickable(
                 format!("session:{from}"),
-                Element::truncated_text(
+                Element::faded_text(
                     store
                         .session(*from)
                         .map_or_else(|| "another session".to_owned(), session_title),
+                    FADE,
                 )
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
@@ -4383,15 +4539,9 @@ fn web_search_block(
         format!("Searched {count} {sites}")
     };
     let label = if searching {
-        TextShimmer::new(format!("{key}:label"), label, look::palette())
-            .render()
-            .centered_y()
+        working_words(&format!("{key}:label"), label).font_size(13.0)
     } else {
-        Element::text(label)
-            .font_family(FontFamily::SansMedium)
-            .font_size(chat())
-            .foreground(look::palette().text)
-            .centered_y()
+        one_line(label, look::palette().text).font_family(FontFamily::SansMedium)
     };
     let mut globe = vec![Element::icon(icons::of(icons::GLOBE))
         .foreground(look::muted())
@@ -4431,8 +4581,12 @@ fn web_search_block(
             .centered_y(),
     );
     // The pill is 40 tall with 6 padding and 14 on the right: 8 more past the chevron.
-    let content =
-        Element::row(vec![Element::row(parts).gap(10.0).centered_y(), hgap(8.0)]).padding(6.0);
+    // Each level gives way to a long query, so the pill keeps to the column.
+    let content = Element::row(vec![
+        Element::row(parts).gap(10.0).shrink_to_fit(),
+        hgap(8.0),
+    ])
+    .padding(6.0);
     let hover = ComponentPalette {
         hover: look::tool_hover(),
         selected: look::tool_hover(),
@@ -4444,7 +4598,8 @@ fn web_search_block(
                 .background(look::command_box())
                 .size(None, Some(40.0)),
         )
-        .radius(20.0);
+        .radius(20.0)
+        .shrink_to_fit();
     // The pill hugs what it says, as the reference's does.
     let mut block = vec![Element::row(vec![pill, Element::spacer().flex(1.0)])];
     if open && (searching || count > 0) {
@@ -4702,71 +4857,21 @@ fn hsl(hue: u32, saturation: f32, lightness: f32) -> Color {
     Color::rgb(byte(r), byte(g), byte(b))
 }
 
-/// One entry of the task list.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Todo {
-    pub id: String,
-    pub subject: String,
-    /// "pending", "in_progress" or "completed".
-    pub status: String,
-}
+pub use quill_model::Todo;
 
-/// The task list as the task tools left it: `TaskCreate` adds, `TaskUpdate` changes or
-/// deletes by id, `TodoWrite` writes the whole list.
+/// The task list as the task tools left it ([`quill_model::apply_task_tool`]).
 pub fn todos(items: &[Item]) -> Vec<Todo> {
     let mut list: Vec<Todo> = vec![];
     for item in items {
-        let Item::Tool {
+        if let Item::Tool {
             name,
             input,
             result,
             ..
         } = item
-        else {
-            continue;
-        };
-        match name.as_str() {
-            "TaskCreate" => {
-                // The CLI numbers its tasks and says so: "Task #1 created successfully: …".
-                let id = result
-                    .as_ref()
-                    .and_then(|r| r.output.strip_prefix("Task #"))
-                    .and_then(|rest| rest.split(' ').next())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| (list.len() + 1).to_string());
-                list.push(Todo {
-                    id,
-                    subject: input["subject"].as_str().unwrap_or_default().to_owned(),
-                    status: "pending".into(),
-                });
-            }
-            "TaskUpdate" => {
-                let id = input["taskId"].as_str().unwrap_or_default();
-                if input["status"] == "deleted" {
-                    list.retain(|t| t.id != id);
-                } else if let Some(todo) = list.iter_mut().find(|t| t.id == id) {
-                    if let Some(status) = input["status"].as_str() {
-                        todo.status = status.to_owned();
-                    }
-                    if let Some(subject) = input["subject"].as_str() {
-                        todo.subject = subject.to_owned();
-                    }
-                }
-            }
-            "TodoWrite" => {
-                list = input["todos"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .map(|(i, t)| Todo {
-                        id: (i + 1).to_string(),
-                        subject: t["content"].as_str().unwrap_or_default().to_owned(),
-                        status: t["status"].as_str().unwrap_or("pending").to_owned(),
-                    })
-                    .collect();
-            }
-            _ => {}
+        {
+            let output = result.as_ref().map(|r| r.output.as_str());
+            quill_model::apply_task_tool(&mut list, name, input, output);
         }
     }
     list
@@ -4802,13 +4907,13 @@ fn task_card(list: &[Todo], column: f32, palette: ComponentPalette) -> Element {
                     .foreground(look::muted())
                     .size(Some(14.0), Some(14.0)),
             };
-            let words = text(todo.subject.clone()).font_size(BODY);
-            let words = if done {
-                words.foreground(look::muted())
+            let ink = if done {
+                look::muted()
             } else {
-                words
+                look::palette().text
             };
-            Element::row(vec![mark.centered_y(), words.centered_y()])
+            let words = one_line(todo.subject.clone(), ink).font_size(BODY);
+            Element::row(vec![mark.centered_y(), words])
                 .gap(6.0)
                 .size(None, Some(28.0))
         })
@@ -5059,7 +5164,7 @@ fn browser_card(
         .size(Some(40.0), Some(40.0))
         .centered_y(),
         Element::column(vec![
-            Element::truncated_text(title)
+            Element::faded_text(title, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
@@ -5245,6 +5350,12 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
             "Passing the message to",
             said("session"),
         ),
+        name if name.ends_with("sessions__wait_for_session") => {
+            ("Set a wait", "Setting a wait", String::new())
+        }
+        name if name.ends_with("sessions__list_sessions") => {
+            ("Listed sessions", "Listing sessions", String::new())
+        }
         "AskUserQuestion" => (
             "Asked",
             "Asking",
@@ -5453,12 +5564,9 @@ fn step_group(
         .fold((0, 0), |(a, r), res| (a + res.added, r + res.removed));
     let summary = group_summary(steps);
     let mut head = vec![if running {
-        TextShimmer::new(format!("{key}:shimmer"), summary, palette)
-            .render()
-            .font_size(chat())
-            .centered_y()
+        working_words(&format!("{key}:shimmer"), summary)
     } else {
-        muted(summary).font_size(chat()).centered_y()
+        one_line(summary, look::muted())
     }];
     // A command left running in the background offers its output.
     if steps
@@ -5502,7 +5610,8 @@ fn step_group(
         view,
         key,
         Element::row(head).gap(8.0).size(None, Some(24.0)),
-    );
+    )
+    .shrink_to_fit();
     // Folded, they sit at the line's end; open, each step's row shows its own.
     let mine = |p: &StepPicture| steps.iter().any(|s| s.call == p.call);
     let strip = if open {
@@ -5633,9 +5742,16 @@ fn step_row(
     let open = !agent && !bare && is_open(view, ui, step.call);
     let done = !step.running && step.result.is_some_and(|r| !r.stopped);
     let (verb, object) = step_label(step, done);
-    let mut line = vec![hgap(10.0), muted(verb).centered_y()];
-    if !object.is_empty() {
-        line.push(text(object).centered_y());
+    let mut line = vec![hgap(10.0)];
+    // A step still at work shimmers for as long as it runs, as the running line does.
+    if step.running {
+        let words = format!("{verb} {object}").trim_end().to_owned();
+        line.push(working_words(&format!("tool:{}:shimmer", step.call), words).font_size(BODY));
+    } else if object.is_empty() {
+        line.push(one_line(verb, look::muted()).font_size(BODY));
+    } else {
+        line.push(muted(verb).centered_y());
+        line.push(one_line(object, look::palette().text).font_size(BODY));
     }
     if let Some(r) = step.result {
         if r.added + r.removed > 0 {
@@ -8126,8 +8242,8 @@ fn changes_card(
                 .centered_y(),
         ]
     };
-    // Each row keeps to the card: the name and its folder give way, ending in "…", so the
-    // counts stay inside however narrow the column gets.
+    // Each row keeps to the card: the name and its folder give way, fading out at their end,
+    // so the counts stay inside however narrow the column gets.
     let inner = column - 10.0;
     let row = |icon: &'static str, label: String, folder: Option<String>, end: Vec<Element>| {
         let mut items = vec![
@@ -8136,20 +8252,18 @@ fn changes_card(
                 .foreground(look::muted())
                 .size(Some(14.0), Some(14.0))
                 .centered_y(),
-            Element::truncated_text(label)
+            Element::faded_text(label, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
-                .max_width(inner / 2.0)
-                .centered_y(),
+                .max_width(inner / 2.0),
         ];
         items.push(match folder {
-            Some(f) => Element::truncated_text(f)
+            Some(f) => Element::faded_text(f, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
-                .flex(1.0)
-                .centered_y(),
+                .flex(1.0),
             None => Element::spacer().flex(1.0),
         });
         items.extend(end);
@@ -9634,21 +9748,30 @@ fn reports_block(
             let key = format!("report:{request}:{at}");
             let view = crate::current_view(session, &ui.settings);
             let open = is_open(view, ui, &key);
+            // A wait that ended says so; one on a session gone names it as it was.
+            let said = match report.waited {
+                Some(_) => "Waited for",
+                None => "Received message from",
+            };
             let lead = if working {
                 Element::shimmer_text(
                     format!("report-shimmer:{request}:{at}"),
-                    "Received message from",
+                    said,
                     look::palette().text,
                 )
                 .foreground(look::muted())
                 .font_family(FontFamily::Sans)
                 .font_size(chat())
             } else {
-                muted("Received message from").font_size(chat())
+                muted(said).font_size(chat())
+            };
+            let from = match store.session(report.from) {
+                Some(_) => session_chip(store, report.from),
+                None => one_line(format!("\u{ab}{}\u{bb}", report.title), look::muted()),
             };
             let line = Element::row(vec![
                 lead.centered_y(),
-                session_chip(store, report.from).centered_y(),
+                from.shrink_to_fit(),
                 fold(view, key.clone(), caret(open)).centered_y(),
             ])
             .gap(8.0);
@@ -11690,7 +11813,7 @@ fn agent_page(
                 rows.push(setting(
                     "Allow bypass permissions mode",
                     &format!(
-                        "Bypass all permission checks and let {} work uninterrupted. Letting an agent run any command is risky and can lose data, damage your system or leak it (through prompt injection, for example). Applies to new sessions.",
+                        "Bypass all permission checks and let {} work uninterrupted. Letting an agent run any command is risky and can lose data, damage your system or leak it (through prompt injection, for example). An open session restarts in it when you choose it.",
                         agent.name
                     ),
                     setting_switch(&format!("agent:{mine}:unsafe"), chosen.allow_unsafe, palette),

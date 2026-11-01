@@ -1357,6 +1357,11 @@ impl eframe::App for App {
                     !matches!(r, TerminalRequest::Close(_) | TerminalRequest::Move { .. })
                 });
         }
+        // Each conversation keeps its own draft: the one switched to fills the box.
+        if std::mem::take(&mut self.ui.draft_switched) {
+            self.tree
+                .set_input_value(quill_ui::view::COMPOSER, &self.ui.prompt);
+        }
         // A message rewound or forked from goes back in the box, as Desktop's does.
         if let Some(prompt) = self.ui.restore_prompt.take() {
             self.set_prompt(prompt);

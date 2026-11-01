@@ -512,8 +512,16 @@ fn cef_dir() -> Option<PathBuf> {
 /// later), which Chromium's sandbox needs unless its `chrome-sandbox` is setuid root, as a
 /// per-person installation's cannot be: then Chromium would not start at all with it.
 fn userns_restricted() -> bool {
-    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-        .is_ok_and(|value| value.trim() == "1")
+    let restricted =
+        std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+            .is_ok_and(|value| value.trim() == "1");
+    if restricted {
+        eprintln!(
+            "quill: the browser's pages run without Chromium's sandbox: AppArmor restricts \
+             user namespaces here (kernel.apparmor_restrict_unprivileged_userns = 1)"
+        );
+    }
+    restricted
 }
 
 /// Make libcef reachable before its first call. On Windows quill.exe loads libcef.dll late

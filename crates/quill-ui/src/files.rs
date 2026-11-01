@@ -159,7 +159,8 @@ pub(crate) fn shown(store: &Store, ui: &mut Ui) -> Vec<Intent> {
 /// Open the file at `path`, in the folder `root` of `session`, in its tab (a new one, read from
 /// the disk, when it has none), and show it in the tree, as Desktop follows the tab on screen.
 fn open_in(ui: &mut Ui, session: SessionId, root: &Path, path: &str) -> Vec<Intent> {
-    ui.open_pane(Pane::Files);
+    // A file op that ends after the person went elsewhere opens it in its own session's panes.
+    ui.in_panes_of(session, |ui| ui.open_pane(Pane::Files));
     let mut out = vec![];
     let pane = ui.files.entry(session).or_insert_with(|| {
         let (pane, jobs) = FilesPane::new(root.to_path_buf());

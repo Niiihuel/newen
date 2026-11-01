@@ -188,6 +188,8 @@ pub struct Codex {
     /// Each tool call's name and input, to ask about it and to close it.
     calls: HashMap<String, (String, Value)>,
     approvals: HashMap<String, Approval>,
+    /// quill's own tools Codex called and waits on, by the request's key: its JSON-RPC id.
+    host_calls: HashMap<String, Value>,
     auth_failed: bool,
     plan_updates: u64,
     turn_in: u64,
@@ -231,6 +233,15 @@ impl Codex {
         let resume = self.spec.lock().unwrap().resume.clone();
         let mut params = self.thread_params();
         let Some(id) = resume else {
+            // quill's own tools, as tools the client declares; a resumed thread keeps the ones
+            // it started with (inferred from the schema: only `thread/start` takes them).
+            params["dynamicTools"] = quill_agent::HOST_TOOLS
+                .iter()
+                .map(|(name, description, schema)| {
+                    let schema: Value = serde_json::from_str(schema).unwrap_or_default();
+                    json!({ "name": name, "description": description, "inputSchema": schema })
+                })
+                .collect();
             return self.request("thread/start", params, Pending::Thread);
         };
         let fork = self.spec.lock().unwrap().fork;
@@ -1053,9 +1064,16 @@ impl Codex {
                     out,
                 );
             }
-            // A tool the client declared to Codex (quill declares none), by its own name.
+            // A tool the client declared to Codex: quill's own are named as Claude's adapter
+            // serves them, `sessions__<tool>`, which the transcript draws as its own.
             Some("dynamicToolCall") => {
-                let (name, input) = (text(&item["tool"]), item["arguments"].clone());
+                let (mut name, input) = (text(&item["tool"]), item["arguments"].clone());
+                if quill_agent::HOST_TOOLS
+                    .iter()
+                    .any(|(tool, ..)| *tool == name)
+                {
+                    name = format!("sessions__{name}");
+                }
                 if !done {
                     return self.tool_use(id, &name, input, out);
                 }
@@ -1084,6 +1102,16 @@ impl Codex {
         out: &mut Decoded,
     ) {
         let key = key(id);
+        // One of quill's own tools: the engine runs it and answers with `HostToolResult`
+        // (inferred from the schema: `DynamicToolCallParams`, no capture).
+        if method == "item/tool/call" {
+            self.host_calls.insert(key.clone(), id.clone());
+            return out.events.push(AgentEvent::HostTool {
+                id: key,
+                name: text(&p["tool"]),
+                input: p["arguments"].clone(),
+            });
+        }
         let always = vec![Suggestion::Other(json!("acceptForSession"))];
         let (tool, input, interactive, suggestions) = match method {
             // Same tool and input as Claude's card for a command (Bash {command}).
@@ -1481,6 +1509,27 @@ impl AgentAdapter for Codex {
                 _ => vec![],
             },
             AgentCommand::Decide { id, decision } => self.decide(id, decision),
+            // `DynamicToolCallResponse` (inferred from the schema).
+            AgentCommand::HostToolResult {
+                id,
+                content,
+                is_error,
+            } => {
+                let Some(rpc) = self.host_calls.remove(&id) else {
+                    return vec![];
+                };
+                let items: Vec<Value> = content
+                    .into_iter()
+                    .map(|part| match part {
+                        ToolContent::Text(text) => json!({ "type": "inputText", "text": text }),
+                        ToolContent::Image { mime, data } => json!({
+                            "type": "inputImage", "imageUrl": format!("data:{mime};base64,{data}")
+                        }),
+                    })
+                    .collect();
+                let result = json!({ "contentItems": items, "success": !is_error });
+                vec![json!({ "id": rpc, "result": result }).to_string()]
+            }
             // The mode, model and effort travel with the next `turn/start`. A mode is told back
             // with a request that costs nothing, because Codex has none that changes a thread.
             // Full access is the engine's to allow (Settings, asked at the change): Codex takes
@@ -1538,7 +1587,7 @@ impl AgentAdapter for Codex {
             // `Rewind` restores files, which Codex does not do (`thread/revert` leaves them): they
             // stay quill's snapshots, so `capabilities.rewind` is false. The conversation goes
             // back through `thread/fork` with `lastTurnId` (docs/codex.md). No context
-            // breakdown, MCP switch, credentials to forget or host tools that quill drives yet.
+            // breakdown, MCP switch or credentials to forget that quill drives yet.
             _ => vec![],
         }
     }

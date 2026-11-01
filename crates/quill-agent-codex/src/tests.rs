@@ -425,6 +425,52 @@ fn a_prompt_before_the_thread_waits_for_it() {
     assert_eq!(turn["params"]["sandboxPolicy"]["type"], "workspaceWrite");
 }
 
+/// quill's own tools reach Codex as tools the client declares, and their calls come back to
+/// the engine as `HostTool` (the shapes are the schema's, inferred: no capture).
+#[test]
+fn quill_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() {
+    let mut run = Run::started(SessionSpec::default());
+    run.feed(&entries("simple")[1].1);
+    let thread = (run.written.iter()).find(|m| m["method"] == "thread/start");
+    let tools = thread.unwrap()["params"]["dynamicTools"]
+        .as_array()
+        .unwrap();
+    let wait = tools.iter().find(|t| t["name"] == "wait_for_session");
+    assert_eq!(
+        wait.unwrap()["inputSchema"]["required"],
+        json!(["session_id", "then"])
+    );
+    assert_eq!(tools.len(), quill_agent::HOST_TOOLS.len());
+    run.feed(&json!({ "id": 7, "method": "item/tool/call", "params": {
+        "threadId": "t1", "turnId": "u1", "callId": "c1", "namespace": null,
+        "tool": "wait_for_session", "arguments": { "session_id": 2, "then": "Release" } } }));
+    let Some(HostTool { id, name, input }) = run.events.last().cloned() else {
+        panic!("{:?}", run.events.last());
+    };
+    assert_eq!(
+        (name.as_str(), &input["session_id"]),
+        ("wait_for_session", &json!(2))
+    );
+    run.send(AgentCommand::HostToolResult {
+        id,
+        content: ToolContent::text("Waiting."),
+        is_error: false,
+    });
+    assert_eq!(
+        run.written.last().unwrap(),
+        &json!({ "id": 7, "result": {
+            "contentItems": [{ "type": "inputText", "text": "Waiting." }], "success": true } })
+    );
+    // Its item is drawn as quill's own tool.
+    run.feed(
+        &json!({ "method": "item/started", "params": { "threadId": "t1", "item": {
+        "type": "dynamicToolCall", "id": "c1", "tool": "wait_for_session",
+        "arguments": { "session_id": 2, "then": "Release" } } } }),
+    );
+    assert!(matches!(run.events.last(),
+        Some(ToolUse { name, .. }) if name == "sessions__wait_for_session"));
+}
+
 #[test]
 fn a_mode_a_model_and_an_effort_apply_to_the_next_turn() {
     let mut run = run_of("simple");

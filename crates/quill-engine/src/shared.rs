@@ -4,13 +4,13 @@
 //! writes through it as if the process were its own: its lines carry the session's launch
 //! (`generation`), as an own process's do.
 
-use crate::Input;
+use crate::{Input, Running};
 use quill_agent::{AgentAdapter, SessionSpec};
 use quill_model::SessionId;
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 /// A session's way to the shared process.
@@ -79,7 +79,7 @@ async fn run(
     mut ops: UnboundedReceiver<Op>,
 ) {
     let mut sessions: HashMap<SessionId, (u64, UnboundedSender<Input>)> = HashMap::new();
-    let mut process: Option<(Child, ChildStdin)> = None;
+    let mut process: Option<(Running, ChildStdin)> = None;
     let mut mux = adapter.mux(&spec);
     // What the process says, a line at a time; `None` once it ended (by its launch).
     let (said, mut hear) = unbounded_channel::<(u64, Option<String>)>();
@@ -171,7 +171,7 @@ fn spawn(
     env: &[(String, String)],
     launch: u64,
     said: UnboundedSender<(u64, Option<String>)>,
-) -> Result<(Child, ChildStdin), String> {
+) -> Result<(Running, ChildStdin), String> {
     let plan = adapter.launch(spec);
     let mut command = Command::from(quill_files::command(program.unwrap_or(&plan.program)));
     command
@@ -206,5 +206,5 @@ fn spawn(
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(_)) = lines.next_line().await {}
     });
-    Ok((child, stdin))
+    Ok((Running(child), stdin))
 }

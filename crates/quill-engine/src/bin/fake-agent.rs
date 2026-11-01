@@ -583,6 +583,31 @@ mod ext {
             (Some("mcpServer/oauth/login"), Some(_)) => {
                 json!({"authorizationUrl": "https://example.invalid/oauth/authorize?state=fake"})
             }
+            // A mode switch, as Claude Code 2.1.316 answers it after its capture: bypass is
+            // refused unless the session was launched in it or allowed it.
+            _ if msg["type"] == "control_request"
+                && msg["request"]["subtype"] == "set_permission_mode" =>
+            {
+                let mode = &msg["request"]["mode"];
+                let args: Vec<String> = std::env::args().collect();
+                let launched_in = args
+                    .windows(2)
+                    .any(|w| w[0] == "--permission-mode" && w[1] == "bypassPermissions");
+                let allowed = launched_in
+                    || args
+                        .iter()
+                        .any(|a| a == "--allow-dangerously-skip-permissions");
+                if mode == "bypassPermissions" && !allowed {
+                    return Some(json!({"type": "control_response", "response": {"subtype": "error",
+                        "request_id": msg["request_id"],
+                        "error": "Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions",
+                        "error_code": "bypass_not_launched"}}).to_string());
+                }
+                let taken = json!({"type": "control_response", "response": {"subtype": "success",
+                    "request_id": msg["request_id"], "response": {"mode": mode}}});
+                let status = json!({"type": "system", "subtype": "status", "status": null, "permissionMode": mode});
+                return Some(format!("{taken}\n{status}"));
+            }
             // Claude Code's control requests, only when there is no capture to replay.
             _ if msg["type"] == "control_request"
                 && (bare || msg["request"]["subtype"] == "get_skills_dialog") =>

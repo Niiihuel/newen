@@ -221,6 +221,11 @@ pub const ERROR: &str =
 /// A waiting task's dashed ring.
 pub const TASK_PENDING: &str = icon!("<circle cx='10' cy='10' r='7' stroke-dasharray='2.4 2.3'/>");
 
+/// A session waiting for another's task to end: an hourglass.
+pub const HOURGLASS: &str = icon!(
+    "<path d='M5 2.75h10M5 17.25h10'/><path d='M6.25 2.75v1.5c0 2.25 3.75 3.5 3.75 5.75s-3.75 3.5-3.75 5.75v1.5M13.75 2.75v1.5c0 2.25-3.75 3.5-3.75 5.75s3.75 3.5 3.75 5.75v1.5'/>"
+);
+
 /// The greeting's mark: an eight-ray spark, quill's own.
 pub const SPARK: &str = icon!(
     "<path d='M10 2.5v15M2.5 10h15M4.7 4.7l10.6 10.6M15.3 4.7L4.7 15.3' stroke-width='1.6'/>"
@@ -303,6 +308,7 @@ pub const ALL: &[(&str, &str)] = &[
     ("panel_right", PANEL_RIGHT),
     ("question", QUESTION),
     ("task_pending", TASK_PENDING),
+    ("hourglass", HOURGLASS),
     ("warning", WARNING),
     ("spark", SPARK),
 ];

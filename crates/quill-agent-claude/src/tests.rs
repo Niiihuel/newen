@@ -273,6 +273,34 @@ fn mcp_status_tells_each_server_with_where_it_came_from_and_its_tools() {
     assert_eq!(ready, Some(true));
 }
 
+/// A mode the CLI refuses is told as refused, not dropped; one it takes is the session's mode
+/// from its answer (both as CLI 2.1.316 answers them).
+#[test]
+fn a_mode_change_is_told_taken_or_refused() {
+    let mut claude = Claude::new();
+    let id =
+        |sent: Vec<String>| serde_json::from_str::<Value>(&sent[0]).unwrap()["request_id"].clone();
+    let asked = id(claude.encode(AgentCommand::SetMode("bypassPermissions".into())));
+    let refused = json!({"type": "control_response", "response": {"subtype": "error", "request_id": asked,
+        "error": "Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions",
+        "error_code": "bypass_not_launched"}});
+    let events = claude.decode(&refused.to_string()).events;
+    assert!(
+        matches!(&events[..], [AgentEvent::ModeRefused { mode, error }]
+            if mode == "bypassPermissions" && error.contains("not launched")),
+        "{events:?}"
+    );
+    let asked = id(claude.encode(AgentCommand::SetMode("acceptEdits".into())));
+    let taken = json!({"type": "control_response", "response": {"subtype": "success", "request_id": asked,
+        "response": {"mode": "acceptEdits"}}});
+    assert_eq!(
+        claude.decode(&taken.to_string()).events,
+        [AgentEvent::ModeChanged {
+            mode: "acceptEdits".into()
+        }]
+    );
+}
+
 #[test]
 fn signing_in_to_a_server_gives_its_page_or_why_not() {
     let mut claude = Claude::new();

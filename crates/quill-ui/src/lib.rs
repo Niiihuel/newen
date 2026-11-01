@@ -194,6 +194,8 @@ pub struct Session {
     /// What the agent suggests the person asks next, while the session waits for them: the
     /// empty composer shows it until a message is sent, a turn starts or the agent stops.
     pub suggestion: Option<String>,
+    /// The sessions it waits for (`wait_for_session`), until their task is done.
+    pub waits: Vec<quill_model::Wait>,
 }
 
 /// Whether a session can be reached from another device through its agent's own service.
@@ -321,6 +323,7 @@ impl Store {
                 remote: Remote::Off,
                 remote_code: None,
                 suggestion: None,
+                waits: vec![],
             }),
             Event::Status { session, status } => {
                 if let Some(s) = self.session_mut(session) {
@@ -605,6 +608,17 @@ impl Store {
                 if let (Some(s), Some((items, title))) = (self.session_mut(session), parent) {
                     s.items = items;
                     s.title = format!("{title} (fork)");
+                }
+            }
+            Event::Waiting { session, wait } => {
+                if let Some(s) = self.session_mut(session) {
+                    s.waits.retain(|w| w.on != wait.on);
+                    s.waits.push(wait);
+                }
+            }
+            Event::WaitEnded { session, on, .. } => {
+                if let Some(s) = self.session_mut(session) {
+                    s.waits.retain(|w| w.on != on);
                 }
             }
             Event::Forwarded { session, from } => {
@@ -1180,7 +1194,13 @@ pub struct Ui {
     pub panes: Vec<Pane>,
     /// The pane that fills the space of the conversation, as Desktop's expand does.
     pub expanded_pane: Option<Pane>,
+    /// Each other conversation's panes (`None`: the new, not yet started one), kept while
+    /// another is shown, for the app run; `panes` and what they show are the shown one's.
+    pub kept_panes: std::collections::HashMap<Option<SessionId>, KeptPanes>,
+    /// The shown conversation changed: its panes take their place at once, not on springs.
+    pub panes_switched: bool,
     /// Whether the right panel (Environment, Context, Changes) shows while no pane is open.
+    /// A layout choice, not a conversation's: it holds across them, as what it shows follows.
     pub panel_open: bool,
     /// The right panel's width, once the person dragged its edge.
     pub panel_width: f32,
@@ -1269,6 +1289,9 @@ pub struct Ui {
     pub group_by: GroupBy,
     pub sort_by: SortBy,
     pub ascending: bool,
+    /// The sidebar's order while the pointer is over it, with the sort it was taken under:
+    /// a row never moves from under a click, and the sessions reorder once it leaves.
+    pub sidebar_order: Option<((SortBy, bool), Vec<SessionId>)>,
     /// Sessions seen running in this run: only their turns that end unseen leave them
     /// unread, not the turns read back at start.
     pub live: std::collections::HashSet<SessionId>,
@@ -1293,6 +1316,11 @@ pub struct Ui {
     /// Words the host puts back in the message box: a message rewound or forked from, or a
     /// slash command picked.
     pub restore_prompt: Option<String>,
+    /// What each conversation's composer held when another was shown (`None`: the new,
+    /// not yet started one), kept for the app run: its text, mentioned sessions and images.
+    pub drafts: std::collections::HashMap<Option<SessionId>, Waiting>,
+    /// The shown conversation changed and `prompt` is its draft: the host puts it in the box.
+    pub draft_switched: bool,
     /// A menu the "/" palette opened (`/usage`): when it closes, by a choice or Escape, the
     /// prompt loses its `/` token and the composer takes the keys again.
     pub menu_from_palette: bool,
@@ -1311,7 +1339,8 @@ pub struct Ui {
     /// The side chat its pane shows, one asked for that the engine is making, and what its
     /// reply field holds.
     pub side_chat: Option<SessionId>,
-    pub side_waiting: bool,
+    /// The session a side chat was asked from, while the engine makes it.
+    pub side_waiting: Option<SessionId>,
     pub side_reply: String,
     /// The copy button last pressed and when: it shows a check for a moment.
     pub copied: Option<(String, std::time::Instant)>,
@@ -1668,6 +1697,15 @@ fn session_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
                 })
                 .unwrap_or_default(),
         );
+    } else if let Some((session, on)) = id
+        .strip_prefix(view::WAIT_CANCEL)
+        .and_then(|rest| rest.split_once(':'))
+    {
+        let ids = (session.parse(), on.parse());
+        return Some(match ids {
+            (Ok(session), Ok(on)) => vec![Intent::CancelWait { session, on }],
+            _ => vec![],
+        });
     } else if let Some(tasks) = id.strip_prefix("proposal-all:") {
         return Some(
             ui.selected
@@ -1786,6 +1824,18 @@ impl SessionBrowser {
     pub fn tab(&self) -> Option<&quill_model::BrowserTab> {
         self.tabs.iter().find(|t| Some(t.id) == self.active)
     }
+}
+
+/// A conversation's panes while another is shown: which are open, which is expanded, and
+/// what the diff, helper, plan and side chat panes show (`Ui`'s fields of the same names).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KeptPanes {
+    pub panes: Vec<Pane>,
+    pub expanded_pane: Option<Pane>,
+    pub diff: Option<(SessionId, RequestId)>,
+    pub helper: Option<String>,
+    pub plan: Option<String>,
+    pub side_chat: Option<SessionId>,
 }
 
 /// What can open in the column beside the conversation.
@@ -1967,6 +2017,8 @@ impl Ui {
             diff: None,
             panes: vec![],
             expanded_pane: None,
+            kept_panes: Default::default(),
+            panes_switched: false,
             panel_open: true,
             panel_width: look::PANEL_WIDTH,
             collapsed: vec![],
@@ -2011,11 +2063,14 @@ impl Ui {
             group_by: GroupBy::default(),
             sort_by: SortBy::default(),
             ascending: false,
+            sidebar_order: None,
             live: Default::default(),
             filter_menu: None,
             diff_menu: None,
             waiting_fork: false,
             restore_prompt: None,
+            drafts: Default::default(),
+            draft_switched: false,
             menu_from_palette: false,
             slash_selected: 0,
             slash_dismissed: None,
@@ -2025,7 +2080,7 @@ impl Ui {
             mention_found: None,
             show_more: false,
             side_chat: None,
-            side_waiting: false,
+            side_waiting: None,
             side_reply: String::new(),
             copied: None,
             reading: None,
@@ -2298,6 +2353,15 @@ impl Ui {
         };
         self.sidebar
             .tick(&pointer, motion, self.reduced_motion, now);
+        let over =
+            self.sidebar.peek || (self.pointer).is_some_and(|p| p.x < view::sidebar_width(self));
+        let sort = (self.sort_by, self.ascending);
+        // A sort the person picks applies at once, the pointer on its menu or not.
+        self.sidebar_order = match self.sidebar_order.take() {
+            Some(frozen) if over && frozen.0 == sort => Some(frozen),
+            _ if over => Some((sort, view::order(store, self))),
+            _ => None,
+        };
         // The panel gives way to the panes as they open, and comes back as they shut.
         self.panel_shown.launch(
             open(self.panel_open && self.panes.is_empty(), self.panel_width),
@@ -2323,7 +2387,8 @@ impl Ui {
             .launch(open(self.expanded_pane.is_some(), 1.0), motion, now);
         self.stack_shown
             .launch(open(self.panes.len() >= 2, 1.0), motion, now);
-        if self.reduced_motion {
+        // Another conversation's panes are in place at once, as its transcript is.
+        if std::mem::take(&mut self.panes_switched) || self.reduced_motion {
             self.panel_shown.snap_to(self.panel_shown.target(), now);
             self.column_shown.snap_to(self.column_shown.target(), now);
             self.column_share.snap_to(self.column_share.target(), now);
@@ -2441,6 +2506,84 @@ impl Ui {
         }
     }
 
+    /// The shown conversation changed from `from`: its composer's draft is kept for it, and
+    /// the one now shown gets its own back. A session made from the new conversation's or a
+    /// fork's message is not a switch: what the box holds goes on with it.
+    fn switch_draft(&mut self, from: Option<SessionId>) {
+        let draft = (
+            std::mem::take(&mut self.prompt),
+            std::mem::take(&mut self.mentioned_sessions),
+            std::mem::take(&mut self.images),
+        );
+        if !draft.0.is_empty() || !draft.2.is_empty() {
+            self.drafts.insert(from, draft);
+        }
+        (self.prompt, self.mentioned_sessions, self.images) =
+            self.drafts.remove(&self.selected).unwrap_or_default();
+        self.slash_dismissed = None;
+        self.mention_dismissed = None;
+        self.image_notice = None;
+        self.draft_switched = true;
+    }
+
+    /// The shown conversation changed from `from`: its panes are kept for it, with what they
+    /// show, and the one now shown gets its own back (none, the first time it shows).
+    fn switch_panes(&mut self, from: Option<SessionId>) {
+        // A pane still shutting is done with: it was `from`'s.
+        if let Some(pane) = self.closing.take() {
+            if !self.pane_open(pane) {
+                self.forget_pane(pane);
+            }
+        }
+        if let Some((_, pane)) = self.stack_closing.take() {
+            if !self.pane_open(pane) {
+                self.forget_pane(pane);
+            }
+        }
+        let kept = self.take_panes();
+        self.kept_panes.insert(from, kept);
+        let shown = self.kept_panes.remove(&self.selected).unwrap_or_default();
+        self.put_panes(shown);
+        self.panes_switched = true;
+    }
+
+    /// Runs `f` on `session`'s panes: those on screen when it is shown, else its kept ones,
+    /// as when the agent opens its browser while the person looks at another conversation.
+    fn in_panes_of(&mut self, session: SessionId, f: impl FnOnce(&mut Self)) {
+        if self.selected == Some(session) {
+            return f(self);
+        }
+        let shown = self.take_panes();
+        let kept = self.kept_panes.remove(&Some(session)).unwrap_or_default();
+        self.put_panes(kept);
+        f(self);
+        let kept = self.take_panes();
+        self.kept_panes.insert(Some(session), kept);
+        self.put_panes(shown);
+    }
+
+    fn take_panes(&mut self) -> KeptPanes {
+        KeptPanes {
+            panes: std::mem::take(&mut self.panes),
+            expanded_pane: self.expanded_pane.take(),
+            diff: self.diff.take(),
+            helper: self.helper.take(),
+            plan: self.plan.take(),
+            side_chat: self.side_chat.take(),
+        }
+    }
+
+    fn put_panes(&mut self, kept: KeptPanes) {
+        KeptPanes {
+            panes: self.panes,
+            expanded_pane: self.expanded_pane,
+            diff: self.diff,
+            helper: self.helper,
+            plan: self.plan,
+            side_chat: self.side_chat,
+        } = kept;
+    }
+
     fn forget_pane(&mut self, pane: Pane) {
         match pane {
             Pane::Diff => self.diff = None,
@@ -2479,16 +2622,16 @@ impl Ui {
             self.images.extend(images.iter().cloned());
             return vec![];
         }
-        // A tab that appears in the session on screen, as when the agent opens a page, shows
-        // the browser, as Desktop's does.
+        // A tab that appears in a session, as when the agent opens a page, shows the browser,
+        // as Desktop's does: at once on screen, else when the person goes to that session.
         if let Event::Browser {
             session,
             update: quill_model::BrowserUpdate::Tabs { tabs, .. },
         } = event
         {
             let before = self.browser_tabs.insert(*session, tabs.len()).unwrap_or(0);
-            if self.selected == Some(*session) && tabs.len() > before {
-                self.open_pane(Pane::Browser);
+            if tabs.len() > before {
+                self.in_panes_of(*session, |ui| ui.open_pane(Pane::Browser));
             }
         }
         if let Event::Browser {
@@ -2506,6 +2649,10 @@ impl Ui {
             look::set_text_size(settings.text_size);
             look::set_width(settings.width);
             let first = self.agents.is_empty();
+            let (before, after) = (
+                self.settings.agent(&self.agent),
+                settings.agent(&self.agent),
+            );
             self.settings = settings.clone();
             // Welcomed before the appearance step existed (the first settings of a run already
             // say so): not asked now. Later ones echo a Get started pressed in this run.
@@ -2522,7 +2669,15 @@ impl Ui {
                     self.take_agent(&agent.id.clone());
                 }
             }
-            if self.selected.is_none() {
+            // Most settings saved echo here (a panel folded, an agent's option): what a new
+            // conversation was given stays, unless the agent's defaults themselves changed or
+            // its unsafe modes are no longer allowed.
+            let defaults = |a: &quill_model::AgentSettings| {
+                (a.model.clone(), a.effort.clone(), a.mode.clone())
+            };
+            let changed = defaults(&before) != defaults(&after)
+                || (before.allow_unsafe && !after.allow_unsafe);
+            if self.selected.is_none() && changed {
                 self.take_defaults();
             }
             return vec![];
@@ -2606,20 +2761,38 @@ impl Ui {
         if let Event::Deleted { session } = event {
             if self.selected == Some(*session) {
                 self.selected = None;
+                self.switch_draft(Some(*session));
+                self.switch_panes(Some(*session));
                 self.title_edit = None;
-                self.panes.clear();
-                self.expanded_pane = None;
+            }
+            self.drafts.remove(&Some(*session));
+            self.kept_panes.remove(&Some(*session));
+            // A side chat deleted leaves the pane that showed it, here or in a kept conversation.
+            if self.side_chat == Some(*session) {
+                self.close_pane(Pane::Side);
+            }
+            for kept in (self.kept_panes.values_mut()).filter(|k| k.side_chat == Some(*session)) {
+                kept.panes.retain(|p| *p != Pane::Side);
+                kept.expanded_pane = kept.expanded_pane.filter(|p| *p != Pane::Side);
+                kept.side_chat = None;
             }
         }
         if let Event::SessionCreated { session, .. } = event {
-            // A side chat opens in its pane; the session in view stays.
-            if std::mem::take(&mut self.side_waiting) {
-                self.side_chat = Some(*session);
-                self.open_pane(Pane::Side);
+            // A side chat opens in its pane, of the session it was asked from; the session in
+            // view stays.
+            if let Some(from) = self.side_waiting.take() {
+                let chat = *session;
+                self.in_panes_of(from, |ui| {
+                    ui.side_chat = Some(chat);
+                    ui.open_pane(Pane::Side);
+                });
                 return vec![];
             }
+            // A fork is a conversation of its own: the one forked from keeps its panes.
             if std::mem::take(&mut self.waiting_fork) {
+                let from = self.selected;
                 self.selected = Some(*session);
+                self.switch_panes(from);
                 self.title_edit = None;
                 return vec![Intent::WorkingTree { session: *session }];
             }
@@ -2856,6 +3029,7 @@ pub fn settled(store: &Store, ui: &mut Ui) -> Vec<Intent> {
 }
 
 pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent> {
+    let shown = ui.selected;
     let mut intents = match files::action(store, ui, action) {
         Some(intents) => intents,
         None => update_action(store, ui, action),
@@ -2866,6 +3040,10 @@ pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent
         ui.slash_dismissed = None;
         ui.restore_prompt
             .get_or_insert_with(|| slash::without_token(&ui.prompt));
+    }
+    if ui.selected != shown {
+        ui.switch_draft(shown);
+        ui.switch_panes(shown);
     }
     intents
 }
@@ -3135,7 +3313,7 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                     .filter(|q| !q.is_empty()),
                 ui.selected,
             ) {
-                ui.side_waiting = true;
+                ui.side_waiting = Some(session);
                 return vec![Intent::SideChat {
                     session,
                     text: question.to_owned(),
@@ -3694,6 +3872,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if let Some(folder) = id.strip_prefix("new-in:") {
         ui.selected = None;
         ui.cwd = PathBuf::from(folder);
+        ui.take_defaults();
         return vec![];
     }
     if let Some(agent) = id.strip_prefix("pick-agent:") {
@@ -3804,9 +3983,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         }
         // Going somewhere from the peek puts it away, as Desktop's does ("navigated").
         ui.sidebar.peek = false;
-        // A session beside another goes with it: shown on its own, or from elsewhere, it closes.
+        // A session beside another stays with it (`kept_panes`); shown on its own, it closes.
         let beside = ui.side_chat.and_then(|s| store.session(s));
-        if beside.is_none_or(|s| s.id == session || s.parent != Some(session)) {
+        if beside.is_none_or(|s| s.id == session) {
             ui.close_pane(Pane::Side);
         }
         let mut intents = vec![Intent::WorkingTree { session }];
