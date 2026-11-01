@@ -2,6 +2,7 @@
 
 - The UI is limn only. Anything generic that limn lacks (a component, a layout, a fix) is a pull request to limn from its own worktree, `git -C ~/projects/personal/lienzo worktree add ../limn-<topic> -b feat/<topic> main`. quill never carries a copy or a patch of a limn component.
 - Agents are adapters: generic code (`quill-model`, `quill-agent`, `quill-engine`, `quill-store`, `quill-git`, UI) never names a vendor. Vendor protocols live only in `quill-agent-<id>` (`quill-agent-claude` first). The UI builds model, effort and mode pickers from `AgentCapabilities`.
+- Every adapter offers all of quill's own tools (`quill_agent::HOST_TOOLS`: sessions that start, read, message, list and wait for each other) through its CLI's own mechanism (Claude: an in-process MCP server; Codex: `dynamicTools`), answers them with the engine's results, and has a test that every one is offered. Sessions of different CLIs work together only because each one has them.
 - Layers point down only: `quill-ui` never depends on `quill-engine`; they meet in `quill-model` (`Event` up, `Intent` down).
 - Nothing blocking on the UI thread: processes, git, disk and PTYs live in `quill-engine`.
 - Persist before notifying: an important state change is written to `quill-store` before the UI sees it.

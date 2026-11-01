@@ -43,6 +43,10 @@ Un agente puede correr todas sus sesiones en un solo proceso cuando las opciones
 
 Cada agente recibe la misma guía, escrita por quill (`quill_agent::WORK_GUIDE`): preguntar con su herramienta de preguntas, con opciones y la recomendada primero, antes de trabajar en algo que deja dudas; proponer un plan antes de un cambio grande o riesgoso (plan mode si lo tiene); llevar una lista de tareas en lo que tiene varios pasos, con un último paso que compruebe el resultado; comprobar antes de decir que algo anda; y cerrar con qué cambió, cómo comprobarlo y qué no se verificó, más una sola pregunta si queda algo por decidir. No nombra herramientas de ningún CLI. Claude Code la recibe primera en `appendSystemPrompt`; Codex, como `developerInstructions` del hilo (al abrirlo, reanudarlo o bifurcarlo; codex 0.163.0 la acepta), que se suman a sus propias instrucciones.
 
+## Las herramientas de quill van a todos los agentes
+
+Cada CLI que quill integra recibe **todas** las herramientas propias de quill (`quill_agent::HOST_TOOLS`: abrir, leer, escribirle, listar y esperar a otras sesiones), por el mecanismo de su CLI: Claude Code, un servidor MCP dentro del proceso de quill; Codex, `dynamicTools` en `thread/start`, respondidas en `item/tool/call`. Es lo que deja que sesiones de CLIs distintos trabajen juntas (un Codex que espera a un Claude, un Claude que le escribe a un Codex). Un adaptador nuevo no está completo sin ellas, y cada uno tiene un test que comprueba que las ofrece todas. Decisión del dueño (2026-11-01).
+
 ## Esperar a otra sesión (`wait_for_session`)
 
 Cuando la persona ata un trabajo al fin de otra conversación ("sacá la 0.1.0 cuando termine la otra conversación"), ningún CLI puede esperar a otro chat: el agente prometería esperar y nada pasaría hasta que la persona vuelva a escribir. quill da a los dos agentes dos herramientas propias, junto a `start_session`, `send_to_session` y `read_session` (`quill_agent::HOST_TOOLS`):
