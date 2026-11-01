@@ -20,8 +20,8 @@ en la app) y `.github/workflows/release.yml` (CI).
 Cada release publica, además de sus artefactos:
 
 - `quill-update.json`: versión, fecha, notas (el mensaje del tag),
-  `minimum_version` y, por plataforma (`linux-x86_64`, `windows-x86_64`), la
-  URL, el tamaño y el SHA-256 del artefacto.
+  `minimum_version` y, por plataforma (`linux-x86_64`, `windows-x86_64`,
+  `macos-aarch64`), la URL, el tamaño y el SHA-256 del artefacto.
 - `quill-update.json.sig`: la firma Ed25519 de esos bytes exactos, en base64.
 
 `minimum_version` es la versión obligatoria más nueva que sea menor o igual a
@@ -74,7 +74,8 @@ descargada que nunca pasó por `quill --install` tampoco se toca.
 
 ### Descarga e instalación
 
-- El artefacto se baja a `app/downloads/` con el digest en el nombre
+- El artefacto se baja a `app/downloads/` (en Windows y macOS, a
+  `quill-updates` en la carpeta temporal) con el digest en el nombre
   (`quill-{sha256}.part` mientras baja). Si la conexión se corta, el siguiente
   intento sigue desde donde quedó (`Range`); si el servidor no admite rangos,
   empieza de nuevo.
@@ -130,9 +131,10 @@ obligatoria se descubre al volver la red).
    - crea una release borrador con el mensaje del tag como notas (un tag con
      `-`, como `v0.2.0-rc.1`, queda como pre-release y las copias instaladas
      no la ven: `releases/latest` la saltea);
-   - compila el artefacto de Linux en Ubuntu 24.04 (`quill-x86_64-linux.gz`) y,
-     si está activado, el de Windows (`quill-x86_64-windows.exe`), y los sube al
-     borrador;
+   - compila el artefacto de Linux en Ubuntu 24.04 (`quill-x86_64-linux.tar.gz`),
+     el de Windows (`quill-x86_64-windows.zip`) y el de macOS
+     (`quill-aarch64-macos.zip`), cada uno con CEF adentro (ver cada sistema
+     abajo), y los sube al borrador;
    - arma el manifiesto (`quill-release manifest`, con `minimum_version`), lo
      firma con el secreto (`quill-release sign`, con el programa ya compilado
      para que ningún build script vea el secreto), lo **verifica con la clave
@@ -225,45 +227,60 @@ QUILL_UPDATE_FEED=http://127.0.0.1:8765 QUILL_UPDATE_KEY=… QUILL_UPDATE_ROOT=/
 ```
 
 Opciones: `--version 9.9.9`, `--mandatory`, `--slow` (descarga lenta, para ver el
-progreso), `--corrupt` (SHA-256 que no coincide), `--port`, `--program <archivo>`
-(lo que se instala; sin él es un relleno que no es un programa y la instalación
-lo rechaza), `--platform windows-x86_64`.
+progreso), `--corrupt` (SHA-256 que no coincide), `--port`, `--artifact <archivo>`
+(lo que se instala, armado como lo arma el CI: el `.tar.gz` o el `.zip` de una
+compilación con esa versión; sin él es un relleno que no es un archivo
+comprimido y la instalación lo rechaza), `--platform windows-x86_64`.
 
 `cargo test -p quill-update` cubre lo mismo sin ventana ni red: firmas,
 manifiestos alterados, obligatoria contra opcional, descargas que no coinciden,
 reanudación, la búsqueda por la API con un token que no alcanza, e instalación
-atómica.
+atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y `locales/`).
+Lo de Windows y macOS sólo se compila (la comprobación de los primeros bytes
+del programa y la ruta del bundle sí se prueban en cualquier sistema).
 
 ## Linux
 
-**Artefacto**: `quill-x86_64-linux.gz`, el programa `quill` comprimido con gzip.
-Se compila en Ubuntu 24.04 con las bibliotecas de la distribución (no las de
-Nix) y con `CARGO_PROFILE_RELEASE_STRIP=debuginfo`.
+**Artefacto**: `quill-x86_64-linux.tar.gz`, un tar comprimido con gzip con todo
+en su raíz, sin carpeta: el programa `quill`, los archivos de CEF
+(`libcef.so`, `libEGL.so`, `libGLESv2.so`, `libvk_swiftshader.so`, los `.pak`,
+`icudtl.dat`, `v8_context_snapshot.bin`…) y la carpeta `locales/`. Se compila
+en Ubuntu 24.04 con las bibliotecas de la distribución (no las de Nix) y con
+`CARGO_PROFILE_RELEASE_STRIP=debuginfo`. El programa busca `libcef.so` a su
+lado (rpath `$ORIGIN`) y los recursos de CEF en su misma carpeta.
 
 **Instalación por usuario**, sin permisos de administrador:
 
 ```text
 ~/.local/share/quill/app/
-  versions/0.1.0/quill     una carpeta por versión
-  versions/0.2.0/quill
+  versions/0.1.0/           una carpeta por versión, con el bundle entero
+    quill
+    libcef.so  *.pak  icudtl.dat  …
+    locales/
+  versions/0.2.0/
   current -> versions/0.2.0
   downloads/                la descarga en curso o la lista para instalar
 ```
 
-La primera vez:
+La primera vez, en una carpeta propia (el tar no trae carpeta y desparramaría
+sus archivos donde se abra):
 
 ```sh
-gunzip -c quill-x86_64-linux.gz > quill && chmod +x quill && ./quill --install
+mkdir quill && tar -xzf quill-x86_64-linux.tar.gz -C quill && ./quill/quill --install
 ```
 
 `quill --install` copia el programa como la versión que es y deja `current`
-apuntando a ella. Todavía **no** crea el lanzador ni la entrada del menú (rune
-sí): hasta entonces, se arranca con `~/.local/share/quill/app/current/quill`.
+apuntando a ella. Si la carpeta del programa tiene `libcef.so`, copia también
+sus otros archivos y `locales/` (no otras carpetas); si no (una compilación
+propia), copia sólo el programa. Todavía **no** crea el lanzador ni la entrada
+del menú (rune sí): hasta entonces, se arranca con
+`~/.local/share/quill/app/current/quill`.
 
 Cada actualización:
 
-1. descomprime en `versions/.{versión}.{pid}`, comprueba que sea un programa ELF
-   y lo sincroniza al disco;
+1. extrae el tar con el `tar` del sistema en `versions/.{versión}.{pid}`
+   (conserva los permisos), comprueba que `quill` sea un programa ELF y
+   sincroniza todo al disco;
 2. lo renombra a `versions/{versión}`;
 3. crea un enlace `current.new` y lo renombra sobre `current`: un inicio
    encuentra la versión vieja o la nueva, nunca ninguna;
@@ -272,8 +289,13 @@ Cada actualización:
 
 Un fallo en cualquier paso deja `current` como estaba.
 
-**Qué necesita en tiempo de ejecución.** El binario enlaza `libcef.so` (ver
-[Pendiente](#pendiente-antes-de-la-primera-release)), además de glibc, Wayland,
+**Copias instaladas hasta la 0.1.3.** Esas versiones esperan el programa solo
+comprimido con gzip: bajan el `.tar.gz` (la firma y el SHA-256 coinciden), lo
+descomprimen, ven que no empieza como un programa ELF y no instalan nada, con
+el error en Ajustes. No se rompe nada, pero tampoco se actualizan: hay que
+reinstalar una vez a mano con los pasos de arriba, y desde ahí siguen solas.
+
+**Qué necesita en tiempo de ejecución.** Además de lo que trae el bundle: glibc, Wayland,
 libxkbcommon, libgbm y la pila gráfica (Vulkan o GL). El paso `ldd` del workflow
 deja la lista exacta en el log de cada release.
 
@@ -294,28 +316,92 @@ dueño; el estado real de cada sistema está en [portabilidad.md](portabilidad.m
 
 ## Windows
 
-**Artefacto**: `quill-x86_64-windows.exe`, el programa tal cual, en el manifiesto
-como `windows-x86_64`. Compilado con MSVC y `+crt-static`, así que no hace falta
-el Visual C++ Redistributable.
+**Artefacto**: `quill-x86_64-windows.zip`, con todo en su raíz: `quill.exe`,
+los archivos de CEF (`libcef.dll`, `chrome_elf.dll`, `libEGL.dll`,
+`libGLESv2.dll`, los `.pak`, `icudtl.dat`, `v8_context_snapshot.bin`…) y la
+carpeta `locales\`. En el manifiesto es `windows-x86_64`. Compilado con MSVC y
+`+crt-static`, así que no hace falta el Visual C++ Redistributable.
 
-**Instalación por usuario**: `%LOCALAPPDATA%\Programs\quill\quill.exe`, con
-`quill.exe --install` desde cualquier carpeta. quill se considera instalado sólo
-si corre desde ahí.
+**Instalación por usuario**, sin permisos de administrador:
 
-**Cada actualización**: el nuevo `quill.exe` se escribe al lado como
-`quill.exe.{versión}.new`, y se comprueba que empiece por `MZ`. El que corre se
-renombra a `quill.exe.old` (Windows permite renombrar un ejecutable en uso, no
-sobrescribirlo), el nuevo toma su nombre y quill arranca. El `.old` lo borra la
-siguiente actualización.
+```text
+%LOCALAPPDATA%\Programs\quill\
+  quill.exe                 el programa, siempre en el mismo lugar
+  quill.exe.old             el anterior, hasta la siguiente actualización
+  versions\0.2.0\           el resto del bundle de cada versión
+    libcef.dll  *.pak  icudtl.dat  …
+    locales\
+```
+
+`quill.exe` busca CEF primero a su lado y si no en `versions\{su versión}\`.
+quill se considera instalado sólo si corre desde esa carpeta.
+
+La primera vez: descomprimir el zip en una carpeta (cualquiera) y correr
+`quill.exe --install` desde ahí. Copia `quill.exe` a la raíz y el resto (si
+la carpeta tiene `libcef.dll`; si no, sólo el programa) a
+`versions\{versión}\`.
+
+**Cada actualización**:
+
+1. extrae el zip con el `tar.exe` de Windows
+   (`%SystemRoot%\System32\tar.exe`, desde Windows 10 1803; sin ventana de
+   consola) en `versions\.{versión}.{pid}`;
+2. saca de ahí `quill.exe` como `quill.exe.{versión}.new` al lado del que
+   corre, comprueba que empiece por `MZ` y sincroniza todo al disco;
+3. renombra la carpeta a `versions\{versión}`;
+4. renombra el `quill.exe` que corre a `quill.exe.old` (Windows permite
+   renombrar un ejecutable en uso, no sobrescribirlo) y el nuevo toma su
+   nombre: ése es el punto de no retorno, y quill arranca;
+5. borra las versiones que no son la nueva ni la que todavía corre. Una
+   carpeta se renombra antes de borrarse: si un quill la está usando, Windows
+   no deja y queda entera.
+
+Un fallo antes del paso 4 deja la instalación anterior funcionando.
 
 **Sin probar en una máquina Windows todavía**: el camino de reemplazo es el
-único del updater que no corrió en ningún lado. Antes de encender el job hay
-que hacer una actualización real de punta a punta con `quill-test-feed
---platform windows-x86_64`.
+único del updater que no corrió en ningún lado. Antes de publicar para Windows
+hay que hacer una actualización real de punta a punta con `quill-test-feed
+--platform windows-x86_64 --artifact quill-x86_64-windows.zip`.
 
 **Sin firma de código (Authenticode).** El `.exe` no está firmado: SmartScreen
 avisa en la primera descarga por navegador. Las actualizaciones no pasan por
 ahí: su integridad la dan la firma Ed25519 del manifiesto y el SHA-256.
+
+## macOS
+
+**Artefacto**: `quill-aarch64-macos.zip`, hecho con
+`ditto -c -k --keepParent quill.app`: en su raíz está `quill.app/`, firmado y
+notarizado, con CEF dentro (el framework trae enlaces simbólicos que `ditto`
+conserva). En el manifiesto es `macos-aarch64`; sólo Apple Silicon.
+
+**Instalación**: es el bundle mismo. Si quill corre desde
+`<carpeta>/quill.app/Contents/MacOS/quill`, la instalación es esa carpeta
+(normalmente `/Applications` o `~/Applications`); si no, `~/Applications`. Un
+bundle con otro nombre no cuenta como instalado. Si macOS lo corre desde una
+copia de sólo lectura (*App Translocation*, al abrirlo donde se descomprimió
+sin moverlo), tampoco.
+
+La primera vez: descomprimir el zip y arrastrar `quill.app` a Aplicaciones.
+No hace falta `--install`: un `quill.app` ya es una instalación. Si se corre
+igual, desde un `quill.app` que no es el instalado copia ese bundle con `ditto`
+a la instalación (`~/Applications/quill.app`, salvo `QUILL_UPDATE_ROOT`).
+
+**Cada actualización**:
+
+1. extrae el zip con `ditto -x -k` en `.quill.app.{versión}.{pid}`, al lado
+   del bundle;
+2. corre `codesign --verify --deep --strict` sobre el `quill.app` nuevo y lo
+   rechaza si no verifica; comprueba que `Contents/MacOS/quill` sea un
+   programa Mach-O (64 bits o universal) y sincroniza todo al disco;
+3. borra el `.quill.app.old` de la actualización anterior, renombra el
+   `quill.app` que corre a `.quill.app.old` y el nuevo toma su nombre.
+
+Un fallo antes del último paso deja el bundle como estaba. La descarga espera
+en `quill-updates` dentro de la carpeta temporal del usuario.
+
+**Sin probar en un Mac**: este camino ni siquiera se compiló (no hay SDK de
+Apple en la máquina del dueño); usa sólo la biblioteca estándar y `ditto` y
+`codesign` del sistema.
 
 ## Seguridad
 
@@ -334,19 +420,16 @@ ahí: su integridad la dan la firma Ed25519 del manifiesto y el SHA-256.
 
 Estas cosas no están resueltas y bloquean o condicionan la primera release.
 
-1. **libcef.so.** quill enlaza CEF en el build (`cef = "=147.1.0"`, `shell.nix`
-   lo arma para Nix), y el binario tiene `libcef.so` como dependencia de carga
-   (`readelf -d` lo muestra). Un solo archivo `quill-x86_64-linux.gz` no arranca
-   en una máquina sin ese `libcef.so` en su ruta. Hay que decidir cómo se
-   empaqueta: la carpeta de CEF junto al programa (la instalación hoy sólo
-   maneja el programa, así que habría que extenderla), o cargar CEF sólo cuando
-   la vista nativa está prendida. Mientras tanto, el workflow sólo produce el
-   binario y su `ldd`.
+1. **CEF en el bundle.** Cada artefacto lleva CEF junto al programa (ver
+   cada sistema); el programa lo busca a su lado (y en Windows en
+   `versions\{versión}\`). Falta probar el arranque de un bundle real en una
+   máquina sin CEF instalado.
 2. **CEF en el CI.** `cef-dll-sys` descarga CEF durante el build si no hay
    `CEF_PATH`. El workflow no fija la versión ni la verifica: confirmar que la
    descarga funciona en `ubuntu-24.04` y en `windows-latest`.
 3. **limn `quill/integration`** sin subir (ver arriba).
 4. **Lanzador y menú** de `quill --install` (rune los crea; quill no).
-5. **Windows** sin probar (ver arriba) y sin firma.
+5. **Windows** sin probar (ver arriba) y sin firma; **macOS** sin compilar ni
+   probar.
 6. **Avisos de terceros** (`THIRD_PARTY_NOTICES.md` con cargo-about, que rune sí
    publica): quill todavía no los genera.
