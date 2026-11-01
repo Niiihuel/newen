@@ -3769,6 +3769,7 @@ dependencies = [
  "bytemuck",
  "cef",
  "libc",
+ "objc2 0.6.5",
  "quill-model",
  "serde_json",
  "tokio",

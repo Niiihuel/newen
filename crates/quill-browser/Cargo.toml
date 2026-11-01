@@ -28,5 +28,10 @@ bytemuck = "1"
 # A native tab's GPU paints (dmabufs) copied into a texture of the window's own device, eframe's.
 wgpu = { version = "30", default-features = false, features = ["std", "vulkan"] }
 
+# macOS: teaching winit's NSApplication the protocol Chromium asks of it (native.rs; already
+# in the tree through winit and cef).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

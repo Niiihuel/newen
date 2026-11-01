@@ -99,6 +99,8 @@ struct App {
     frames: quill_engine::Frames,
     /// The page presented beneath the window, where the compositor allows (direct.rs).
     direct: Option<Arc<direct::Direct>>,
+    /// Chromium in quill's process, whose loop the window pumps on macOS.
+    native: Option<quill_engine::Native>,
     /// The texture each surface shows from the GPU, as registered with egui's renderer.
     textures: HashMap<String, (egui::TextureId, eframe::wgpu::Texture)>,
     /// The page's share of the window's input.
@@ -647,6 +649,9 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, host: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if let Some(native) = &self.native {
+            native.pump();
+        }
         self.apply_fonts(&ctx);
         if !self.fonts_attached {
             limn_egui::attach_fonts(&mut self.tree, &ctx);
@@ -1738,8 +1743,8 @@ fn main() -> eframe::Result {
             .with_icon(window_icon(false))
             .with_inner_size([1408.0, 844.0])
             .with_min_inner_size([720.0, 480.0])
-            // Where the page is presented beneath it, the window is see-through.
-            .with_transparent(native),
+            // Where the page is presented beneath it (Wayland), the window is see-through.
+            .with_transparent(native && cfg!(target_os = "linux")),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -1778,6 +1783,10 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .map(|render| (render.device.clone(), render.queue.clone()));
             let native = native.then(|| start_native(&frames, gpu)).flatten();
+            if let Some(native) = &native {
+                let ctx = creation.egui_ctx.clone();
+                native.pump_with(Arc::new(move |delay| ctx.request_repaint_after(delay)));
+            }
             *keep.lock().unwrap() = native.clone();
             let direct = native
                 .as_ref()
@@ -1878,6 +1887,7 @@ fn main() -> eframe::Result {
                 frames,
                 textures: HashMap::new(),
                 direct,
+                native: native.clone(),
                 page: page::Page::default(),
                 browser_shown: None,
                 address: None,
@@ -1969,7 +1979,9 @@ fn native_browser(settings: &quill_model::Settings) -> bool {
     match std::env::var("QUILL_BROWSER").as_deref() {
         Ok("native") => true,
         Ok("headless") => false,
-        _ => settings.browser_native,
+        // Windows has no headless Chromium to drive (chromium.rs) and both it and macOS ship
+        // CEF in the bundle: there it is the browser.
+        _ => settings.browser_native || !cfg!(target_os = "linux"),
     }
 }
 
