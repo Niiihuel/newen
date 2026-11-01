@@ -7809,3 +7809,51 @@ fn each_conversation_keeps_its_own_draft() {
     click(&store, &mut ui, view::NEW_SESSION);
     assert_eq!(ui.prompt, "A new task");
 }
+
+#[test]
+fn the_sidebar_keeps_its_order_while_the_pointer_is_over_it() {
+    let mut store = Store::default();
+    for session in [1, 2] {
+        store.apply(Event::SessionCreated {
+            session,
+            agent: "claude".into(),
+            cwd: "/work".into(),
+        });
+    }
+    let mut ui = Ui::new("/work".into());
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    // Over the list, a turn of the lower session leaves it where it is.
+    ui.pointer = Some(limn::Point::new(100.0, 300.0));
+    ui.tick(&store);
+    store.apply(Event::Queued {
+        session: 1,
+        request: "r1".into(),
+        text: "Go on".into(),
+        at: None,
+        images: vec![],
+    });
+    ui.tick(&store);
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    // A sort the person picks applies at once.
+    ui.sort_by = SortBy::Created;
+    ui.ascending = true;
+    ui.tick(&store);
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+    ui.sort_by = SortBy::Updated;
+    ui.ascending = false;
+    ui.tick(&store);
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+    store.apply(Event::Queued {
+        session: 2,
+        request: "r2".into(),
+        text: "And this".into(),
+        at: None,
+        images: vec![],
+    });
+    ui.tick(&store);
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+    // Once the pointer leaves, the list takes the order of its activity.
+    ui.pointer = Some(limn::Point::new(800.0, 300.0));
+    ui.tick(&store);
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+}

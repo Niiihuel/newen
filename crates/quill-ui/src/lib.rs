@@ -1269,6 +1269,9 @@ pub struct Ui {
     pub group_by: GroupBy,
     pub sort_by: SortBy,
     pub ascending: bool,
+    /// The sidebar's order while the pointer is over it, with the sort it was taken under:
+    /// a row never moves from under a click, and the sessions reorder once it leaves.
+    pub sidebar_order: Option<((SortBy, bool), Vec<SessionId>)>,
     /// Sessions seen running in this run: only their turns that end unseen leave them
     /// unread, not the turns read back at start.
     pub live: std::collections::HashSet<SessionId>,
@@ -2016,6 +2019,7 @@ impl Ui {
             group_by: GroupBy::default(),
             sort_by: SortBy::default(),
             ascending: false,
+            sidebar_order: None,
             live: Default::default(),
             filter_menu: None,
             diff_menu: None,
@@ -2305,6 +2309,15 @@ impl Ui {
         };
         self.sidebar
             .tick(&pointer, motion, self.reduced_motion, now);
+        let over =
+            self.sidebar.peek || (self.pointer).is_some_and(|p| p.x < view::sidebar_width(self));
+        let sort = (self.sort_by, self.ascending);
+        // A sort the person picks applies at once, the pointer on its menu or not.
+        self.sidebar_order = match self.sidebar_order.take() {
+            Some(frozen) if over && frozen.0 == sort => Some(frozen),
+            _ if over => Some((sort, view::order(store, self))),
+            _ => None,
+        };
         // The panel gives way to the panes as they open, and comes back as they shut.
         self.panel_shown.launch(
             open(self.panel_open && self.panes.is_empty(), self.panel_width),

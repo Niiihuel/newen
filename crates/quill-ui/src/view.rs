@@ -1949,12 +1949,13 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         let key = std::path::PathBuf::new();
         let open = !ui.collapsed.contains(&key);
         let waiting = !open && pinned.iter().any(|s| s.status == SessionStatus::Awaiting);
-        rows.push(group_header(
-            "Pinned", &key, open, waiting, None, ui, palette,
-        ));
+        rows.push(
+            group_header("Pinned", &key, open, waiting, None, ui, palette)
+                .animate_move("group:pinned"),
+        );
         if open {
             for s in &pinned {
-                rows.extend(with_children(store, s, ui, palette));
+                rows.push(with_children(store, s, ui, palette));
             }
         }
         rows.push(Element::spacer().size(None, Some(8.0)));
@@ -1998,9 +1999,11 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             })
             .collect();
         let waiting = !open && members.iter().any(|s| s.status == SessionStatus::Awaiting);
-        rows.push(group_header(
-            &label, &key, open, waiting, folder, ui, palette,
-        ));
+        // As the sessions reorder by activity, the groups and their rows glide to their places.
+        rows.push(
+            group_header(&label, &key, open, waiting, folder, ui, palette)
+                .animate_move(format!("group:{}", key.display())),
+        );
         if !open {
             continue;
         }
@@ -2015,7 +2018,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             members.len()
         };
         for s in &members[..shown] {
-            rows.extend(with_children(store, s, ui, palette));
+            rows.push(with_children(store, s, ui, palette));
         }
         if limited {
             let label = if ui.show_more {
@@ -2023,12 +2026,15 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             } else {
                 "Show more"
             };
-            rows.push(side_row(
-                SHOW_MORE.into(),
-                vec![muted(label).centered_y()],
-                false,
-                palette,
-            ));
+            rows.push(
+                side_row(
+                    SHOW_MORE.into(),
+                    vec![muted(label).centered_y()],
+                    false,
+                    palette,
+                )
+                .animate_move(SHOW_MORE),
+            );
         }
     }
     // At its foot over a line, the person: their GitHub picture (else their initials) and
@@ -2123,13 +2129,9 @@ fn status_group(session: &Session) -> &'static str {
 }
 
 /// A session's row and, under it, the rows of the sessions it started, on a tree line that
-/// turns into the last of them.
-fn with_children(
-    store: &Store,
-    session: &Session,
-    ui: &Ui,
-    palette: ComponentPalette,
-) -> Vec<Element> {
+/// turns into the last of them. They move as one when the list reorders.
+fn with_children(store: &Store, session: &Session, ui: &Ui, palette: ComponentPalette) -> Element {
+    let id = format!("family:{}", session.id);
     let mut rows = vec![session_row(session, 0, ui, palette)];
     let children: Vec<&Session> = store
         .sessions
@@ -2137,7 +2139,7 @@ fn with_children(
         .filter(|s| s.parent == Some(session.id) && !s.archived)
         .collect();
     if children.is_empty() {
-        return rows;
+        return rows.remove(0).animate_move(id);
     }
     let count = children.len();
     let column: Vec<Element> = children
@@ -2160,12 +2162,29 @@ fn with_children(
         tree,
         Element::column(column).gap(2.0).flex(1.0),
     ]));
-    rows
+    Element::column(rows).gap(2.0).animate_move(id)
+}
+
+/// Every session in the order the sidebar lists them now, which it keeps while the pointer
+/// is over it (`Ui::sidebar_order`).
+pub fn order(store: &Store, ui: &Ui) -> Vec<quill_model::SessionId> {
+    let list = sorted(store.sessions.iter().collect(), ui);
+    list.into_iter().map(|s| s.id).collect()
 }
 
 /// The sessions in the order the filter menu asks: by last change, by when they were made,
-/// or by name, newest or Z first unless ascending.
+/// or by name, newest or Z first unless ascending. While the pointer is over the sidebar the
+/// order it had then holds, and a session made since goes last.
 fn sorted<'a>(mut list: Vec<&'a Session>, ui: &Ui) -> Vec<&'a Session> {
+    if let Some((_, order)) = &ui.sidebar_order {
+        list.sort_by_key(|s| {
+            order
+                .iter()
+                .position(|id| *id == s.id)
+                .unwrap_or(usize::MAX)
+        });
+        return list;
+    }
     match ui.sort_by {
         crate::SortBy::Updated => list.sort_by_key(|s| (s.touched, s.id)),
         crate::SortBy::Created => list.sort_by_key(|s| s.id),
