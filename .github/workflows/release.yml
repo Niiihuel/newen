@@ -116,6 +116,8 @@ jobs:
           artifacts=("linux-x86_64=dist/quill-x86_64-linux.tar.gz")
           [ -f dist/quill-x86_64-windows.zip ] && artifacts+=("windows-x86_64=dist/quill-x86_64-windows.zip")
           [ -f dist/quill-aarch64-macos.zip ] && artifacts+=("macos-aarch64=dist/quill-aarch64-macos.zip")
+          # What the upload step sends: exactly the files the manifest names.
+          printf '%s\n' "${artifacts[@]#*=}" > dist/files.txt
           target/debug/quill-release manifest "$TAG" \
             "https://github.com/$GH_REPO/releases/download/$TAG" "${artifacts[@]}" \
             > dist/quill-update.json
@@ -130,6 +132,7 @@ jobs:
         run: target/debug/quill-release verify dist/quill-update.json
       - name: upload and publish
         run: |
-          gh release upload "$TAG" dist/quill-*.tar.gz dist/quill-*.zip \
+          mapfile -t files < dist/files.txt
+          gh release upload "$TAG" "${files[@]}" \
             dist/quill-update.json dist/quill-update.json.sig --clobber
           gh release edit "$TAG" --draft=false
