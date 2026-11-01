@@ -28,8 +28,6 @@ sha2 = "0.10"
 base64 = "0.22"
 # HTTPS requests, on the update thread: the engine's own client (quill-engine's logos use it too).
 ureq = "3"
-# The Linux artifact is the program gzip-compressed, decoded with the decoder already in the tree.
-flate2 = "1.1"
 
 [dev-dependencies]
 # A throwaway signing key per test, and temporary installations.
