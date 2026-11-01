@@ -13,6 +13,8 @@ default = []
 serve = []
 
 [dependencies]
+# Starts gh as every quill process starts (Windows: no console, PATHEXT).
+quill-files = { path = "../quill-files" }
 # The manifest is a small JSON document, and the GitHub API's answer too.
 serde = { workspace = true }
 serde_json.workspace = true

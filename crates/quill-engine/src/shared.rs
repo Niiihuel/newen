@@ -173,7 +173,7 @@ fn spawn(
     said: UnboundedSender<(u64, Option<String>)>,
 ) -> Result<(Child, ChildStdin), String> {
     let plan = adapter.launch(spec);
-    let mut command = Command::new(program.unwrap_or(&plan.program));
+    let mut command = Command::from(quill_files::command(program.unwrap_or(&plan.program)));
     command
         .args(&plan.args)
         .current_dir(&plan.cwd)

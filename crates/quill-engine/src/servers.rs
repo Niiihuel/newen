@@ -133,7 +133,8 @@ impl Servers {
                 ));
             }
         }
-        let mut process = tokio::process::Command::new(&config.runtime_executable);
+        let mut process =
+            tokio::process::Command::from(quill_files::command(&config.runtime_executable));
         process
             .args(&config.runtime_args)
             .current_dir(cwd)
@@ -335,7 +336,7 @@ fn stop_group(pid: u32) {
     }
     // /T takes the tree: Windows has no process groups to signal.
     #[cfg(windows)]
-    let _ = std::process::Command::new("taskkill")
+    let _ = quill_files::command("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .output();
 }

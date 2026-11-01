@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -298,7 +298,7 @@ pub fn token() -> Option<String> {
     {
         return Some(token);
     }
-    let mut child = Command::new("gh")
+    let mut child = quill_files::command("gh")
         .args(["auth", "token"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
