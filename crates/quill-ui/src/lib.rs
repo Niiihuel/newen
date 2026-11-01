@@ -1194,7 +1194,13 @@ pub struct Ui {
     pub panes: Vec<Pane>,
     /// The pane that fills the space of the conversation, as Desktop's expand does.
     pub expanded_pane: Option<Pane>,
+    /// Each other conversation's panes (`None`: the new, not yet started one), kept while
+    /// another is shown, for the app run; `panes` and what they show are the shown one's.
+    pub kept_panes: std::collections::HashMap<Option<SessionId>, KeptPanes>,
+    /// The shown conversation changed: its panes take their place at once, not on springs.
+    pub panes_switched: bool,
     /// Whether the right panel (Environment, Context, Changes) shows while no pane is open.
+    /// A layout choice, not a conversation's: it holds across them, as what it shows follows.
     pub panel_open: bool,
     /// The right panel's width, once the person dragged its edge.
     pub panel_width: f32,
@@ -1333,7 +1339,8 @@ pub struct Ui {
     /// The side chat its pane shows, one asked for that the engine is making, and what its
     /// reply field holds.
     pub side_chat: Option<SessionId>,
-    pub side_waiting: bool,
+    /// The session a side chat was asked from, while the engine makes it.
+    pub side_waiting: Option<SessionId>,
     pub side_reply: String,
     /// The copy button last pressed and when: it shows a check for a moment.
     pub copied: Option<(String, std::time::Instant)>,
@@ -1819,6 +1826,18 @@ impl SessionBrowser {
     }
 }
 
+/// A conversation's panes while another is shown: which are open, which is expanded, and
+/// what the diff, helper, plan and side chat panes show (`Ui`'s fields of the same names).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KeptPanes {
+    pub panes: Vec<Pane>,
+    pub expanded_pane: Option<Pane>,
+    pub diff: Option<(SessionId, RequestId)>,
+    pub helper: Option<String>,
+    pub plan: Option<String>,
+    pub side_chat: Option<SessionId>,
+}
+
 /// What can open in the column beside the conversation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pane {
@@ -1998,6 +2017,8 @@ impl Ui {
             diff: None,
             panes: vec![],
             expanded_pane: None,
+            kept_panes: Default::default(),
+            panes_switched: false,
             panel_open: true,
             panel_width: look::PANEL_WIDTH,
             collapsed: vec![],
@@ -2059,7 +2080,7 @@ impl Ui {
             mention_found: None,
             show_more: false,
             side_chat: None,
-            side_waiting: false,
+            side_waiting: None,
             side_reply: String::new(),
             copied: None,
             reading: None,
@@ -2366,7 +2387,8 @@ impl Ui {
             .launch(open(self.expanded_pane.is_some(), 1.0), motion, now);
         self.stack_shown
             .launch(open(self.panes.len() >= 2, 1.0), motion, now);
-        if self.reduced_motion {
+        // Another conversation's panes are in place at once, as its transcript is.
+        if std::mem::take(&mut self.panes_switched) || self.reduced_motion {
             self.panel_shown.snap_to(self.panel_shown.target(), now);
             self.column_shown.snap_to(self.column_shown.target(), now);
             self.column_share.snap_to(self.column_share.target(), now);
@@ -2504,6 +2526,64 @@ impl Ui {
         self.draft_switched = true;
     }
 
+    /// The shown conversation changed from `from`: its panes are kept for it, with what they
+    /// show, and the one now shown gets its own back (none, the first time it shows).
+    fn switch_panes(&mut self, from: Option<SessionId>) {
+        // A pane still shutting is done with: it was `from`'s.
+        if let Some(pane) = self.closing.take() {
+            if !self.pane_open(pane) {
+                self.forget_pane(pane);
+            }
+        }
+        if let Some((_, pane)) = self.stack_closing.take() {
+            if !self.pane_open(pane) {
+                self.forget_pane(pane);
+            }
+        }
+        let kept = self.take_panes();
+        self.kept_panes.insert(from, kept);
+        let shown = self.kept_panes.remove(&self.selected).unwrap_or_default();
+        self.put_panes(shown);
+        self.panes_switched = true;
+    }
+
+    /// Runs `f` on `session`'s panes: those on screen when it is shown, else its kept ones,
+    /// as when the agent opens its browser while the person looks at another conversation.
+    fn in_panes_of(&mut self, session: SessionId, f: impl FnOnce(&mut Self)) {
+        if self.selected == Some(session) {
+            return f(self);
+        }
+        let shown = self.take_panes();
+        let kept = self.kept_panes.remove(&Some(session)).unwrap_or_default();
+        self.put_panes(kept);
+        f(self);
+        let kept = self.take_panes();
+        self.kept_panes.insert(Some(session), kept);
+        self.put_panes(shown);
+    }
+
+    fn take_panes(&mut self) -> KeptPanes {
+        KeptPanes {
+            panes: std::mem::take(&mut self.panes),
+            expanded_pane: self.expanded_pane.take(),
+            diff: self.diff.take(),
+            helper: self.helper.take(),
+            plan: self.plan.take(),
+            side_chat: self.side_chat.take(),
+        }
+    }
+
+    fn put_panes(&mut self, kept: KeptPanes) {
+        KeptPanes {
+            panes: self.panes,
+            expanded_pane: self.expanded_pane,
+            diff: self.diff,
+            helper: self.helper,
+            plan: self.plan,
+            side_chat: self.side_chat,
+        } = kept;
+    }
+
     fn forget_pane(&mut self, pane: Pane) {
         match pane {
             Pane::Diff => self.diff = None,
@@ -2542,16 +2622,16 @@ impl Ui {
             self.images.extend(images.iter().cloned());
             return vec![];
         }
-        // A tab that appears in the session on screen, as when the agent opens a page, shows
-        // the browser, as Desktop's does.
+        // A tab that appears in a session, as when the agent opens a page, shows the browser,
+        // as Desktop's does: at once on screen, else when the person goes to that session.
         if let Event::Browser {
             session,
             update: quill_model::BrowserUpdate::Tabs { tabs, .. },
         } = event
         {
             let before = self.browser_tabs.insert(*session, tabs.len()).unwrap_or(0);
-            if self.selected == Some(*session) && tabs.len() > before {
-                self.open_pane(Pane::Browser);
+            if tabs.len() > before {
+                self.in_panes_of(*session, |ui| ui.open_pane(Pane::Browser));
             }
         }
         if let Event::Browser {
@@ -2682,21 +2762,37 @@ impl Ui {
             if self.selected == Some(*session) {
                 self.selected = None;
                 self.switch_draft(Some(*session));
+                self.switch_panes(Some(*session));
                 self.title_edit = None;
-                self.panes.clear();
-                self.expanded_pane = None;
             }
             self.drafts.remove(&Some(*session));
+            self.kept_panes.remove(&Some(*session));
+            // A side chat deleted leaves the pane that showed it, here or in a kept conversation.
+            if self.side_chat == Some(*session) {
+                self.close_pane(Pane::Side);
+            }
+            for kept in (self.kept_panes.values_mut()).filter(|k| k.side_chat == Some(*session)) {
+                kept.panes.retain(|p| *p != Pane::Side);
+                kept.expanded_pane = kept.expanded_pane.filter(|p| *p != Pane::Side);
+                kept.side_chat = None;
+            }
         }
         if let Event::SessionCreated { session, .. } = event {
-            // A side chat opens in its pane; the session in view stays.
-            if std::mem::take(&mut self.side_waiting) {
-                self.side_chat = Some(*session);
-                self.open_pane(Pane::Side);
+            // A side chat opens in its pane, of the session it was asked from; the session in
+            // view stays.
+            if let Some(from) = self.side_waiting.take() {
+                let chat = *session;
+                self.in_panes_of(from, |ui| {
+                    ui.side_chat = Some(chat);
+                    ui.open_pane(Pane::Side);
+                });
                 return vec![];
             }
+            // A fork is a conversation of its own: the one forked from keeps its panes.
             if std::mem::take(&mut self.waiting_fork) {
+                let from = self.selected;
                 self.selected = Some(*session);
+                self.switch_panes(from);
                 self.title_edit = None;
                 return vec![Intent::WorkingTree { session: *session }];
             }
@@ -2947,6 +3043,7 @@ pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent
     }
     if ui.selected != shown {
         ui.switch_draft(shown);
+        ui.switch_panes(shown);
     }
     intents
 }
@@ -3216,7 +3313,7 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                     .filter(|q| !q.is_empty()),
                 ui.selected,
             ) {
-                ui.side_waiting = true;
+                ui.side_waiting = Some(session);
                 return vec![Intent::SideChat {
                     session,
                     text: question.to_owned(),
@@ -3886,9 +3983,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         }
         // Going somewhere from the peek puts it away, as Desktop's does ("navigated").
         ui.sidebar.peek = false;
-        // A session beside another goes with it: shown on its own, or from elsewhere, it closes.
+        // A session beside another stays with it (`kept_panes`); shown on its own, it closes.
         let beside = ui.side_chat.and_then(|s| store.session(s));
-        if beside.is_none_or(|s| s.id == session || s.parent != Some(session)) {
+        if beside.is_none_or(|s| s.id == session) {
             ui.close_pane(Pane::Side);
         }
         let mut intents = vec![Intent::WorkingTree { session }];
