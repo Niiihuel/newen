@@ -181,7 +181,7 @@ El adaptador dice qué correr (`AgentAdapter::plugins_query`, `marketplaces_quer
 
 Reglas de transporte (SDK):
 
-- Las herramientas propias de quill (`HOST_TOOLS`: `start_session`, `dismiss_task`, `send_to_session`, `read_session`) llegan por `mcp_message` y el router las responde; se permiten sin preguntar. `read_session` lee los eventos de otra sesión del store con `spawn_blocking`, fuera del router.
+- Las herramientas propias de quill (`HOST_TOOLS`: `start_session`, `dismiss_task`, `send_to_session`, `read_session`, `list_sessions`, `wait_for_session`) llegan por `mcp_message` y el router las responde; se permiten sin preguntar. `read_session` lee los eventos de otra sesión del store con `spawn_blocking`, fuera del router, y `list_sessions` corre `git` igual. `wait_for_session` se describe en [agents.md](agents.md).
 - `null` del callback deja el pedido sin responder (caso de tools servidas por otra máquina). quill: siempre responder.
 - Con callbacks bidireccionales el stdin no se cierra hasta el fin de la corrida.
 - Con `prompt` string el SDK manda un `user` y cierra (single-turn); quill: siempre streaming input.
