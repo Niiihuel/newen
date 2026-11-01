@@ -7857,3 +7857,39 @@ fn the_sidebar_keeps_its_order_while_the_pointer_is_over_it() {
     ui.tick(&store);
     assert_eq!(view::order(&store, &ui), [2, 1]);
 }
+
+#[test]
+fn sessions_started_by_sessions_nest_under_them_as_a_tree_at_every_depth() {
+    let mut store = Store::default();
+    for session in 1..=5 {
+        store.apply(Event::SessionCreated {
+            session,
+            agent: "claude".into(),
+            cwd: "/work".into(),
+        });
+    }
+    // 1 started 2 and 4, 2 started 3; 5 was started by 4, which was put away.
+    for (session, parent) in [(2, 1), (3, 2), (4, 1), (5, 4)] {
+        store.apply(Event::Linked {
+            session,
+            parent,
+            side: false,
+        });
+    }
+    store.apply(Event::Archived {
+        session: 4,
+        archived: true,
+    });
+    let ui = Ui::new("/work".into());
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let rows: Vec<(&str, limn::Rect)> = (frame.regions.iter())
+        .filter(|r| r.id.starts_with("session:"))
+        .map(|r| (r.id.as_str(), r.rect))
+        .collect();
+    let ids: Vec<&str> = rows.iter().map(|r| r.0).collect();
+    assert_eq!(ids, ["session:5", "session:1", "session:2", "session:3"]);
+    let x = |id: &str| rows.iter().find(|r| r.0 == id).unwrap().1.x;
+    assert!(x("session:1") < x("session:2") && x("session:2") < x("session:3"));
+    assert_eq!(x("session:5"), x("session:1"));
+}

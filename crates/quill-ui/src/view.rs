@@ -1928,7 +1928,8 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         nav(CUSTOMIZE_OPEN, icons::BRIEFCASE, "Customize", "", false),
         Element::spacer().size(None, Some(16.0)),
     ];
-    // Sessions another one started are listed under it, not on their own.
+    // Sessions another one started are listed under it, not on their own, unless it was put
+    // away.
     let listed = |pinned: bool| {
         sorted(
             store
@@ -1937,7 +1938,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
                 .filter(|s| {
                     s.pinned == pinned
                         && !s.archived
-                        && s.parent.and_then(|p| store.session(p)).is_none()
+                        && (s.parent.and_then(|p| store.session(p))).is_none_or(|p| p.archived)
                 })
                 .collect(),
             ui,
@@ -1955,7 +1956,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         );
         if open {
             for s in &pinned {
-                rows.push(with_children(store, s, ui, palette));
+                rows.push(with_children(store, s, 0, ui, palette));
             }
         }
         rows.push(Element::spacer().size(None, Some(8.0)));
@@ -2018,7 +2019,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
             members.len()
         };
         for s in &members[..shown] {
-            rows.push(with_children(store, s, ui, palette));
+            rows.push(with_children(store, s, 0, ui, palette));
         }
         if limited {
             let label = if ui.show_more {
@@ -2128,41 +2129,79 @@ fn status_group(session: &Session) -> &'static str {
     }
 }
 
-/// A session's row and, under it, the rows of the sessions it started, on a tree line that
-/// turns into the last of them. They move as one when the list reorders.
-fn with_children(store: &Store, session: &Session, ui: &Ui, palette: ComponentPalette) -> Element {
+/// How deep the sidebar nests sessions started by sessions; a damaged log's loop of links
+/// ends here too.
+const TREE_DEPTH: usize = 8;
+
+/// The sessions `parent` started that the sidebar lists, in the order they were made.
+fn started_by(store: &Store, parent: quill_model::SessionId) -> Vec<&Session> {
+    (store.sessions.iter())
+        .filter(|s| s.parent == Some(parent) && !s.archived)
+        .collect()
+}
+
+/// How many rows a session takes in the sidebar with those it started, and theirs.
+fn tree_rows(store: &Store, session: &Session, depth: usize) -> usize {
+    let below = started_by(store, session.id).into_iter();
+    1 + if depth < TREE_DEPTH {
+        below.map(|s| tree_rows(store, s, depth + 1)).sum()
+    } else {
+        0
+    }
+}
+
+/// A session's row and, under it, the sessions it started and theirs, each on a guide that
+/// turns into its row as a file tree's does, so the person sees which sessions work together.
+/// They move as one when the list reorders.
+fn with_children(
+    store: &Store,
+    session: &Session,
+    depth: usize,
+    ui: &Ui,
+    palette: ComponentPalette,
+) -> Element {
     let id = format!("family:{}", session.id);
-    let mut rows = vec![session_row(session, 0, ui, palette)];
-    let children: Vec<&Session> = store
-        .sessions
-        .iter()
-        .filter(|s| s.parent == Some(session.id) && !s.archived)
-        .collect();
-    if children.is_empty() {
-        return rows.remove(0).animate_move(id);
+    let row = session_row(session, depth, ui, palette);
+    let children = started_by(store, session.id);
+    if children.is_empty() || depth >= TREE_DEPTH {
+        return row.animate_move(id);
     }
     let count = children.len();
-    let column: Vec<Element> = children
-        .iter()
-        .map(|child| session_row(child, 1, ui, palette))
-        .collect();
-    // The line runs down to the middle of the last row, then turns towards it.
-    let reach = (count - 1) as f32 * 34.0 + 16.0;
-    let tree = Element::column(vec![
+    let line = |width: f32, height: f32| {
         Element::spacer()
             .background(look::divider())
-            .size(Some(1.0), Some(reach)),
-        Element::spacer()
-            .background(look::divider())
-            .size(Some(6.0), Some(1.0)),
+            .size(Some(width), Some(height))
+    };
+    let blocks = children.iter().enumerate().map(|(at, child)| {
+        // Rows are 32 tall with 2 between: the guide runs on past the gap to the next one,
+        // and at the last it stops at its row's middle, where it turns.
+        let down = if at + 1 == count {
+            17.0
+        } else {
+            tree_rows(store, child, depth + 1) as f32 * 34.0
+        };
+        let guide = Element::row(vec![
+            line(1.0, down),
+            Element::column(vec![
+                Element::spacer().size(None, Some(16.0)),
+                line(5.0, 1.0),
+            ]),
+        ])
+        .size(Some(6.0), None);
+        Element::row(vec![
+            guide,
+            with_children(store, child, depth + 1, ui, palette).flex(1.0),
+        ])
+    });
+    Element::column(vec![
+        row,
+        Element::row(vec![
+            hgap(16.0),
+            Element::column(blocks.collect()).flex(1.0),
+        ]),
     ])
-    .size(Some(6.0), None);
-    rows.push(Element::row(vec![
-        hgap(16.0),
-        tree,
-        Element::column(column).gap(2.0).flex(1.0),
-    ]));
-    Element::column(rows).gap(2.0).animate_move(id)
+    .gap(2.0)
+    .animate_move(id)
 }
 
 /// Every session in the order the sidebar lists them now, which it keeps while the pointer
