@@ -3,20 +3,20 @@
 //!
 //! ```text
 //! cargo run -p quill-release --bin quill-test-feed -- \
-//!     [--version 9.9.9] [--mandatory] [--slow] [--corrupt] [--port 8765] [--program <file>]
+//!     [--version 9.9.9] [--mandatory] [--slow] [--corrupt] [--port 8765] [--artifact <file>]
 //!     [--platform windows-x86_64]
 //! ```
 //!
 //! It prints the `QUILL_UPDATE_FEED` and `QUILL_UPDATE_KEY` a debug build of
-//! quill needs to use it, and serves until it is stopped. `--program` is
-//! the program the release installs (a build of quill with that version);
-//! without it the artifact is a stand-in that is not a program, which
-//! installing refuses. `--slow` paces the download, `--corrupt` signs a
-//! digest the artifact does not have. `--platform` serves another system
-//! than this one: for Windows the program is the installer, as it is
-//! (a quill under Wine updating from a feed on Linux).
+//! quill needs to use it, and serves until it is stopped. `--artifact` is
+//! what the release installs, made as the release workflow makes it (Linux's
+//! bundle as a `.tar.gz`, Windows' and macOS' as a `.zip`) from a build of
+//! quill with that version; without it the artifact is a stand-in that is
+//! not an archive, which installing refuses. `--slow` paces the download,
+//! `--corrupt` signs a digest the artifact does not have. `--platform` serves
+//! another system than this one (a quill under Wine updating from a feed on
+//! Linux).
 
-use std::io::Write as _;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -28,7 +28,7 @@ fn main() {
     let mut arguments = std::env::args().skip(1);
     let (mut version, mut mandatory, mut slow, mut corrupt) =
         ("9.9.9".to_owned(), false, false, false);
-    let (mut port, mut program, mut platform) = (8765, None, quill_update::platform());
+    let (mut port, mut artifact, mut platform) = (8765, None, quill_update::platform());
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--version" => version = arguments.next().expect("--version <x.y.z>"),
@@ -41,14 +41,14 @@ fn main() {
                     .and_then(|port| port.parse().ok())
                     .expect("--port <n>")
             }
-            "--program" => program = Some(arguments.next().expect("--program <file>")),
+            "--artifact" => artifact = Some(arguments.next().expect("--artifact <file>")),
             "--platform" => platform = arguments.next().expect("--platform <os-arch>"),
             other => panic!("unknown argument {other}"),
         }
     }
     let version = Version::parse(&version).expect("a version");
-    let program = match program {
-        Some(file) => std::fs::read(file).expect("the program"),
+    let artifact = match artifact {
+        Some(file) => std::fs::read(file).expect("the artifact"),
         // A stand-in that does not compress, 8 MiB, so its progress shows.
         None => {
             let mut state = 0x9e37_79b9_7f4a_7c15_u64;
@@ -62,13 +62,11 @@ fn main() {
                 .collect()
         }
     };
-    // As the release workflow publishes them: Linux's program gzip-compressed, Windows' as it is.
-    let (name, artifact) = if platform.starts_with("windows") {
-        ("quill-x86_64-windows.exe", program)
-    } else {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(&program).unwrap();
-        ("quill-x86_64-linux.gz", encoder.finish().unwrap())
+    // As the release workflow names them.
+    let name = match platform.split('-').next() {
+        Some("windows") => "quill-x86_64-windows.zip",
+        Some("macos") => "quill-aarch64-macos.zip",
+        _ => "quill-x86_64-linux.tar.gz",
     };
 
     let mut seed = [0; 32];

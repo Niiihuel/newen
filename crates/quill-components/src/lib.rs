@@ -19,7 +19,7 @@ pub mod tree;
 pub fn fonts(system_sans: bool, code: &str) -> limn::Fonts {
     use limn::FontFamily::*;
     let face = |pattern: &str| -> Option<limn::Font> {
-        let out = std::process::Command::new("fc-match")
+        let out = quill_files::command("fc-match")
             .args(["-f", "%{file}", pattern])
             .output()
             .ok()?;

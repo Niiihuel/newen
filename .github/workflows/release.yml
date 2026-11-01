@@ -1,8 +1,8 @@
 # A release for every tag v* pushed (docs/UPDATES.md): the tag must be annotated and name the
-# workspace's version; each platform's artifact is built and uploaded to a draft release; the
-# manifest is written, signed with the QUILL_UPDATE_SIGNING_KEY secret, checked against the key
-# compiled into quill, and only then is the release published. Until that last step no quill
-# can see it.
+# workspace's version; a draft release is made; package.yml builds each platform's bundle
+# (macOS signed and notarized); the manifest is written over them, signed with the
+# QUILL_UPDATE_SIGNING_KEY secret, checked against the key compiled into quill, and only then
+# are the bundles uploaded and the release published. Until that last step no quill can see it.
 name: Release
 
 on:
@@ -64,112 +64,19 @@ jobs:
           gh release create "$TAG" --draft --verify-tag --title "quill ${TAG#v}" \
             --notes-file notes.md "${prerelease[@]}"
 
-  linux:
-    name: Linux x86_64
+  # Linux always; Windows and macOS once the owner turns them on (QUILL_WINDOWS_RELEASES,
+  # QUILL_MACOS_RELEASES): a platform that is off is skipped and the release goes out without it.
+  package:
+    name: bundles
     needs: draft
-    # glibc 2.39 and the libraries below are what Ubuntu 24.04 has (docs/UPDATES.md#linux).
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: Niiihuel/limn
-          ref: quill/integration
-          token: ${{ secrets.LIMN_READ_TOKEN || github.token }}
-          path: limn-quill-integration
-      - name: limn beside the workspace, where its path says
-        run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
-      # The distribution's libraries, not Nix's: the program must find them where every
-      # distribution keeps them (no /nix/store run path). The equivalents of quill's shell.nix.
-      - name: build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake pkg-config clang libclang-dev \
-            libwayland-dev libxkbcommon-dev libgbm-dev
-      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
-        with:
-          toolchain: 1.95.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: build
-        env:
-          # The symbols stay, for a panic's backtrace in the log.
-          CARGO_PROFILE_RELEASE_STRIP: debuginfo
-        run: cargo build --release --locked -p quill
-      # The libraries it needs at run time, in the log (docs/UPDATES.md#linux).
-      - run: ldd target/release/quill
-      - run: gzip -9 -n -c target/release/quill > quill-x86_64-linux.gz
-      - name: upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" quill-x86_64-linux.gz --clobber
-
-  windows:
-    name: Windows x86_64
-    needs: draft
-    # Off until the owner sets the repository variable QUILL_WINDOWS_RELEASES to "true"; while it
-    # is off the release goes out for Linux alone (docs/UPDATES.md#windows).
-    if: vars.QUILL_WINDOWS_RELEASES == 'true'
-    runs-on: windows-latest
-    timeout-minutes: 120
-    permissions:
-      contents: write
-    # What the manifest's step checks the downloaded program against.
-    outputs:
-      sha256: ${{ steps.program.outputs.sha256 }}
-      size: ${{ steps.program.outputs.size }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      # Git's bash would turn /… arguments into paths.
-      MSYS_NO_PATHCONV: "1"
-    steps:
-      # The sources as they are in the repository: Git for Windows would turn their line ends
-      # into CRLF.
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: Niiihuel/limn
-          ref: quill/integration
-          token: ${{ secrets.LIMN_READ_TOKEN || github.token }}
-          path: limn-quill-integration
-      - name: limn beside the workspace, where its path says
-        run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
-      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
-        with:
-          toolchain: 1.95.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: build
-        env:
-          # The C runtime inside quill.exe, so no Visual C++ Redistributable has to be installed;
-          # with --target it reaches only the program, not build scripts.
-          RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p quill
-      - name: program
-        id: program
-        run: |
-          program=target/x86_64-pc-windows-msvc/release/quill.exe
-          sha256=$(sha256sum "$program" | cut -d ' ' -f 1)
-          size=$(stat -c %s "$program")
-          echo "$program: $size bytes, SHA-256 $sha256"
-          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
-          echo "size=$size" >> "$GITHUB_OUTPUT"
-          cp "$program" quill-x86_64-windows.exe
-      - name: upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" quill-x86_64-windows.exe --clobber
+    uses: ./.github/workflows/package.yml
+    with:
+      release: true
+    secrets: inherit
 
   publish:
     name: signed manifest and publication
-    needs: [linux, windows]
-    # A Windows job that is off (skipped) still lets the release out.
-    if: ${{ !cancelled() && needs.linux.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.windows.result) }}
+    needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -196,22 +103,19 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Built before the secret is in the environment, so no build script ever runs with it.
       - run: cargo build --locked --quiet -p quill-release --bin quill-release
-      - name: artifacts
-        run: gh release download "$TAG" --pattern 'quill-x86_64-*' --dir dist
-      # The program in the draft is the one the Windows job built.
-      - name: Windows program
-        if: needs.windows.result == 'success'
-        env:
-          SHA256: ${{ needs.windows.outputs.sha256 }}
-          SIZE: ${{ needs.windows.outputs.size }}
-        run: |
-          echo "$SHA256  dist/quill-x86_64-windows.exe" | sha256sum -c -
-          test "$(stat -c %s dist/quill-x86_64-windows.exe)" = "$SIZE"
+      # The bundles exactly as package.yml built them: the manifest is written over these files
+      # and these files are what is uploaded.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: quill-*
+          merge-multiple: true
+          path: dist
       - name: manifest
         run: |
-          artifacts=()
-          [ -f dist/quill-x86_64-linux.gz ] && artifacts+=("linux-x86_64=dist/quill-x86_64-linux.gz")
-          [ -f dist/quill-x86_64-windows.exe ] && artifacts+=("windows-x86_64=dist/quill-x86_64-windows.exe")
+          test -f dist/quill-x86_64-linux.tar.gz
+          artifacts=("linux-x86_64=dist/quill-x86_64-linux.tar.gz")
+          [ -f dist/quill-x86_64-windows.zip ] && artifacts+=("windows-x86_64=dist/quill-x86_64-windows.zip")
+          [ -f dist/quill-aarch64-macos.zip ] && artifacts+=("macos-aarch64=dist/quill-aarch64-macos.zip")
           target/debug/quill-release manifest "$TAG" \
             "https://github.com/$GH_REPO/releases/download/$TAG" "${artifacts[@]}" \
             > dist/quill-update.json
@@ -224,7 +128,8 @@ jobs:
       # crates/quill-update/release-key.pub stops the release here.
       - name: verify
         run: target/debug/quill-release verify dist/quill-update.json
-      - name: publish
+      - name: upload and publish
         run: |
-          gh release upload "$TAG" dist/quill-update.json dist/quill-update.json.sig --clobber
+          gh release upload "$TAG" dist/quill-*.tar.gz dist/quill-*.zip \
+            dist/quill-update.json dist/quill-update.json.sig --clobber
           gh release edit "$TAG" --draft=false

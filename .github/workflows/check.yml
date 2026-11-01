@@ -1,6 +1,6 @@
 # `cargo check` on Windows and macOS for every push and pull request, so a Unix-only
 # call that slips in shows up (docs/portabilidad.md). Not a release: nothing is built for
-# users here. continue-on-error until both come out green once; then remove it.
+# users here.
 name: Check
 
 on:
@@ -23,7 +23,6 @@ jobs:
     name: check on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

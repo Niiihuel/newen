@@ -26,6 +26,7 @@ pub fn subprocess() -> Option<i32> {
     if !std::env::args().any(|arg| arg.starts_with("--type=")) {
         return None;
     }
+    library();
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = cef::args::Args::new();
     Some(execute_process(
@@ -144,12 +145,17 @@ impl Native {
         frames: Frames,
         gpu: Option<(wgpu::Device, wgpu::Queue)>,
     ) -> Result<Self, String> {
+        #[cfg(target_os = "macos")]
+        mac::load()?;
+        library();
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
         // Chromium allocates its GPU buffers through a display server, with no window of its
         // own: the headless platform has none to give ("Unable to allocate frame"), and on
         // Wayland it paints at 1× whatever scale it is told. X11 (XWayland in a Wayland
         // session) takes the window's.
-        let x11 = std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
+        // Off Linux there are no dmabufs to import (`Gpu::import`): paints reach the CPU.
+        let x11 =
+            cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
         let gpu = gpu.filter(|(device, _)| {
             let imports = device
                 .features()
@@ -164,20 +170,32 @@ impl Native {
             }
             x11 && imports
         });
-        let dir = resources();
         std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
         let args = cef::args::Args::new();
-        let settings = Settings {
-            multi_threaded_message_loop: 1,
+        let mut settings = Settings {
+            // macOS runs CEF's loop on the main thread only: the window's loop pumps it
+            // (`Native::pump`).
+            multi_threaded_message_loop: i32::from(!cfg!(target_os = "macos")),
+            external_message_pump: i32::from(cfg!(target_os = "macos")),
             windowless_rendering_enabled: 1,
-            resources_dir_path: CefString::from(dir.to_string_lossy().as_ref()),
-            locales_dir_path: CefString::from(dir.join("locales").to_string_lossy().as_ref()),
             root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
             log_file: CefString::from(cache.join("chromium.log").to_string_lossy().as_ref()),
             log_severity: LogSeverity::WARNING,
-            no_sandbox: i32::from(std::env::var_os("QUILL_NO_SANDBOX").is_some()),
+            // shortcut: CEF's sandbox library is linked on Linux only (Windows needs its
+            // bootstrap executable, macOS a sandboxed helper); add them to sandbox pages there.
+            no_sandbox: i32::from(
+                !cfg!(target_os = "linux")
+                    || std::env::var_os("QUILL_NO_SANDBOX").is_some()
+                    || userns_restricted(),
+            ),
             ..Default::default()
         };
+        // In a macOS bundle the framework holds its resources and CEF finds them itself.
+        if let Some(dir) = cef_dir() {
+            settings.resources_dir_path = CefString::from(dir.to_string_lossy().as_ref());
+            settings.locales_dir_path =
+                CefString::from(dir.join("locales").to_string_lossy().as_ref());
+        }
         let mut app = QuillApp::new(if gpu.is_some() { "x11" } else { "headless" });
         if initialize(
             Some(args.as_main_args()),
@@ -215,6 +233,8 @@ impl Native {
         self.shared.post(Job::CloseAll);
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && !self.shared.pages.lock().unwrap().open.is_empty() {
+            #[cfg(target_os = "macos")]
+            do_message_loop_work();
             std::thread::sleep(Duration::from_millis(20));
         }
         shutdown();
@@ -247,6 +267,19 @@ impl Native {
     /// Show the tabs' GPU paints through `present` as well, as soon as each is copied.
     pub fn present_with(&self, present: Present) {
         *self.shared.present.lock().unwrap() = Some(present);
+    }
+
+    /// Run CEF's pending work, on the main thread: on macOS its loop is the window's, so the
+    /// window calls this each frame and whenever `wake` (see `pump_with`) asks. Elsewhere CEF
+    /// has threads of its own and this does nothing.
+    pub fn pump(&self) {
+        #[cfg(target_os = "macos")]
+        do_message_loop_work();
+    }
+
+    /// How CEF asks for `pump` to be called, after the given delay, from any thread.
+    pub fn pump_with(&self, wake: Wake) {
+        *PUMP.lock().unwrap() = Some(wake);
     }
 
     /// Draw the tab `target` at `size` CSS pixels.
@@ -320,6 +353,16 @@ fn over(page: &[u8], width: usize, popup: Option<(&[u8], usize, [i64; 2])>) -> V
 impl Gpu {
     /// Chromium's buffer as a texture of the window's device, to copy from while the paint
     /// lasts: the buffer goes back to Chromium when it returns.
+    #[cfg(not(target_os = "linux"))]
+    fn import(&self, _: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
+        // Windows' shared handles and macOS's IOSurfaces are not imported: `start` keeps those
+        // systems' paints on the CPU.
+        Err("GPU paints are imported on Linux only".into())
+    }
+
+    /// Chromium's buffer as a texture of the window's device, to copy from while the paint
+    /// lasts: the buffer goes back to Chromium when it returns.
+    #[cfg(target_os = "linux")]
     fn import(&self, info: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
         use std::os::fd::BorrowedFd;
         use wgpu::hal::api::Vulkan;
@@ -437,11 +480,184 @@ fn copy(
     );
 }
 
-/// Where CEF's resources are: `QUILL_CEF_DIR`, else the CEF quill was built with.
-fn resources() -> PathBuf {
-    std::env::var_os("QUILL_CEF_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("QUILL_CEF_DIR")))
+/// Where CEF's files are: `QUILL_CEF_DIR`; else a release's, beside the program or, in a
+/// Windows installation, in `versions\{version}` beside it (docs/UPDATES.md); else the CEF quill
+/// was built with. `None` in a macOS bundle, whose framework holds them.
+fn cef_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("QUILL_CEF_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    let program = std::env::current_exe().ok();
+    #[cfg(target_os = "macos")]
+    if program.as_deref().is_some_and(mac::bundled) {
+        return None;
+    }
+    let beside = program
+        .as_deref()
+        .and_then(Path::parent)
+        .map(Path::to_owned);
+    let candidates = beside.iter().flat_map(|dir| {
+        [
+            dir.clone(),
+            dir.join("versions").join(env!("CARGO_PKG_VERSION")),
+        ]
+    });
+    candidates
+        .chain([PathBuf::from(env!("QUILL_CEF_DIR"))])
+        .find(|dir| dir.join("icudtl.dat").is_file())
+        .or_else(|| Some(PathBuf::from(env!("QUILL_CEF_DIR"))))
+}
+
+/// Whether AppArmor keeps unprivileged programs from making user namespaces (Ubuntu 23.10 and
+/// later), which Chromium's sandbox needs unless its `chrome-sandbox` is setuid root, as a
+/// per-person installation's cannot be: then Chromium would not start at all with it.
+fn userns_restricted() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        .is_ok_and(|value| value.trim() == "1")
+}
+
+/// Make libcef reachable before its first call. On Windows quill.exe loads libcef.dll late
+/// (`/DELAYLOAD`, apps/quill/build.rs), so an installation's `versions\{version}` can hold it;
+/// on Linux an rpath of `$ORIGIN` finds it beside the program, and macOS loads its framework in
+/// `start`.
+fn library() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn SetDllDirectoryW(path: *const u16) -> i32;
+        }
+        if let Some(dir) = cef_dir().filter(|dir| dir.join("libcef.dll").is_file()) {
+            let wide: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+            // SAFETY: a NUL-terminated wide string that outlives the call.
+            unsafe { SetDllDirectoryW(wide.as_ptr()) };
+        }
+    }
+}
+
+/// How CEF asks the window to pump its loop (macOS), after a delay, from any thread.
+pub type Wake = Arc<dyn Fn(Duration) + Send + Sync>;
+
+static PUMP: Mutex<Option<Wake>> = Mutex::new(None);
+
+/// macOS: CEF is a framework inside quill.app, loaded at run time, and Chromium's processes
+/// run as the bundle's helper apps (`helper`); the application object must answer Chromium's
+/// `CrAppProtocol`, which winit's does not, so its class is taught to.
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
+
+    /// Whether `program` runs from `….app/Contents/MacOS` with the framework beside it.
+    pub fn bundled(program: &Path) -> bool {
+        program
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|contents| contents.join("Frameworks").join(FRAMEWORK).is_dir())
+    }
+
+    /// Load the framework of the bundle quill runs from, once; it stays loaded.
+    pub fn load() -> Result<(), String> {
+        static LOADED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        LOADED
+            .get_or_init(|| {
+                let program = std::env::current_exe().map_err(|e| e.to_string())?;
+                if !bundled(&program) {
+                    return Err("not running from quill.app: no CEF framework".into());
+                }
+                let loader = cef::library_loader::LibraryLoader::new(&program, false);
+                if !loader.load() {
+                    return Err("the CEF framework did not load".into());
+                }
+                // Dropping it would unload the framework.
+                std::mem::forget(loader);
+                answer_cr_app_protocol();
+                Ok(())
+            })
+            .clone()
+    }
+
+    static HANDLING: AtomicBool = AtomicBool::new(false);
+
+    extern "C-unwind" fn is_handling_send_event(
+        _: &objc2::runtime::AnyObject,
+        _: objc2::runtime::Sel,
+    ) -> objc2::runtime::Bool {
+        HANDLING.load(Ordering::Relaxed).into()
+    }
+
+    extern "C-unwind" fn set_handling_send_event(
+        _: &objc2::runtime::AnyObject,
+        _: objc2::runtime::Sel,
+        value: objc2::runtime::Bool,
+    ) {
+        HANDLING.store(value.as_bool(), Ordering::Relaxed);
+    }
+
+    /// Add `isHandlingSendEvent` and `setHandlingSendEvent:` to the class of the running
+    /// NSApplication and declare the protocols Chromium checks it for.
+    fn answer_cr_app_protocol() {
+        use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Imp, Sel};
+        use objc2::{class, msg_send, sel};
+        // SAFETY: called on the main thread once the window (and so NSApp) exists; the added
+        // methods' signatures match their type encodings.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let Some(app) = app.as_ref() else { return };
+            let class = app.class() as *const AnyClass as *mut objc2::ffi::objc_class;
+            let methods: [(Sel, Imp, &std::ffi::CStr); 2] = [
+                (
+                    sel!(isHandlingSendEvent),
+                    std::mem::transmute::<
+                        extern "C-unwind" fn(&AnyObject, Sel) -> objc2::runtime::Bool,
+                        Imp,
+                    >(is_handling_send_event),
+                    c"c@:",
+                ),
+                (
+                    sel!(setHandlingSendEvent:),
+                    std::mem::transmute::<
+                        extern "C-unwind" fn(&AnyObject, Sel, objc2::runtime::Bool),
+                        Imp,
+                    >(set_handling_send_event),
+                    c"v@:c",
+                ),
+            ];
+            for (name, imp, types) in methods {
+                objc2::ffi::class_addMethod(class.cast(), name, imp, types.as_ptr());
+            }
+            for name in [c"CrAppProtocol", c"CrAppControlProtocol", c"CefAppProtocol"] {
+                if let Some(protocol) = AnyProtocol::get(name) {
+                    objc2::ffi::class_addProtocol(class.cast(), protocol);
+                }
+            }
+        }
+    }
+
+    /// A helper app's process: load the framework from the helper's place in the bundle and
+    /// run the process Chromium asked for.
+    pub fn helper() -> i32 {
+        let Ok(program) = std::env::current_exe() else {
+            return 1;
+        };
+        let loader = cef::library_loader::LibraryLoader::new(&program, true);
+        if !loader.load() {
+            return 1;
+        }
+        let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+        let args = cef::args::Args::new();
+        cef::execute_process(Some(args.as_main_args()), None, std::ptr::null_mut())
+    }
+}
+
+/// The process of one of quill.app's helper apps (macOS), which Chromium runs its renderers,
+/// GPU and utility processes as: its exit code.
+#[cfg(target_os = "macos")]
+pub fn helper() -> i32 {
+    mac::helper()
 }
 
 /// Work for CEF's UI thread, where its browsers must be driven.
@@ -714,7 +930,14 @@ impl Shared {
             pages.contexts.get(&context).cloned()
         };
         // Alloy: the page alone, without Chrome's tab and window machinery.
-        let mut info = WindowInfo::default().set_as_windowless(0);
+        // No parent window: an X11 id on Linux, a pointer (HWND, NSView) elsewhere.
+        #[cfg(target_os = "linux")]
+        let parent = 0;
+        #[cfg(windows)]
+        let parent = sys::HWND(std::ptr::null_mut());
+        #[cfg(target_os = "macos")]
+        let parent = std::ptr::null_mut();
+        let mut info = WindowInfo::default().set_as_windowless(parent);
         info.shared_texture_enabled = i32::from(self.gpu.is_some());
         let mut client = PageClient::new(self.clone(), token);
         let url = if url.is_empty() {
@@ -1136,6 +1359,10 @@ wrap_app! {
     }
 
     impl App {
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(QuillProcess::new())
+        }
+
         fn on_before_command_line_processing(&self, kind: Option<&CefString>, line: Option<&mut CommandLine>) {
             // The browser process's switches reach the others.
             let (None, Some(line)) = (kind.map(|k| k.to_string()).filter(|k| !k.is_empty()), line) else {
@@ -1147,11 +1374,28 @@ wrap_app! {
             // No window of Chromium's own: a display server only to allocate GPU buffers
             // through, or none. The GPU through EGL, which ANGLE's default (an X11 display)
             // would not find without one.
-            switch("ozone-platform", self.platform);
-            switch("use-angle", "gl-egl");
+            // Ozone and EGL are Linux's; Windows and macOS keep their own (D3D11, Metal).
+            if cfg!(target_os = "linux") {
+                switch("ozone-platform", self.platform);
+                switch("use-angle", "gl-egl");
+            }
             // As the headless Chromium runs: no keyring prompt, no background chatter.
             switch("password-store", "basic");
+            line.append_switch(Some(&CefString::from("use-mock-keychain")));
             switch("disable-features", "Translate,MediaRouter,OptimizationHints");
+        }
+    }
+}
+
+// Only macOS's external pump asks for work to be scheduled (`Native::pump_with`).
+wrap_browser_process_handler! {
+    struct QuillProcess;
+
+    impl BrowserProcessHandler {
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            if let Some(wake) = PUMP.lock().unwrap().as_ref() {
+                wake(Duration::from_millis(delay_ms.max(0).unsigned_abs()));
+            }
         }
     }
 }

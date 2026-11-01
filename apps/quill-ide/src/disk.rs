@@ -139,7 +139,7 @@ fn branch_in(head: &Path) -> Option<String> {
 
 /// The monospaced families fontconfig knows, each by its first name, sorted.
 fn monospaced() -> Vec<String> {
-    let Ok(out) = std::process::Command::new("fc-list")
+    let Ok(out) = quill_files::command("fc-list")
         // Faces for writing in, not monospaced emoji or symbol sets.
         .args([":spacing=100:lang=en", "family"])
         .output()
@@ -166,7 +166,7 @@ fn faces(family: &str) -> Result<crate::ide::Faces, String> {
         family
     };
     let face = |pattern: String| -> Result<limn::Font, String> {
-        let out = std::process::Command::new("fc-match")
+        let out = quill_files::command("fc-match")
             .args(["-f", "%{file}", &pattern])
             .output()
             .map_err(|e| e.to_string())?;
@@ -224,6 +224,7 @@ fn write(path: &Path, snapshot: &BufferSnapshot) -> io::Result<Stamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::ide::Save;
 
     #[test]
