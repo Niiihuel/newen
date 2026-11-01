@@ -184,7 +184,9 @@ impl Native {
             // shortcut: CEF's sandbox library is linked on Linux only (Windows needs its
             // bootstrap executable, macOS a sandboxed helper); add them to sandbox pages there.
             no_sandbox: i32::from(
-                !cfg!(target_os = "linux") || std::env::var_os("QUILL_NO_SANDBOX").is_some(),
+                !cfg!(target_os = "linux")
+                    || std::env::var_os("QUILL_NO_SANDBOX").is_some()
+                    || userns_restricted(),
             ),
             ..Default::default()
         };
@@ -504,6 +506,14 @@ fn cef_dir() -> Option<PathBuf> {
         .chain([PathBuf::from(env!("QUILL_CEF_DIR"))])
         .find(|dir| dir.join("icudtl.dat").is_file())
         .or_else(|| Some(PathBuf::from(env!("QUILL_CEF_DIR"))))
+}
+
+/// Whether AppArmor keeps unprivileged programs from making user namespaces (Ubuntu 23.10 and
+/// later), which Chromium's sandbox needs unless its `chrome-sandbox` is setuid root, as a
+/// per-person installation's cannot be: then Chromium would not start at all with it.
+fn userns_restricted() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        .is_ok_and(|value| value.trim() == "1")
 }
 
 /// Make libcef reachable before its first call. On Windows quill.exe loads libcef.dll late

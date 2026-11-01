@@ -131,16 +131,24 @@ obligatoria se descubre al volver la red).
    - crea una release borrador con el mensaje del tag como notas (un tag con
      `-`, como `v0.2.0-rc.1`, queda como pre-release y las copias instaladas
      no la ven: `releases/latest` la saltea);
-   - compila el artefacto de Linux en Ubuntu 24.04 (`quill-x86_64-linux.tar.gz`),
-     el de Windows (`quill-x86_64-windows.zip`) y el de macOS
-     (`quill-aarch64-macos.zip`), cada uno con CEF adentro (ver cada sistema
-     abajo), y los sube al borrador;
+   - llama a **Package** (`.github/workflows/package.yml`), que compila el
+     artefacto de Linux en Ubuntu 24.04 (`quill-x86_64-linux.tar.gz`), el de
+     Windows (`quill-x86_64-windows.zip`) y el de macOS
+     (`quill-aarch64-macos.zip`, firmado, notarizado y con el ticket
+     engrapado), cada uno con CEF adentro (`scripts/package.sh`; ver cada
+     sistema abajo);
    - arma el manifiesto (`quill-release manifest`, con `minimum_version`), lo
      firma con el secreto (`quill-release sign`, con el programa ya compilado
      para que ningún build script vea el secreto), lo **verifica con la clave
      compilada en quill** (`quill-release verify`: un secreto que no coincide
-     con `release-key.pub` corta acá), y recién entonces sube
-     `quill-update.json` y `quill-update.json.sig` y publica la release.
+     con `release-key.pub` corta acá), y recién entonces sube los artefactos,
+     `quill-update.json` y `quill-update.json.sig` y publica la release. El
+     manifiesto se arma sobre los mismos archivos que se suben.
+
+**Package** también corre solo, en un PR que toca el empaquetado o a mano
+(*Run workflow*): deja los tres bundles como artefactos del run para
+probarlos. Ahí macOS se firma si están los secretos (si no, firma ad hoc) y
+nunca se notariza.
 
 Hasta el último paso ninguna copia instalada ve la release. Si un paso falla,
 el borrador queda en GitHub para borrarlo o volver a correr el workflow.
@@ -163,17 +171,34 @@ obligatoria por error, publicar otra versión.
 
 - **limn en su rama.** quill toma `limn`, `limn-egui` y `limn-editor` como
   dependencias por ruta desde `../limn-quill-integration` (el `Cargo.toml` de
-  la raíz). Ese checkout es la rama `quill/integration` de `Niiihuel/limn`,
-  que **todavía no está subida**: el dueño tiene que hacer push de esa rama
-  antes del primer build de CI. El workflow la clona dentro del workspace y
-  enlaza `../limn-quill-integration` hacia ella.
+  la raíz). Ese checkout es la rama `quill/integration` de `Niiihuel/limn`;
+  el workflow la clona dentro del workspace y enlaza
+  `../limn-quill-integration` hacia ella.
 - **Secreto `LIMN_READ_TOKEN`**: un token de lectura de `Niiihuel/limn` (un
   token de grano fino con solo lectura de ese repositorio). Sin él, el checkout
   usa el `GITHUB_TOKEN` del repositorio de quill, que no alcanza a leer otro
   repositorio privado.
 - **Secreto `QUILL_UPDATE_SIGNING_KEY`**: la clave privada (ver [La clave](#la-clave)).
-- **Variable `QUILL_WINDOWS_RELEASES`**: en `true` para incluir el job de
-  Windows; apagada, la release sale solo para Linux.
+- **Variables `QUILL_WINDOWS_RELEASES` y `QUILL_MACOS_RELEASES`**: en `true`
+  para que una release incluya Windows o macOS; apagada, la release sale sin
+  ese sistema (Linux siempre va).
+- **Secretos de macOS** (una release de macOS no sale sin ellos):
+  - `MACOS_CERTIFICATE`: el certificado *Developer ID Application* con su
+    clave privada, exportado como `.p12` desde Acceso a Llaveros y en base64
+    (`base64 -i quill.p12 | pbcopy`).
+  - `MACOS_CERTIFICATE_PASSWORD`: la contraseña con que se exportó el `.p12`.
+  - `MACOS_SIGNING_IDENTITY`: el nombre del certificado tal como lo muestra
+    `security find-identity -v -p codesigning`, p. ej.
+    `Developer ID Application: Nombre Apellido (ABCDE12345)`.
+  - `APPLE_API_KEY`: una clave de la API de App Store Connect (*Users and
+    Access › Integrations › Keys*, rol *Developer*), el `.p8` en base64.
+  - `APPLE_API_KEY_ID` y `APPLE_API_ISSUER`: su *Key ID* y el *Issuer ID* de
+    esa misma página.
+
+  `notarytool` usa la clave de la API, no el Apple ID ni una contraseña de
+  aplicación. Los entitlements con que se firma (JIT de V8, memoria
+  ejecutable, cámara y micrófono para páginas) están en
+  `apps/quill/assets/quill.entitlements`.
 
 ## La clave
 
@@ -309,10 +334,10 @@ bibliotecas.
 ## Portabilidad y CI
 
 `.github/workflows/check.yml` corre `cargo check --workspace --locked` en Windows y
-macOS en cada push a `main` y en cada PR, con `continue-on-error` hasta que ambos
-den verde una vez (después se saca). El job de release de Windows sigue apagado
-(`QUILL_WINDOWS_RELEASES`) y no hay job de macOS: ambas decisiones quedan para el
-dueño; el estado real de cada sistema está en [portabilidad.md](portabilidad.md).
+macOS en cada push a `main` y en cada PR, y falla si no compila. `package.yml` arma
+los tres bundles (ver [Publicar una release](#publicar-una-release)); Windows y
+macOS entran en una release cuando el dueño enciende sus variables. El estado real
+de cada sistema está en [portabilidad.md](portabilidad.md).
 
 ## Windows
 
@@ -399,9 +424,19 @@ a la instalación (`~/Applications/quill.app`, salvo `QUILL_UPDATE_ROOT`).
 Un fallo antes del último paso deja el bundle como estaba. La descarga espera
 en `quill-updates` dentro de la carpeta temporal del usuario.
 
-**Sin probar en un Mac**: este camino ni siquiera se compiló (no hay SDK de
-Apple en la máquina del dueño); usa sólo la biblioteca estándar y `ditto` y
-`codesign` del sistema.
+**Sin probar en un Mac**: sólo lo compila el CI (no hay SDK de Apple en la
+máquina del dueño); usa sólo la biblioteca estándar y `ditto` y `codesign` del
+sistema.
+
+**El bundle** (`scripts/package.sh macos`): `Contents/MacOS/quill`, el
+framework de CEF en `Contents/Frameworks/`, y a su lado las cinco apps
+auxiliares que Chromium usa para sus procesos (`quill Helper.app`,
+`quill Helper (GPU).app`, `(Renderer)`, `(Plugin)`, `(Alerts)`), cada una con
+el programa `quill-helper`. quill carga el framework al abrir el navegador (no
+está enlazado), y el bucle de CEF corre en el hilo principal, bombeado por la
+ventana (en macOS CEF no tiene hilos propios para eso). Se firma de adentro
+hacia afuera con *hardened runtime* (bibliotecas del framework, framework,
+auxiliares, quill), se notariza con `notarytool` y se engrapa el ticket.
 
 ## Seguridad
 
@@ -423,13 +458,13 @@ Estas cosas no están resueltas y bloquean o condicionan la primera release.
 1. **CEF en el bundle.** Cada artefacto lleva CEF junto al programa (ver
    cada sistema); el programa lo busca a su lado (y en Windows en
    `versions\{versión}\`). Falta probar el arranque de un bundle real en una
-   máquina sin CEF instalado.
-2. **CEF en el CI.** `cef-dll-sys` descarga CEF durante el build si no hay
-   `CEF_PATH`. El workflow no fija la versión ni la verifica: confirmar que la
-   descarga funciona en `ubuntu-24.04` y en `windows-latest`.
-3. **limn `quill/integration`** sin subir (ver arriba).
-4. **Lanzador y menú** de `quill --install` (rune los crea; quill no).
-5. **Windows** sin probar (ver arriba) y sin firma; **macOS** sin compilar ni
-   probar.
-6. **Avisos de terceros** (`THIRD_PARTY_NOTICES.md` con cargo-about, que rune sí
+   máquina sin CEF instalado, en cada sistema.
+2. **CEF en el CI.** `cef-dll-sys` lo descarga durante el build en
+   `$RUNNER_TEMP/cef` (`CEF_PATH`), que se guarda en la caché de Actions por
+   versión; la versión es la que fija `Cargo.lock` y el archivo lo verifica
+   `cef-dll-sys` contra su índice.
+3. **Lanzador y menú** de `quill --install` (rune los crea; quill no).
+4. **Windows** sin probar en una máquina y **sin firma Authenticode**;
+   **macOS** sin probar en una máquina.
+5. **Avisos de terceros** (`THIRD_PARTY_NOTICES.md` con cargo-about, que rune sí
    publica): quill todavía no los genera.
