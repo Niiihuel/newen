@@ -7812,6 +7812,96 @@ fn each_conversation_keeps_its_own_draft() {
 }
 
 #[test]
+fn each_conversation_keeps_its_own_panes() {
+    use quill_model::{BrowserTab, BrowserUpdate};
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "claude".into(),
+        cwd: "/work".into(),
+    });
+    let click = |store: &Store, ui: &mut Ui, id: &str| {
+        update(store, ui, &UiAction::Clicked { id: id.into() });
+    };
+    click(&store, &mut ui, view::BROWSER_TOGGLE);
+    click(&store, &mut ui, "pane:browser:expand");
+    ui.helper = Some("call-1".into());
+    ui.tick(&store);
+    // Another conversation never opened before has none of them, at once, not on springs.
+    click(&store, &mut ui, "session:2");
+    assert!(ui.panes.is_empty());
+    assert_eq!((ui.expanded_pane, ui.helper.as_deref()), (None, None));
+    ui.tick(&store);
+    assert!(!ui.animating());
+    // The agent opening a page in the first doesn't open the browser here; it waits there.
+    let tab = |session| Event::Browser {
+        session,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 3,
+                ..Default::default()
+            }],
+            active: Some(3),
+        },
+    };
+    ui.close_pane(Pane::Browser);
+    ui.applied(&tab(1));
+    assert!(!ui.pane_open(Pane::Browser));
+    // The new conversation has its own, too.
+    click(&store, &mut ui, view::NEW_SESSION);
+    ui.open_pane(Pane::Terminal);
+    click(&store, &mut ui, "session:1");
+    assert_eq!(ui.panes, [Pane::Browser]);
+    assert_eq!(ui.expanded_pane, Some(Pane::Browser));
+    assert_eq!(ui.helper.as_deref(), Some("call-1"));
+    // A tab that appears in a session not on screen opens its browser for when it shows.
+    ui.applied(&tab(2));
+    assert_eq!(ui.panes, [Pane::Browser]);
+    click(&store, &mut ui, "session:2");
+    assert_eq!(ui.panes, [Pane::Browser]);
+    // A side chat asked from the first, made while this one shows, opens beside the first.
+    ui.side_waiting = Some(1);
+    let made = Event::SessionCreated {
+        session: 3,
+        agent: "claude".into(),
+        cwd: "/work".into(),
+    };
+    ui.applied(&made);
+    store.apply(made);
+    assert_eq!(
+        (ui.panes.as_slice(), ui.side_chat),
+        ([Pane::Browser].as_slice(), None)
+    );
+    click(&store, &mut ui, "session:1");
+    assert_eq!(
+        (ui.panes.as_slice(), ui.side_chat),
+        ([Pane::Browser, Pane::Side].as_slice(), Some(3))
+    );
+    click(&store, &mut ui, view::NEW_SESSION);
+    assert_eq!(ui.panes, [Pane::Terminal]);
+    // A deleted session's panes are gone with it.
+    ui.applied(&Event::Deleted { session: 1 });
+    assert!(!ui.kept_panes.contains_key(&Some(1)));
+    assert!(ui.kept_panes.contains_key(&Some(2)));
+}
+
+#[test]
+fn deleting_the_shown_session_shows_the_new_conversations_own_panes() {
+    let (store, mut ui) = store_with_session();
+    update(
+        &store,
+        &mut ui,
+        &UiAction::Clicked {
+            id: view::BROWSER_TOGGLE.into(),
+        },
+    );
+    ui.applied(&Event::Deleted { session: 1 });
+    assert_eq!(ui.selected, None);
+    assert!(ui.panes.is_empty());
+    assert!(!ui.kept_panes.contains_key(&Some(1)));
+}
+
+#[test]
 fn the_sidebar_keeps_its_order_while_the_pointer_is_over_it() {
     let mut store = Store::default();
     for session in [1, 2] {
