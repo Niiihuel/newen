@@ -8334,6 +8334,7 @@ fn a_wait_s_cancel_sends_its_intent_and_the_row_follows_the_other_session() {
         session: 1,
         on: 2,
         outcome: quill_model::WaitOutcome::Canceled,
+        text: String::new(),
     });
     assert!(store.session(1).unwrap().waits.is_empty());
     assert!(!drawn(&store, &ui, "is asking you something"));
@@ -8383,6 +8384,7 @@ fn a_waiting_session_nests_under_the_one_it_waits_for_with_an_hourglass() {
         session: 1,
         on: 2,
         outcome: quill_model::WaitOutcome::Finished,
+        text: "Merged.".into(),
     });
     let (listed, hourglass) = rows(&store);
     assert_eq!(listed[0].1.x, listed[1].1.x);

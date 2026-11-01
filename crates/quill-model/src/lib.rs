@@ -1439,6 +1439,10 @@ pub enum Event {
         session: SessionId,
         on: SessionId,
         outcome: WaitOutcome,
+        /// What the session is told with it (`on`'s last reply, or why it will not finish),
+        /// kept so a restart before it hears it tells it then; empty for a cancel.
+        #[serde(default)]
+        text: String,
     },
     /// The session's browser changed; never stored.
     Browser {

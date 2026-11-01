@@ -2193,7 +2193,8 @@ fn woken(rx: &Receiver<Event>) -> quill_model::Report {
             Event::WaitEnded {
                 session: 2,
                 on: 1,
-                outcome: quill_model::WaitOutcome::Finished
+                outcome: quill_model::WaitOutcome::Finished,
+                ..
             }
         )
     });

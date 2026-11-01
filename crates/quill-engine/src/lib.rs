@@ -202,6 +202,11 @@ enum Internal {
         text: String,
         finished: bool,
     },
+    /// A session's agent did not start to hear these reports: they wait for its next chance.
+    Unheard {
+        session: SessionId,
+        reports: Vec<quill_model::Report>,
+    },
     /// Time to look at the power source again.
     Power,
     /// Time to ask the pull requests whether they were merged.
@@ -1001,6 +1006,12 @@ impl Router {
             if !restored.waits.is_empty() {
                 self.waits.insert(session, restored.waits.clone());
             }
+            if restored.unfinished {
+                self.unfinished.insert(session);
+            }
+            if !restored.unheard.is_empty() {
+                self.reports.insert(session, restored.unheard.clone());
+            }
             if let Some(url) = restored.pull_request.clone() {
                 self.pull_requests.insert(session, url);
             }
@@ -1068,7 +1079,7 @@ impl Router {
                 }
             }
             actor.before = restored.before;
-            actor.tasks = restored.tasks;
+            actor.progress = restored.progress;
             // What was queued at the last exit comes back held: it goes only when the person sends it.
             actor.held = !restored.queue.is_empty();
             actor.queue = restored.queue;
@@ -1092,6 +1103,11 @@ impl Router {
             .collect();
         for on in gone {
             self.wake(on, WaitOutcome::Gone, "It was deleted before it finished.");
+        }
+        // What waits woke and their sessions had not heard is told now.
+        let unheard: Vec<SessionId> = self.reports.keys().copied().collect();
+        for session in unheard {
+            self.flush(session);
         }
     }
 
@@ -1780,15 +1796,7 @@ impl Router {
                 return;
             }
             Intent::CancelWait { session, on } => {
-                let waits = self.waits.get_mut(&session);
-                if let Some(waits) = waits.filter(|w| w.iter().any(|w| w.on == on)) {
-                    waits.retain(|w| w.on != on);
-                    (self.sink)(Event::WaitEnded {
-                        session,
-                        on,
-                        outcome: WaitOutcome::Canceled,
-                    });
-                }
+                self.cancel_waits(session, Some(on));
                 return;
             }
             // Desktop's /btw forks the session as a side child; it is not a session that reports back.
@@ -1916,6 +1924,8 @@ impl Router {
     fn archive(&mut self, session: SessionId, archived: bool) {
         (self.sink)(Event::Archived { session, archived });
         if archived {
+            // Out of sight, it runs no turn a wait would start.
+            self.cancel_waits(session, None);
             self.wake(
                 session,
                 WaitOutcome::Gone,
@@ -2068,6 +2078,10 @@ impl Router {
                 self.hold_awake();
             }
             Internal::Power => self.hold_awake(),
+            Internal::Unheard { session, reports } => {
+                let kept = self.reports.entry(session).or_default();
+                kept.splice(0..0, reports);
+            }
             Internal::PullRequests if self.settings.archive_on_merge => {
                 for (&session, url) in &self.pull_requests {
                     let Some(folder) = self.folders.get(&session).cloned() else {
@@ -2153,6 +2167,27 @@ impl Router {
         }
     }
 
+    /// End `session`'s wait on `on`, or all of them, each stored as canceled before anyone
+    /// hears of it.
+    fn cancel_waits(&mut self, session: SessionId, on: Option<SessionId>) {
+        let Some(waits) = self.waits.get_mut(&session) else {
+            return;
+        };
+        let (ended, kept) = std::mem::take(waits)
+            .into_iter()
+            .partition(|w| on.is_none_or(|on| w.on == on));
+        *waits = kept;
+        for wait in ended {
+            (self.sink)(Event::WaitEnded {
+                session,
+                on: wait.on,
+                outcome: WaitOutcome::Canceled,
+                text: String::new(),
+            });
+        }
+        self.waits.retain(|_, waits| !waits.is_empty());
+    }
+
     /// End every wait on `on`: each session that waited hears `outcome`, with `text` and what it
     /// said it would do then, once it is free. The sessions woken.
     fn wake(&mut self, on: SessionId, outcome: WaitOutcome, text: &str) -> Vec<SessionId> {
@@ -2169,6 +2204,7 @@ impl Router {
                 session: *session,
                 on,
                 outcome,
+                text: text.to_owned(),
             });
             let report = quill_model::Report {
                 from: on,
@@ -2496,8 +2532,12 @@ struct Restored {
     first: Option<String>,
     /// What it waits for (`wait_for_session`).
     waits: Vec<quill_model::Wait>,
-    /// Its agent's task list.
-    tasks: TaskList,
+    /// How its turns went, and whether the last one ended before its task did: stopped,
+    /// failed, with its tasks left, a plan for the person, or still running at the last exit.
+    progress: Progress,
+    unfinished: bool,
+    /// What it was to be told of waits that ended, and had not heard when quill last ran.
+    unheard: Vec<quill_model::Report>,
 }
 
 impl Restored {
@@ -2519,10 +2559,24 @@ impl Restored {
         let mut rewound = None;
         let (mut pull_request, mut archived) = (None, false);
         let mut queue = vec![];
-        let (mut first, mut waits, mut tasks) = (None, vec![], TaskList::default());
+        let (mut first, mut waits, mut progress) = (None, vec![], Progress::default());
+        let (mut unfinished, mut unheard) = (false, vec![]);
         for event in events {
             if let Event::Agent { event, .. } = event {
-                tasks.heard(event);
+                if let Some(done) = progress.heard(event) {
+                    unfinished = !done;
+                }
+            }
+            // A message sent starts a turn that is not done until its end is heard.
+            if matches!(event, Event::Queued { .. } | Event::Reported { .. }) {
+                unfinished = true;
+            }
+            if let Event::Reported { reports, .. } = event {
+                unheard.retain(|u: &quill_model::Report| {
+                    !reports
+                        .iter()
+                        .any(|r| r.from == u.from && r.waited.is_some())
+                });
             }
             match event {
                 Event::Queued { text, .. } if first.is_none() => {
@@ -2533,7 +2587,20 @@ impl Restored {
                     waits.retain(|w: &quill_model::Wait| w.on != wait.on);
                     waits.push(wait.clone());
                 }
-                Event::WaitEnded { on, .. } => waits.retain(|w| w.on != *on),
+                Event::WaitEnded {
+                    on, outcome, text, ..
+                } => {
+                    let wait = waits.iter().find(|w| w.on == *on);
+                    if let (Some(wait), false) = (wait, *outcome == WaitOutcome::Canceled) {
+                        unheard.push(quill_model::Report {
+                            from: *on,
+                            title: wait.title.clone(),
+                            text: text.clone(),
+                            waited: Some((*outcome, wait.then.clone())),
+                        });
+                    }
+                    waits.retain(|w| w.on != *on);
+                }
                 Event::RewoundTo { at, .. } => rewound = Some(at.clone()),
                 Event::QueueChanged { entries, .. } => queue = entries.clone(),
                 Event::ModelChosen { model, .. } => new.model = Some(model.clone()),
@@ -2585,44 +2652,117 @@ impl Restored {
             queue,
             first,
             waits,
-            tasks,
+            progress,
+            unfinished,
+            unheard,
         })
     }
 }
 
-/// An agent's task list as its task tools' calls and answers leave it.
+/// How a session's turns go, as its agent's events tell: its task list (its task tools'
+/// calls and answers, [`quill_model::apply_task_tool`]), the tasks the turn under way made or
+/// changed, and the plans it showed that no card asked about.
 #[derive(Default)]
-struct TaskList {
+struct Progress {
     list: Vec<quill_model::Todo>,
     /// The task tools' calls not answered yet.
     calls: HashMap<String, (String, serde_json::Value)>,
+    /// Only these say whether a turn left work undone: a task an earlier turn left open, which
+    /// the person may have dropped since, holds nothing.
+    touched: std::collections::HashSet<String>,
+    /// A plan the turn ends with, which no card asked about, waits for the person.
+    plans: std::collections::HashSet<String>,
 }
 
-impl TaskList {
-    fn heard(&mut self, event: &AgentEvent) {
+impl Progress {
+    /// Follow `event`; at a turn's end, whether it ended with its task done: neither stopped
+    /// nor failed, none of the tasks it made or changed left undone and no plan for the person.
+    fn heard(&mut self, event: &AgentEvent) -> Option<bool> {
         match event {
             AgentEvent::ToolUse {
                 call,
                 name,
                 input,
                 parent: None,
-            } if matches!(name.as_str(), "TodoWrite" | "TaskCreate" | "TaskUpdate") => {
-                self.calls
-                    .insert(call.clone(), (name.clone(), input.clone()));
-            }
-            AgentEvent::ToolResult { call, output, .. } => {
-                if let Some((name, input)) = self.calls.remove(call) {
-                    quill_model::apply_task_tool(&mut self.list, &name, &input, Some(output));
+            } => match name.as_str() {
+                "TodoWrite" | "TaskCreate" | "TaskUpdate" => {
+                    self.calls
+                        .insert(call.clone(), (name.clone(), input.clone()));
                 }
+                "ExitPlanMode" => drop(self.plans.insert(call.clone())),
+                _ => {}
+            },
+            AgentEvent::PermissionRequest {
+                call: Some(call), ..
+            } => drop(self.plans.remove(call)),
+            AgentEvent::ToolResult { call, output, .. } => {
+                let (name, input) = self.calls.remove(call)?;
+                let before = self.list.len();
+                quill_model::apply_task_tool(&mut self.list, &name, &input, Some(output));
+                let ids: Vec<String> = match name.as_str() {
+                    // A task whose number its answer does not give cannot be followed, so it
+                    // holds no one: a CLI that words it otherwise wakes waits rather than not.
+                    "TaskCreate" if output.starts_with("Task #") => self
+                        .list
+                        .get(before)
+                        .map(|t| t.id.clone())
+                        .into_iter()
+                        .collect(),
+                    "TaskUpdate" => input["taskId"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect(),
+                    "TodoWrite" => self.list.iter().map(|t| t.id.clone()).collect(),
+                    _ => vec![],
+                };
+                self.touched.extend(ids);
+            }
+            AgentEvent::TurnFinished {
+                ok, interrupted, ..
+            } => {
+                let open = (self.list.iter())
+                    .any(|t| t.status != "completed" && self.touched.contains(&t.id));
+                let done = *ok && !*interrupted && !open && self.plans.is_empty();
+                self.touched.clear();
+                self.plans.clear();
+                return Some(done);
             }
             _ => {}
         }
+        None
     }
+}
 
-    /// Whether a task is left that is not done.
-    fn open(&self) -> bool {
-        self.list.iter().any(|t| t.status != "completed")
+/// An agent's process, which ends with its whole tree when killed or dropped. On Windows an
+/// agent npm installed runs as `claude.cmd` under cmd.exe, whose node outlives a kill of
+/// cmd.exe alone and would go on writing after a rewind, a restart or a delete.
+pub(crate) struct Running(pub(crate) Child);
+
+impl Running {
+    async fn kill(mut self) {
+        end_tree(&mut self.0);
+        let _ = self.0.kill().await;
     }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        end_tree(&mut self.0);
+    }
+}
+
+/// End what `child` started, while it still runs, as servers.rs does: `taskkill /T` takes the
+/// tree, since Windows has no process groups to signal. Elsewhere killing `child` is enough.
+fn end_tree(child: &mut Child) {
+    #[cfg(windows)]
+    if let (Ok(None), Some(pid)) = (child.try_wait(), child.id()) {
+        let _ = quill_files::command("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+    #[cfg(not(windows))]
+    let _ = child;
 }
 
 /// What reaches a session's actor: the UI's wishes and its process's output.
@@ -2659,7 +2799,7 @@ struct Actor {
     program: Option<String>,
     inbox: UnboundedSender<Input>,
     sink: Sink,
-    process: Option<(Child, ChildStdin)>,
+    process: Option<(Running, ChildStdin)>,
     /// Bumped per launch, so lines of a process that already ended are dropped.
     generation: u64,
     /// The request the agent is working on, from its own `Running` reports.
@@ -2681,10 +2821,8 @@ struct Actor {
     route: Option<UnboundedSender<Internal>>,
     /// The last thing the agent said in the turn under way, for its report.
     last_text: String,
-    /// Its task list, and the plans of the turn under way that no card asked about: a plan
-    /// the turn ends with waits for the person.
-    tasks: TaskList,
-    plans: std::collections::HashSet<String>,
+    /// Its task list and how the turn under way goes, for whether it ends with its task done.
+    progress: Progress,
     /// Added to the agent's environment: the `$BROWSER` bridge, and the secrets of the global
     /// servers.
     env: Vec<(String, String)>,
@@ -2750,8 +2888,7 @@ impl Actor {
             before: HashMap::new(),
             route: None,
             last_text: String::new(),
-            tasks: TaskList::default(),
-            plans: Default::default(),
+            progress: Progress::default(),
             env: Vec::new(),
             injected: Vec::new(),
             unrewind: None,
@@ -3062,8 +3199,8 @@ impl Actor {
 
     /// Ends the process, if any: what it still says is not this conversation's.
     async fn stop(&mut self) {
-        if let Some((mut child, _)) = self.process.take() {
-            let _ = child.kill().await;
+        if let Some((child, _)) = self.process.take() {
+            child.kill().await;
         }
         if let (true, Some(shared)) = (std::mem::take(&mut self.attached), &self.shared) {
             shared.detach(self.id);
@@ -3124,7 +3261,16 @@ impl Actor {
                 }
                 Input::Report(reports) => {
                     let text = report_text(&reports);
-                    self.prompt(text, Some(reports), &[], vec![], false).await;
+                    // Not heard when the agent did not start: the router keeps it for later.
+                    if !self
+                        .prompt(text, Some(reports.clone()), &[], vec![], false)
+                        .await
+                    {
+                        self.tell(Internal::Unheard {
+                            session: self.id,
+                            reports,
+                        });
+                    }
                 }
                 Input::Rewind(request) => self.rewind(request).await,
                 Input::RewindTo(request, at) => self.rewind_to(request, at).await,
@@ -3191,8 +3337,8 @@ impl Actor {
                 Input::Line { .. } | Input::Exited { .. } => {}
             }
         }
-        if let Some((mut child, _)) = self.process.take() {
-            let _ = child.kill().await;
+        if let Some((child, _)) = self.process.take() {
+            child.kill().await;
         }
         if let (true, Some(shared)) = (self.attached, &self.shared) {
             shared.detach(self.id);
@@ -3261,7 +3407,7 @@ impl Actor {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(_)) = lines.next_line().await {}
         });
-        self.process = Some((child, stdin));
+        self.process = Some((Running(child), stdin));
         self.status(SessionStatus::Starting);
         self.write(AgentCommand::Start).await;
         Ok(())
@@ -3429,27 +3575,7 @@ impl Actor {
                         .unwrap_or_default();
                 }
             }
-            self.tasks.heard(&event);
-            match &event {
-                AgentEvent::ToolUse {
-                    call,
-                    name,
-                    parent: None,
-                    ..
-                } if name == "ExitPlanMode" => drop(self.plans.insert(call.clone())),
-                AgentEvent::PermissionRequest {
-                    call: Some(call), ..
-                } => drop(self.plans.remove(call)),
-                _ => {}
-            }
-            let done = matches!(
-                event,
-                AgentEvent::TurnFinished {
-                    ok: true,
-                    interrupted: false,
-                    ..
-                }
-            );
+            let done = self.progress.heard(&event);
             let finished = matches!(event, AgentEvent::TurnFinished { .. });
             // A step that wrote files or ran a command, or work beside the turn that ended,
             // may have changed the folder.
@@ -3477,11 +3603,10 @@ impl Actor {
                 self.busy = false;
                 self.status(SessionStatus::Idle);
                 let text = std::mem::take(&mut self.last_text);
-                let planned = !std::mem::take(&mut self.plans).is_empty();
                 self.tell(Internal::TurnEnded {
                     session: self.id,
                     text,
-                    finished: done && !planned && !self.tasks.open(),
+                    finished: done == Some(true),
                 });
                 self.drain().await;
             }
@@ -4274,6 +4399,240 @@ mod tests {
         router.wait_for(5, &wait(6));
         router.archive(6, true);
         assert_eq!(ended(&heard).last(), Some(&(5, WaitOutcome::Gone)));
+        // A session put away stops waiting itself: nothing runs a turn out of sight.
+        router.wait_for(7, &wait(8));
+        router.archive(7, true);
+        assert_eq!(ended(&heard).last(), Some(&(7, WaitOutcome::Canceled)));
+        assert!(!router.waits.contains_key(&7));
+        let before = ended(&heard).len();
+        router
+            .internal(Internal::TurnEnded {
+                session: 8,
+                text: "Done.".into(),
+                finished: true,
+            })
+            .await;
+        assert_eq!(ended(&heard).len(), before);
+        assert!(!router.reports.contains_key(&7));
+        // Reports an agent that did not start never heard wait for its next chance.
+        let report = router.reports[&1][0].clone();
+        router.reports.clear();
+        router
+            .internal(Internal::Unheard {
+                session: 1,
+                reports: vec![report.clone()],
+            })
+            .await;
+        assert_eq!(router.reports[&1], [report]);
+    }
+
+    /// Killed, an agent's process is gone; on Windows with what it started (an npm agent's
+    /// node under cmd.exe), as `taskkill /T` takes the tree.
+    #[tokio::test]
+    async fn an_agent_s_process_ends_with_what_it_started() {
+        #[cfg(windows)]
+        let (program, args) = ("cmd", ["/C", "ping -n 60 127.0.0.1 > nul"]);
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", ["-c", "sleep 60"]);
+        let mut command = Command::from(quill_files::command(program));
+        command.args(args).kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let pid = child.id().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        #[cfg(windows)]
+        let below = {
+            let filter = format!("ParentProcessId={pid}");
+            let listed = quill_files::command("powershell")
+                .args(["-NoProfile", "-Command"])
+                .arg(format!(
+                    "(Get-CimInstance Win32_Process -Filter '{filter}').ProcessId"
+                ))
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&listed.stdout).trim().to_owned()
+        };
+        Running(child).kill().await;
+        // Killed and reaped: nothing is left of it.
+        #[cfg(target_os = "linux")]
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+        #[cfg(windows)]
+        for pid in below.lines() {
+            let found = quill_files::command("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid.trim())])
+                .output()
+                .unwrap();
+            assert!(
+                !String::from_utf8_lossy(&found.stdout).contains(pid.trim()),
+                "{pid} lives on"
+            );
+        }
+        let _ = pid;
+    }
+
+    fn task_call(call: &str, name: &str, input: serde_json::Value) -> AgentEvent {
+        AgentEvent::ToolUse {
+            call: call.into(),
+            name: name.into(),
+            input,
+            parent: None,
+        }
+    }
+
+    fn answered(call: &str, output: &str) -> AgentEvent {
+        AgentEvent::ToolResult {
+            call: call.into(),
+            output: output.into(),
+            is_error: false,
+            files: vec![],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        }
+    }
+
+    fn turn_end(ok: bool, interrupted: bool) -> AgentEvent {
+        AgentEvent::TurnFinished {
+            ok,
+            interrupted,
+            usage: Default::default(),
+            error: None,
+        }
+    }
+
+    /// Only the tasks a turn made or changed say whether it left work undone.
+    #[test]
+    fn a_turn_is_done_unless_it_left_its_own_tasks_open_or_a_plan_or_stopped() {
+        let mut progress = Progress::default();
+        for n in 1..=4 {
+            let call = format!("c{n}");
+            progress.heard(&task_call(
+                &call,
+                "TaskCreate",
+                serde_json::json!({ "subject": "step" }),
+            ));
+            progress.heard(&answered(
+                &call,
+                &format!("Task #{n} created successfully: step"),
+            ));
+        }
+        for n in 1..=3 {
+            let call = format!("u{n}");
+            let input = serde_json::json!({ "taskId": n.to_string(), "status": "completed" });
+            progress.heard(&task_call(&call, "TaskUpdate", input));
+            progress.heard(&answered(&call, "Updated"));
+        }
+        assert_eq!(
+            progress.heard(&turn_end(true, false)),
+            Some(false),
+            "task 4 is open"
+        );
+        // "Skip 4, just commit": the next turn touches no task, and is done.
+        assert_eq!(progress.heard(&turn_end(true, false)), Some(true));
+        assert_eq!(
+            progress.heard(&turn_end(true, true)),
+            Some(false),
+            "stopped"
+        );
+        assert_eq!(
+            progress.heard(&turn_end(false, false)),
+            Some(false),
+            "failed"
+        );
+        // A task whose number the answer does not give holds no one.
+        progress.heard(&task_call(
+            "c9",
+            "TaskCreate",
+            serde_json::json!({ "subject": "x" }),
+        ));
+        progress.heard(&answered("c9", "Created a task"));
+        assert_eq!(progress.heard(&turn_end(true, false)), Some(true));
+        let todos = serde_json::json!({ "todos": [{ "content": "a", "status": "in_progress" }] });
+        progress.heard(&task_call("w1", "TodoWrite", todos));
+        progress.heard(&answered("w1", ""));
+        assert_eq!(progress.heard(&turn_end(true, false)), Some(false));
+        // A plan the turn ends with, which no card asked about, waits for the person.
+        progress.heard(&task_call("p1", "ExitPlanMode", serde_json::json!({})));
+        assert_eq!(progress.heard(&turn_end(true, false)), Some(false));
+        progress.heard(&task_call("p2", "ExitPlanMode", serde_json::json!({})));
+        progress.heard(&AgentEvent::PermissionRequest {
+            id: "q".into(),
+            call: Some("p2".into()),
+            tool: "ExitPlanMode".into(),
+            input: serde_json::json!({}),
+            title: None,
+            interactive: true,
+            suggestions: vec![],
+        });
+        assert_eq!(progress.heard(&turn_end(true, false)), Some(true));
+    }
+
+    /// After a restart, a session whose last turn was running or ended short is not done, and
+    /// a wait that woke but whose session never heard it is told again.
+    #[test]
+    fn a_restored_session_knows_its_last_turn_and_the_wakes_it_did_not_hear() {
+        let created = Event::SessionCreated {
+            session: 1,
+            agent: "claude".into(),
+            cwd: std::env::temp_dir(),
+        };
+        let queued = Event::Queued {
+            session: 1,
+            request: "r".into(),
+            text: "Go".into(),
+            at: None,
+            images: vec![],
+        };
+        let ended = |ok, interrupted| Event::Agent {
+            session: 1,
+            request: None,
+            event: turn_end(ok, interrupted),
+        };
+        let restored = |events: &[Event]| Restored::from(events).unwrap();
+        assert!(!restored(std::slice::from_ref(&created)).unfinished);
+        assert!(
+            restored(&[created.clone(), queued.clone()]).unfinished,
+            "running at exit"
+        );
+        assert!(!restored(&[created.clone(), queued.clone(), ended(true, false)]).unfinished);
+        assert!(restored(&[created.clone(), queued.clone(), ended(true, true)]).unfinished);
+        let waiting = Event::Waiting {
+            session: 1,
+            wait: quill_model::Wait {
+                on: 2,
+                title: "Other".into(),
+                then: "Cut version 0.1.0".into(),
+                at: 0,
+            },
+        };
+        let woke = Event::WaitEnded {
+            session: 1,
+            on: 2,
+            outcome: WaitOutcome::Finished,
+            text: "Merged.".into(),
+        };
+        let unheard = restored(&[created.clone(), waiting.clone(), woke.clone()]).unheard;
+        assert_eq!(unheard.len(), 1);
+        assert_eq!(unheard[0].text, "Merged.");
+        assert_eq!(
+            unheard[0].waited,
+            Some((WaitOutcome::Finished, "Cut version 0.1.0".into()))
+        );
+        let heard = Event::Reported {
+            session: 1,
+            request: "w".into(),
+            reports: unheard,
+        };
+        assert!(restored(&[created.clone(), waiting.clone(), woke, heard])
+            .unheard
+            .is_empty());
+        let canceled = Event::WaitEnded {
+            session: 1,
+            on: 2,
+            outcome: WaitOutcome::Canceled,
+            text: String::new(),
+        };
+        assert!(restored(&[created, waiting, canceled]).unheard.is_empty());
     }
 
     #[test]
