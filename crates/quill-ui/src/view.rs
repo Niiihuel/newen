@@ -2815,7 +2815,7 @@ fn entries<'a>(
                             muted("Passed your message to")
                                 .font_size(chat())
                                 .centered_y(),
-                            session_chip(store, child).centered_y(),
+                            session_chip(store, child).shrink_to_fit(),
                         ])
                         .gap(8.0),
                     );
@@ -3017,10 +3017,7 @@ fn session_chip(store: &Store, id: quill_model::SessionId) -> Element {
                 .radius(2.5)
                 .size(Some(5.0), Some(5.0))
                 .centered_y(),
-            text(title.clone())
-                .foreground(look::mention())
-                .font_size(chat())
-                .centered_y(),
+            one_line(title.clone(), look::mention()),
             hgap(6.0),
         ])
         .gap(6.0)
@@ -3110,11 +3107,11 @@ fn started_card(store: &Store, session: &Session, input: &Value, column: f32) ->
             .radius(2.5)
             .size(Some(5.0), Some(5.0))
             .centered_y(),
-        text(title.to_owned()).font_size(chat()).centered_y(),
+        one_line(title.to_owned(), look::palette().text),
     ];
     if let Some(doing) = doing {
         row.push(
-            Element::truncated_text(doing)
+            Element::faded_text(doing, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
@@ -3163,7 +3160,7 @@ fn waiting_cards(
             let mut lines = vec![text(session_title(child))];
             if let Some(asks) = asks(child, ui) {
                 lines.push(
-                    Element::truncated_text(asks)
+                    Element::faded_text(asks, FADE)
                         .font_family(FontFamily::Sans)
                         .font_size(SMALL)
                         .foreground(look::muted()),
@@ -3235,11 +3232,25 @@ fn sent_line(sent: usize) -> Element {
 /// Where the agent compacted its context, between two hairlines (inferred design: Claude
 /// Code's `compact_boundary` is not drawn, and Desktop's is not captured).
 fn compaction_divider(running: bool, column: f32) -> Element {
-    let words = if running {
-        "Compacting context"
-    } else {
-        "Context compacted"
-    };
+    labeled_divider(
+        if running {
+            "Compacting context"
+        } else {
+            "Context compacted"
+        },
+        column,
+    )
+}
+
+/// Where what the person had not seen begins: "New" between two hairlines, in the muted ink
+/// of the other dividers (Desktop draws its own in orange).
+fn new_divider(column: f32) -> Element {
+    labeled_divider("New", column)
+}
+
+/// `words` between two hairlines across the column, in a 24 px row of its own, as tall as
+/// the step lines around it, so neither reaches into it.
+fn labeled_divider(words: &str, column: f32) -> Element {
     let line = || {
         Element::spacer()
             .size(None, Some(1.0))
@@ -3253,22 +3264,7 @@ fn compaction_divider(running: bool, column: f32) -> Element {
         line(),
     ])
     .gap(10.0)
-    .size(Some(column), None)
-}
-
-/// Where what the person had not seen begins, as Desktop marks it "New" between two orange
-/// lines (straight here, the video's are wavy).
-fn new_divider(column: f32) -> Element {
-    let side = (column - 60.0) / 2.0;
-    Element::row(vec![
-        hline(side, look::spark()).centered_y(),
-        text("New")
-            .foreground(look::spark())
-            .font_size(SMALL)
-            .centered_y(),
-        hline(side, look::spark()).centered_y(),
-    ])
-    .gap(10.0)
+    .size(Some(column), Some(24.0))
 }
 
 /// The annotation editor over the window [spec §3 "Editor"]: the picture under the marks on the
@@ -3851,20 +3847,35 @@ pub(crate) fn ago_from(seconds: u64) -> String {
     format!("{count} {unit}{s} ago")
 }
 
+/// How far a transcript line that does not fit fades out at its end.
+const FADE: f32 = 24.0;
+
+/// One line of a transcript row in `ink`: as wide as its words while the row has room, and
+/// fading out at its end once it has not, never wrapping into the rows around it or running
+/// past the column.
+fn one_line(words: impl Into<String>, ink: Color) -> Element {
+    Element::faded_text(words, FADE)
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
+        .foreground(ink)
+        .shrink_to_fit()
+}
+
+/// Words about work under way, shimmering as a working session's title does in the sidebar,
+/// on one line as `one_line` keeps one.
+fn working_words(id: &str, words: String) -> Element {
+    Element::shimmer_faded_text(id.to_owned(), words, look::palette().text, FADE)
+        .foreground(look::muted())
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
+        .shrink_to_fit()
+}
+
 /// The line under the turn: quill's pen writing (in place of Desktop's orange
 /// dots, as the person chose), then the step running, or the
 /// turn's clock, its tokens, the work running beside it and whether the model thinks, muted,
 /// at the transcript's size. Waiting on the person it says so; with only background work
 /// left, it counts it.
-/// Words about work under way, shimmering as a working session's title does in the sidebar.
-fn working_words(id: &str, words: String) -> Element {
-    Element::shimmer_text(id.to_owned(), words, look::palette().text)
-        .foreground(look::muted())
-        .font_family(FontFamily::Sans)
-        .font_size(chat())
-        .centered_y()
-}
-
 fn status_line(
     session: &Session,
     running: Option<&Step>,
@@ -3933,7 +3944,7 @@ fn status_line(
             line.extend(tasks.map(|tasks| {
                 Element::clickable(TASKS_OPEN, working_words("status:tasks", tasks))
                     .underline_on_hover()
-                    .centered_y()
+                    .shrink_to_fit()
             }));
             Element::row(line).gap(12.0)
         }
@@ -4012,10 +4023,11 @@ fn item(
                 .centered_y(),
             Element::clickable(
                 format!("session:{from}"),
-                Element::truncated_text(
+                Element::faded_text(
                     store
                         .session(*from)
                         .map_or_else(|| "another session".to_owned(), session_title),
+                    FADE,
                 )
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
@@ -4441,15 +4453,9 @@ fn web_search_block(
         format!("Searched {count} {sites}")
     };
     let label = if searching {
-        TextShimmer::new(format!("{key}:label"), label, look::palette())
-            .render()
-            .centered_y()
+        working_words(&format!("{key}:label"), label).font_size(13.0)
     } else {
-        Element::text(label)
-            .font_family(FontFamily::SansMedium)
-            .font_size(chat())
-            .foreground(look::palette().text)
-            .centered_y()
+        one_line(label, look::palette().text).font_family(FontFamily::SansMedium)
     };
     let mut globe = vec![Element::icon(icons::of(icons::GLOBE))
         .foreground(look::muted())
@@ -4489,8 +4495,12 @@ fn web_search_block(
             .centered_y(),
     );
     // The pill is 40 tall with 6 padding and 14 on the right: 8 more past the chevron.
-    let content =
-        Element::row(vec![Element::row(parts).gap(10.0).centered_y(), hgap(8.0)]).padding(6.0);
+    // Each level gives way to a long query, so the pill keeps to the column.
+    let content = Element::row(vec![
+        Element::row(parts).gap(10.0).shrink_to_fit(),
+        hgap(8.0),
+    ])
+    .padding(6.0);
     let hover = ComponentPalette {
         hover: look::tool_hover(),
         selected: look::tool_hover(),
@@ -4502,7 +4512,8 @@ fn web_search_block(
                 .background(look::command_box())
                 .size(None, Some(40.0)),
         )
-        .radius(20.0);
+        .radius(20.0)
+        .shrink_to_fit();
     // The pill hugs what it says, as the reference's does.
     let mut block = vec![Element::row(vec![pill, Element::spacer().flex(1.0)])];
     if open && (searching || count > 0) {
@@ -4860,13 +4871,13 @@ fn task_card(list: &[Todo], column: f32, palette: ComponentPalette) -> Element {
                     .foreground(look::muted())
                     .size(Some(14.0), Some(14.0)),
             };
-            let words = text(todo.subject.clone()).font_size(BODY);
-            let words = if done {
-                words.foreground(look::muted())
+            let ink = if done {
+                look::muted()
             } else {
-                words
+                look::palette().text
             };
-            Element::row(vec![mark.centered_y(), words.centered_y()])
+            let words = one_line(todo.subject.clone(), ink).font_size(BODY);
+            Element::row(vec![mark.centered_y(), words])
                 .gap(6.0)
                 .size(None, Some(28.0))
         })
@@ -5117,7 +5128,7 @@ fn browser_card(
         .size(Some(40.0), Some(40.0))
         .centered_y(),
         Element::column(vec![
-            Element::truncated_text(title)
+            Element::faded_text(title, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
@@ -5511,12 +5522,9 @@ fn step_group(
         .fold((0, 0), |(a, r), res| (a + res.added, r + res.removed));
     let summary = group_summary(steps);
     let mut head = vec![if running {
-        TextShimmer::new(format!("{key}:shimmer"), summary, palette)
-            .render()
-            .font_size(chat())
-            .centered_y()
+        working_words(&format!("{key}:shimmer"), summary)
     } else {
-        muted(summary).font_size(chat()).centered_y()
+        one_line(summary, look::muted())
     }];
     // A command left running in the background offers its output.
     if steps
@@ -5560,7 +5568,8 @@ fn step_group(
         view,
         key,
         Element::row(head).gap(8.0).size(None, Some(24.0)),
-    );
+    )
+    .shrink_to_fit();
     // Folded, they sit at the line's end; open, each step's row shows its own.
     let mine = |p: &StepPicture| steps.iter().any(|s| s.call == p.call);
     let strip = if open {
@@ -5691,9 +5700,16 @@ fn step_row(
     let open = !agent && !bare && is_open(view, ui, step.call);
     let done = !step.running && step.result.is_some_and(|r| !r.stopped);
     let (verb, object) = step_label(step, done);
-    let mut line = vec![hgap(10.0), muted(verb).centered_y()];
-    if !object.is_empty() {
-        line.push(text(object).centered_y());
+    let mut line = vec![hgap(10.0)];
+    // A step still at work shimmers for as long as it runs, as the running line does.
+    if step.running {
+        let words = format!("{verb} {object}").trim_end().to_owned();
+        line.push(working_words(&format!("tool:{}:shimmer", step.call), words).font_size(BODY));
+    } else if object.is_empty() {
+        line.push(one_line(verb, look::muted()).font_size(BODY));
+    } else {
+        line.push(muted(verb).centered_y());
+        line.push(one_line(object, look::palette().text).font_size(BODY));
     }
     if let Some(r) = step.result {
         if r.added + r.removed > 0 {
@@ -8184,8 +8200,8 @@ fn changes_card(
                 .centered_y(),
         ]
     };
-    // Each row keeps to the card: the name and its folder give way, ending in "…", so the
-    // counts stay inside however narrow the column gets.
+    // Each row keeps to the card: the name and its folder give way, fading out at their end,
+    // so the counts stay inside however narrow the column gets.
     let inner = column - 10.0;
     let row = |icon: &'static str, label: String, folder: Option<String>, end: Vec<Element>| {
         let mut items = vec![
@@ -8194,20 +8210,18 @@ fn changes_card(
                 .foreground(look::muted())
                 .size(Some(14.0), Some(14.0))
                 .centered_y(),
-            Element::truncated_text(label)
+            Element::faded_text(label, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
-                .max_width(inner / 2.0)
-                .centered_y(),
+                .max_width(inner / 2.0),
         ];
         items.push(match folder {
-            Some(f) => Element::truncated_text(f)
+            Some(f) => Element::faded_text(f, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
-                .flex(1.0)
-                .centered_y(),
+                .flex(1.0),
             None => Element::spacer().flex(1.0),
         });
         items.extend(end);
@@ -9706,7 +9720,7 @@ fn reports_block(
             };
             let line = Element::row(vec![
                 lead.centered_y(),
-                session_chip(store, report.from).centered_y(),
+                session_chip(store, report.from).shrink_to_fit(),
                 fold(view, key.clone(), caret(open)).centered_y(),
             ])
             .gap(8.0);

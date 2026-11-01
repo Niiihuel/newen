@@ -7893,3 +7893,332 @@ fn sessions_started_by_sessions_nest_under_them_as_a_tree_at_every_depth() {
     assert!(x("session:1") < x("session:2") && x("session:2") < x("session:3"));
     assert_eq!(x("session:5"), x("session:1"));
 }
+
+/// A turn with every kind of transcript row, its words long enough to run out of any column.
+fn crowded_turn() -> (Store, Ui) {
+    let (mut store, mut ui) = store_with_session();
+    let file = |name: &str| serde_json::json!({ "file_path": format!("/work/{name}") });
+    tool(
+        &mut store,
+        "r1",
+        "Read",
+        file("assets/rune-discord-banner.png"),
+        None,
+    );
+    result(&mut store, "r1", "ok");
+    for i in 0..4 {
+        let call = format!("b{i}");
+        let input = serde_json::json!({
+            "command": "ls",
+            "description": format!("List the generated icon folders under assets/icons/rune-{i}"),
+        });
+        tool(&mut store, &call, "Bash", input, None);
+        result(&mut store, &call, "ok");
+    }
+    // What the person has not seen begins between two groups of steps.
+    let new_from = store.session(1).unwrap().items.len();
+    for name in [
+        "crates/server/src/uploads.rs",
+        "assets/rune-small.svg",
+        "assets/rune-windows.svg",
+        "assets/rune.svg",
+        "AGENTS.md",
+        "crates/server/src/routes/module.rs",
+    ] {
+        let call = format!("e:{name}");
+        let mut input = file(name);
+        input["old_string"] = "a".into();
+        input["new_string"] = "b".into();
+        tool(&mut store, &call, "Edit", input, None);
+        result(&mut store, &call, "ok");
+    }
+    let long = "/work/crates/server/src/routes/very/deep/module/with/a/path/that/never/ends.rs";
+    agent(
+        &mut store,
+        AgentEvent::Text {
+            text: format!(
+                "Done: see {long} and https://example.com/a/very/long/url/that/has/no/spaces/at/all                  and `{long}`.\n\n```\nlet path = \"{long}{long}\";\n```"
+            ),
+            parent: None,
+            id: None,
+            at: None,
+        },
+    );
+    let failing = serde_json::json!({
+        "command": "false",
+        "description": "Run a command that checks every generated icon in the repository for its size",
+    });
+    tool(&mut store, "f1", "Bash", failing, None);
+    agent(
+        &mut store,
+        AgentEvent::ToolResult {
+            call: "f1".into(),
+            output: "boom".into(),
+            is_error: true,
+            files: vec![],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        },
+    );
+    let query = "how do the tab and footer string keys of every crate in the workspace load";
+    tool(
+        &mut store,
+        "w1",
+        "WebSearch",
+        serde_json::json!({ "query": query }),
+        None,
+    );
+    let subject = "Find usages of tab and footer string keys in every crate of the workspace";
+    tool(
+        &mut store,
+        "c1",
+        "TaskCreate",
+        serde_json::json!({ "subject": subject }),
+        None,
+    );
+    result(&mut store, "c1", "Task #1 created successfully: x");
+    for i in 0..3 {
+        agent(
+            &mut store,
+            AgentEvent::TaskStarted {
+                id: format!("k{i}"),
+                call: Some(format!("a{i}")),
+                description: "Find usages of tab and footer string keys".into(),
+                kind: "agent".into(),
+            },
+        );
+    }
+    // Two helpers at once: the first in a group, the last on the running line.
+    for call in ["a8", "a9"] {
+        let description = "REA: voice preview + timer, and a long account of what it does";
+        tool(
+            &mut store,
+            call,
+            "Agent",
+            serde_json::json!({ "description": description }),
+            None,
+        );
+    }
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Running,
+    });
+    ui.new_from.insert(1, new_from);
+    (store, ui)
+}
+
+/// Each line of text drawn, as far as its clip lets it show: its words, left, top, right and
+/// height. The tree measures text as 8 px a character at 14 px when no fonts are attached.
+fn text_spans(frame: &limn::Frame) -> Vec<(String, f32, f32, f32, f32)> {
+    let mut clips: Vec<limn::Rect> = vec![];
+    let mut spans = vec![];
+    for command in &frame.commands {
+        match command {
+            limn::DrawCommand::PushClip(rect) => {
+                let inner = match clips.last() {
+                    Some(outer) => rect
+                        .intersection(*outer)
+                        .unwrap_or(limn::Rect::new(rect.x, rect.y, 0.0, 0.0)),
+                    None => *rect,
+                };
+                clips.push(inner);
+            }
+            limn::DrawCommand::PopClip => {
+                clips.pop();
+            }
+            limn::DrawCommand::Text {
+                position,
+                text,
+                font_size,
+                ..
+            } => {
+                let scale = font_size / 14.0;
+                let mut right = position.x + text.chars().count() as f32 * 8.0 * scale;
+                if let Some(clip) = clips.last() {
+                    if clip.width <= 0.0 {
+                        continue;
+                    }
+                    right = right.min(clip.x + clip.width);
+                }
+                spans.push((text.clone(), position.x, position.y, right, 18.0 * scale));
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// In a narrow center dock (360 px) as in wide ones, every line of the transcript keeps to
+/// its column, and none is drawn over another or crossed by a hairline: the step summaries
+/// and steps, a long query, the task list, the running line and the "New" line between two
+/// groups. A paragraph's long path and URL wrap inside it.
+#[test]
+fn transcript_rows_keep_to_their_column_at_any_width() {
+    let (store, mut ui) = crowded_turn();
+    // The group with the running helper open, so its rows are drawn too.
+    ui.expanded.push("steps:a8".into());
+    ui.expanded.push("steps:r1".into());
+    settle(&store, &mut ui);
+    for width in [648.0, 1000.0, 1600.0, 2400.0] {
+        let window = limn::Size::new(width, 2000.0);
+        let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+        let dock = frame
+            .regions
+            .iter()
+            .find(|r| r.id == "transcript:1")
+            .unwrap()
+            .rect;
+        let spans: Vec<_> = text_spans(&frame)
+            .into_iter()
+            .filter(|s| s.1 >= dock.x && s.1 < dock.x + dock.width)
+            .filter(|s| s.2 >= dock.y && s.2 < dock.y + dock.height)
+            .collect();
+        let left = spans
+            .iter()
+            .find(|s| s.0.starts_with("Started on"))
+            .unwrap()
+            .1;
+        // The column is centered in the dock.
+        let right = dock.x + dock.width - (left - dock.x);
+        if width == 648.0 {
+            assert_eq!(right - left, 264.0, "a 360 px dock");
+        }
+        if std::env::var_os("SPANS").is_some() {
+            for s in &spans {
+                eprintln!("{s:?}");
+            }
+        }
+        for drawn in ["New", "Running agent", "Failed", "Find usages", "Searching"] {
+            assert!(
+                spans.iter().any(|s| s.0.starts_with(drawn)),
+                "{width}: no {drawn}"
+            );
+        }
+        for s in &spans {
+            assert!(s.3 <= right + 0.5, "{width}: {s:?} runs past {right}");
+        }
+        for (i, a) in spans.iter().enumerate() {
+            for b in &spans[i + 1..] {
+                // A fading or shimmering line is drawn as bands of the same words.
+                if a.0 == b.0 && a.2 == b.2 {
+                    continue;
+                }
+                let across = a.1 < b.3 - 0.5 && b.1 < a.3 - 0.5;
+                let down = a.2 < b.2 + b.4 - 0.5 && b.2 < a.2 + a.4 - 0.5;
+                assert!(!(across && down), "{width}: {a:?} over {b:?}");
+            }
+        }
+        for command in &frame.commands {
+            let limn::DrawCommand::FillRect { rect, .. } = command else {
+                continue;
+            };
+            if rect.height > 1.5 || rect.x < dock.x || rect.x >= dock.x + dock.width {
+                continue;
+            }
+            for s in &spans {
+                let across = rect.x < s.3 && s.1 < rect.x + rect.width;
+                let down = rect.y > s.2 && rect.y < s.2 + s.4;
+                assert!(
+                    !(across && down),
+                    "{width}: a hairline at {rect:?} crosses {s:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A background task's row keeps its description on one line that fades out inside the
+/// card; resting on it shows the whole of it with the command, how long it has run and where.
+#[test]
+fn a_background_task_row_fades_its_long_title_and_its_hint_has_the_rest() {
+    let (mut store, mut ui) = store_with_session();
+    let description = "Find usages of tab and footer string keys in every crate of the workspace";
+    let input = serde_json::json!({ "command": "rg -n 'tab_key|footer_key' crates", "description": description });
+    tool(&mut store, "c1", "Bash", input, None);
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "t1".into(),
+            call: Some("c1".into()),
+            description: description.into(),
+            kind: "command".into(),
+        },
+    );
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1600.0, 900.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    let start = std::time::Instant::now();
+    let frame = tree.layout_at(window, start);
+    let row = region(&frame, "terminals:open:t1").expect("the task's row");
+    let bands: Vec<_> = text_spans(&frame)
+        .into_iter()
+        .filter(|s| s.0 == description)
+        .collect();
+    assert!(
+        bands.len() > 1,
+        "it fades rather than ending in an ellipsis"
+    );
+    assert!(bands
+        .iter()
+        .all(|s| s.2 == bands[0].2 && s.3 <= row.x + row.width));
+    assert!(painted(&frame, "rg -n 'tab_key|footer_key' crates").is_none());
+    let center = limn::Point::new(row.x + row.width / 2.0, row.y + row.height / 2.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    tree.layout_at(window, start);
+    let frame = tree.layout_at(window, start + std::time::Duration::from_millis(600));
+    let hint = |words: &str| {
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(hint("rg -n 'tab_key|footer_key' crates"), "its command");
+    assert!(
+        hint("Command \u{b7} running for"),
+        "what it is and how long it ran"
+    );
+    assert!(hint("/work"), "its folder");
+}
+
+/// A helper that still runs keeps its shimmer on its own row, in an open group as on the
+/// running line: helpers launched together leave all but the last in a group.
+#[test]
+fn a_running_helper_shimmers_in_its_open_group() {
+    let (mut store, mut ui) = store_with_session();
+    for call in ["a1", "a2"] {
+        let input = serde_json::json!({ "description": "Look into the voice preview" });
+        tool(&mut store, call, "Agent", input, None);
+    }
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Running,
+    });
+    ui.expanded.push("steps:a1".into());
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    let start = std::time::Instant::now();
+    tree.layout_at(window, start);
+    let frame = tree.layout_at(window, start + std::time::Duration::from_millis(500));
+    let drawn: Vec<(f32, limn::Color)> = (frame.commands.iter())
+        .filter_map(|command| match command {
+            limn::DrawCommand::Text {
+                text,
+                color,
+                position,
+                ..
+            } if text.ends_with("Look into the voice preview") => Some((position.y, *color)),
+            _ => None,
+        })
+        .collect();
+    // The group's row is above the running line; its words sweep a highlight as those do.
+    let top = drawn.iter().map(|d| d.0).fold(f32::INFINITY, f32::min);
+    let mut inks = vec![];
+    for (_, color) in drawn.iter().filter(|d| d.0 == top) {
+        if !inks.contains(color) {
+            inks.push(*color);
+        }
+    }
+    assert!(inks.len() > 1, "{drawn:?}");
+}

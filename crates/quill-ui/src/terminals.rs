@@ -4,7 +4,7 @@
 //! opens its pane.
 
 use crate::{Item, Pane, Session, Store, TerminalRequest, Ui};
-use limn::Element;
+use limn::{Component, Element};
 use quill_components::pieces::{muted, text};
 use quill_components::{icons, look};
 use quill_model::Intent;
@@ -59,17 +59,19 @@ pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
                 "command" => icons::TERMINAL,
                 _ => icons::LIST,
             }),
-            // One line, cut with an ellipsis: a long description never runs into the next row.
-            Element::truncated_text(task.description.clone())
+            // One line that fades out at its end: a long description never runs into the
+            // next row; the hint has it whole.
+            Element::faded_text(task.description.clone(), 24.0)
                 .font_size(look::SMALL)
                 .foreground(palette.text)
-                .size(Some(width - 96.0), Some(18.0))
-                .centered_y(),
+                .size(Some(width - 96.0), Some(18.0)),
         ])
         .gap(10.0);
+        let open = format!("{OPEN}{}", task.id);
         let words = palette
-            .interactive_surface(Element::clickable(format!("{OPEN}{}", task.id), words))
+            .interactive_surface(Element::clickable(open.clone(), words))
             .radius(6.0);
+        let words = hint(session, task, words, &open);
         let stop = palette
             .interactive_surface(Element::clickable(
                 format!("{STOP}{}", task.id),
@@ -110,6 +112,41 @@ pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
         );
     }
     Some(rows)
+}
+
+/// A running task's hint: its whole description, the command it runs, and what kind it is,
+/// how long it has run, what it used so far and the folder it runs in.
+fn hint(session: &Session, task: &crate::Task, anchor: Element, id: &str) -> Element {
+    let command = task.call.as_deref().and_then(|call| {
+        session.items.iter().find_map(|item| match item {
+            Item::Tool { call: c, input, .. } if c == call => input["command"].as_str(),
+            _ => None,
+        })
+    });
+    let kind = match task.kind.as_str() {
+        "agent" => "Agent",
+        "command" => "Command",
+        "workflow" => "Workflow",
+        "monitor" => "Monitor",
+        _ => "Task",
+    };
+    let mut about = vec![
+        kind.to_owned(),
+        format!("running for {}", ran(task.since.elapsed().as_secs())),
+    ];
+    if let Some(usage) = task.usage.filter(|u| u.tokens > 0) {
+        about.push(crate::view::tokens(usage.tokens));
+    }
+    limn::Tooltip::new(anchor, id, task.description.clone(), look::palette())
+        // At the window's right edge it opens to the left, to stay whole.
+        .placement(limn::TooltipPlacement::Left)
+        .description(command.unwrap_or_default())
+        .footer(format!(
+            "{} \u{b7} {}",
+            about.join(" \u{b7} "),
+            session.cwd.display()
+        ))
+        .render()
 }
 
 pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
