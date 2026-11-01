@@ -2569,6 +2569,10 @@ impl Ui {
             look::set_text_size(settings.text_size);
             look::set_width(settings.width);
             let first = self.agents.is_empty();
+            let (before, after) = (
+                self.settings.agent(&self.agent),
+                settings.agent(&self.agent),
+            );
             self.settings = settings.clone();
             // Welcomed before the appearance step existed (the first settings of a run already
             // say so): not asked now. Later ones echo a Get started pressed in this run.
@@ -2585,7 +2589,15 @@ impl Ui {
                     self.take_agent(&agent.id.clone());
                 }
             }
-            if self.selected.is_none() {
+            // Most settings saved echo here (a panel folded, an agent's option): what a new
+            // conversation was given stays, unless the agent's defaults themselves changed or
+            // its unsafe modes are no longer allowed.
+            let defaults = |a: &quill_model::AgentSettings| {
+                (a.model.clone(), a.effort.clone(), a.mode.clone())
+            };
+            let changed = defaults(&before) != defaults(&after)
+                || (before.allow_unsafe && !after.allow_unsafe);
+            if self.selected.is_none() && changed {
                 self.take_defaults();
             }
             return vec![];
@@ -3763,6 +3775,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if let Some(folder) = id.strip_prefix("new-in:") {
         ui.selected = None;
         ui.cwd = PathBuf::from(folder);
+        ui.take_defaults();
         return vec![];
     }
     if let Some(agent) = id.strip_prefix("pick-agent:") {

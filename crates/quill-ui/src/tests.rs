@@ -6379,6 +6379,53 @@ fn choosing_an_agent_takes_its_mode_drops_the_model_and_is_kept_in_settings() {
     );
 }
 
+/// What a new conversation was given stays when settings saved for something else echo back
+/// (a panel folded, an option): only the agent's own defaults changing, or its unsafe modes
+/// no longer allowed, take them again; opening a new conversation in a folder starts from them.
+#[test]
+fn a_new_conversations_mode_model_and_effort_survive_a_settings_echo() {
+    let (store, mut ui) = two_agents();
+    let mut allowed = Settings::default();
+    allowed.agents.insert(
+        "claude".into(),
+        quill_model::AgentSettings {
+            allow_unsafe: true,
+            ..Default::default()
+        },
+    );
+    let agents = ui.agents.clone();
+    let echo = |ui: &mut Ui, settings: &Settings| {
+        ui.applied(&Event::Settings {
+            settings: settings.clone(),
+            agents: agents.clone(),
+        })
+    };
+    echo(&mut ui, &allowed);
+    click(&store, &mut ui, "mode:bypassPermissions");
+    ui.model = Some("opus".into());
+    ui.effort = Some("high".into());
+    let chosen = |ui: &Ui| (ui.mode.clone(), ui.model.clone(), ui.effort.clone());
+    let picked = chosen(&ui);
+    let mut folded = allowed.clone();
+    folded.default_agent = Some("claude".into());
+    echo(&mut ui, &folded);
+    assert_eq!(chosen(&ui), picked);
+    // The default model changed in Settings: the new conversation takes it.
+    let mut new_default = folded.clone();
+    new_default.agents.get_mut("claude").unwrap().model = Some("haiku".into());
+    echo(&mut ui, &new_default);
+    assert_eq!(chosen(&ui), ("default".into(), Some("haiku".into()), None));
+    // Bypass no longer allowed: it is not kept.
+    click(&store, &mut ui, "mode:bypassPermissions");
+    let mut refused = new_default.clone();
+    refused.agents.get_mut("claude").unwrap().allow_unsafe = false;
+    echo(&mut ui, &refused);
+    assert_eq!(ui.mode, "default");
+    click(&store, &mut ui, "mode:acceptEdits");
+    click(&store, &mut ui, "new-in:/elsewhere");
+    assert_eq!(chosen(&ui), ("default".into(), Some("haiku".into()), None));
+}
+
 #[test]
 fn the_mode_words_are_the_chosen_agents_and_unsafe_ones_wait_for_settings() {
     let (store, mut ui) = two_agents();
