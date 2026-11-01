@@ -3216,12 +3216,13 @@ fn awake_command() -> Option<Command> {
 /// Start quill when the person logs in, or no longer: the desktop's autostart entry
 /// (freedesktop Desktop Application Autostart on Linux), a LaunchAgent on macOS, the user's
 /// `Run` key on Windows; written for this program or removed.
+#[cfg_attr(windows, allow(clippy::needless_return))]
 fn start_at_login(on: bool) -> Result<(), String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let mut reg = Command::new("reg");
+        let mut reg = std::process::Command::new("reg");
         if on {
             let value = format!("\"{}\"", program.display());
             reg.args([

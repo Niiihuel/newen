@@ -149,7 +149,9 @@ impl Native {
         // own: the headless platform has none to give ("Unable to allocate frame"), and on
         // Wayland it paints at 1× whatever scale it is told. X11 (XWayland in a Wayland
         // session) takes the window's.
-        let x11 = std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
+        // Off Linux there are no dmabufs to import (`Gpu::import`): paints reach the CPU.
+        let x11 =
+            cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
         let gpu = gpu.filter(|(device, _)| {
             let imports = device
                 .features()
@@ -320,6 +322,16 @@ fn over(page: &[u8], width: usize, popup: Option<(&[u8], usize, [i64; 2])>) -> V
 impl Gpu {
     /// Chromium's buffer as a texture of the window's device, to copy from while the paint
     /// lasts: the buffer goes back to Chromium when it returns.
+    #[cfg(not(target_os = "linux"))]
+    fn import(&self, _: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
+        // Windows' shared handles and macOS's IOSurfaces are not imported: `start` keeps those
+        // systems' paints on the CPU.
+        Err("GPU paints are imported on Linux only".into())
+    }
+
+    /// Chromium's buffer as a texture of the window's device, to copy from while the paint
+    /// lasts: the buffer goes back to Chromium when it returns.
+    #[cfg(target_os = "linux")]
     fn import(&self, info: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
         use std::os::fd::BorrowedFd;
         use wgpu::hal::api::Vulkan;
@@ -714,7 +726,14 @@ impl Shared {
             pages.contexts.get(&context).cloned()
         };
         // Alloy: the page alone, without Chrome's tab and window machinery.
-        let mut info = WindowInfo::default().set_as_windowless(0);
+        // No parent window: an X11 id on Linux, a pointer (HWND, NSView) elsewhere.
+        #[cfg(target_os = "linux")]
+        let parent = 0;
+        #[cfg(windows)]
+        let parent = sys::HWND(std::ptr::null_mut());
+        #[cfg(target_os = "macos")]
+        let parent = std::ptr::null_mut();
+        let mut info = WindowInfo::default().set_as_windowless(parent);
         info.shared_texture_enabled = i32::from(self.gpu.is_some());
         let mut client = PageClient::new(self.clone(), token);
         let url = if url.is_empty() {
@@ -1147,10 +1166,14 @@ wrap_app! {
             // No window of Chromium's own: a display server only to allocate GPU buffers
             // through, or none. The GPU through EGL, which ANGLE's default (an X11 display)
             // would not find without one.
-            switch("ozone-platform", self.platform);
-            switch("use-angle", "gl-egl");
+            // Ozone and EGL are Linux's; Windows and macOS keep their own (D3D11, Metal).
+            if cfg!(target_os = "linux") {
+                switch("ozone-platform", self.platform);
+                switch("use-angle", "gl-egl");
+            }
             // As the headless Chromium runs: no keyring prompt, no background chatter.
             switch("password-store", "basic");
+            line.append_switch(Some(&CefString::from("use-mock-keychain")));
             switch("disable-features", "Translate,MediaRouter,OptimizationHints");
         }
     }

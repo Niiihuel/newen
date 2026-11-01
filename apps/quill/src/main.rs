@@ -1551,10 +1551,10 @@ fn wait_for_restarter() {
 }
 
 fn open_url(url: &str) -> bool {
-    use std::io::{BufRead, Write};
     // The bridge to quill's own browser is a Unix socket; elsewhere the system opens it.
     #[cfg(unix)]
     let handed = (|| -> Option<bool> {
+        use std::io::{BufRead, Write};
         let socket = std::env::var_os("QUILL_BROWSER_BRIDGE")?;
         let key = std::env::var("QUILL_BROWSER_KEY").ok()?;
         let mut stream = std::os::unix::net::UnixStream::connect(socket).ok()?;

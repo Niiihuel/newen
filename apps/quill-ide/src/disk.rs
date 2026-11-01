@@ -224,6 +224,7 @@ fn write(path: &Path, snapshot: &BufferSnapshot) -> io::Result<Stamp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::ide::Save;
 
     #[test]
