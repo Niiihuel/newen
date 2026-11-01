@@ -9,3 +9,5 @@ publish = false
 
 [dependencies]
 quill-model = { path = "../quill-model" }
+# Starts git as every quill process starts (Windows: no console, PATHEXT).
+quill-files = { path = "../quill-files" }

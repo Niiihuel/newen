@@ -2,6 +2,9 @@
 //! `quill-ide [folder | file]` opens the folder (a file's own, and the file), the current
 //! directory without one.
 
+// A window, not a console program: Windows opens no console beside it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod complete;
 mod disk;
 mod grep;
@@ -62,7 +65,7 @@ impl App {
                 .and_then(|exe| Some(exe.parent()?.join("quill")))
                 .filter(|p| p.is_file())
                 .unwrap_or_else(|| "quill".into());
-            if let Err(error) = std::process::Command::new(&program).spawn() {
+            if let Err(error) = quill_files::command(&program).spawn() {
                 self.ide.link_note = Some(format!("quill did not start: {error}"));
                 continue;
             }

@@ -393,7 +393,7 @@ pub fn open_in_system(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<st
     } else {
         ("xdg-open", &[])
     };
-    std::process::Command::new(program)
+    command(program)
         .args(args)
         .arg(target)
         .stdin(std::process::Stdio::null())
@@ -402,9 +402,78 @@ pub fn open_in_system(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<st
         .spawn()
 }
 
+/// A process to start, the same on every system: on Windows a bare name is found through
+/// `PATH` and `PATHEXT` (npm's CLIs are `claude.cmd`, which `Command::new` alone never finds;
+/// std runs a `.cmd` it is given by path through cmd.exe, safely), and a console program
+/// opens no console window of its own (`CREATE_NO_WINDOW`).
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let program = program.as_ref();
+        let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+        let found =
+            std::env::var_os("PATH").and_then(|path| find_program(program, &path, &pathext));
+        let mut command =
+            std::process::Command::new(found.as_deref().map_or(program, Path::as_os_str));
+        command.creation_flags(0x0800_0000);
+        command
+    }
+    #[cfg(not(windows))]
+    std::process::Command::new(program)
+}
+
+/// The first `name` + one of `pathext`'s extensions (`;`-separated) that is a file in one of
+/// `path`'s folders, in that order, as cmd.exe looks; `None` for a name with a folder or an
+/// extension of its own.
+#[cfg(any(windows, test))]
+fn find_program(
+    name: &std::ffi::OsStr,
+    path: &std::ffi::OsStr,
+    pathext: &std::ffi::OsStr,
+) -> Option<PathBuf> {
+    let bare = Path::new(name);
+    if bare.extension().is_some() || bare.parent() != Some(Path::new("")) {
+        return None;
+    }
+    let pathext = pathext.to_str()?;
+    std::env::split_paths(path)
+        .flat_map(|dir| {
+            pathext
+                .split(';')
+                .filter(|ext| !ext.is_empty())
+                .map(move |ext| {
+                    let mut file = name.to_os_string();
+                    file.push(ext);
+                    dir.join(file)
+                })
+        })
+        .find(|file| file.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_program_name_is_found_through_path_and_pathext() {
+        let root = std::env::temp_dir().join(format!("quill-files-path-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (first, second) = (root.join("first"), root.join("second"));
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("tool.CMD"), "").unwrap();
+        fs::write(second.join("tool.EXE"), "").unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        let find = |name: &str| find_program(name.as_ref(), &path, ".COM;.EXE;.BAT;.CMD".as_ref());
+        // The first folder wins, whatever the extension's rank.
+        assert_eq!(find("tool"), Some(first.join("tool.CMD")));
+        assert_eq!(find("missing"), None);
+        // A name with an extension or a folder is left as it is.
+        assert_eq!(find("tool.CMD"), None);
+        assert_eq!(find("first/tool"), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     fn kept(path: &Path) -> Result<(), String> {
         let dir = path.parent().unwrap().join(".trashed");

@@ -34,7 +34,7 @@ pub fn changes(head: &str, now: &str) -> Vec<(Range<usize>, Change)> {
 /// new to it.
 pub fn committed(path: &Path) -> Option<String> {
     let (dir, name) = (path.parent()?, path.file_name()?);
-    let out = std::process::Command::new("git")
+    let out = quill_files::command("git")
         .arg("-C")
         .arg(dir)
         .arg("show")
