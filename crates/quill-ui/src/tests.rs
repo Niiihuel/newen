@@ -7775,3 +7775,37 @@ fn a_diff_opens_its_files_and_a_large_one_starts_folded() {
     click(&store, &mut ui, &format!("{}src/f2.txt", view::DIFF_FOLD));
     assert!(drawn(&ui, "line-2"));
 }
+
+#[test]
+fn each_conversation_keeps_its_own_draft() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "claude".into(),
+        cwd: "/work".into(),
+    });
+    let click = |store: &Store, ui: &mut Ui, id: &str| {
+        update(store, ui, &UiAction::Clicked { id: id.into() });
+    };
+    update(
+        &store,
+        &mut ui,
+        &UiAction::InputChanged {
+            id: view::COMPOSER.into(),
+            value: "Half a thought".into(),
+        },
+    );
+    ui.images.push("/tmp/shot.png".into());
+    click(&store, &mut ui, "session:2");
+    assert_eq!(ui.prompt, "");
+    assert!(ui.images.is_empty());
+    assert!(std::mem::take(&mut ui.draft_switched));
+    // The new conversation has its own, too.
+    click(&store, &mut ui, view::NEW_SESSION);
+    ui.prompt = "A new task".into();
+    click(&store, &mut ui, "session:1");
+    assert_eq!(ui.prompt, "Half a thought");
+    assert_eq!(ui.images, [PathBuf::from("/tmp/shot.png")]);
+    click(&store, &mut ui, view::NEW_SESSION);
+    assert_eq!(ui.prompt, "A new task");
+}

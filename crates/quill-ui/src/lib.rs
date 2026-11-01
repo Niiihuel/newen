@@ -1293,6 +1293,11 @@ pub struct Ui {
     /// Words the host puts back in the message box: a message rewound or forked from, or a
     /// slash command picked.
     pub restore_prompt: Option<String>,
+    /// What each conversation's composer held when another was shown (`None`: the new,
+    /// not yet started one), kept for the app run: its text, mentioned sessions and images.
+    pub drafts: std::collections::HashMap<Option<SessionId>, Waiting>,
+    /// The shown conversation changed and `prompt` is its draft: the host puts it in the box.
+    pub draft_switched: bool,
     /// A menu the "/" palette opened (`/usage`): when it closes, by a choice or Escape, the
     /// prompt loses its `/` token and the composer takes the keys again.
     pub menu_from_palette: bool,
@@ -2016,6 +2021,8 @@ impl Ui {
             diff_menu: None,
             waiting_fork: false,
             restore_prompt: None,
+            drafts: Default::default(),
+            draft_switched: false,
             menu_from_palette: false,
             slash_selected: 0,
             slash_dismissed: None,
@@ -2441,6 +2448,26 @@ impl Ui {
         }
     }
 
+    /// The shown conversation changed from `from`: its composer's draft is kept for it, and
+    /// the one now shown gets its own back. A session made from the new conversation's or a
+    /// fork's message is not a switch: what the box holds goes on with it.
+    fn switch_draft(&mut self, from: Option<SessionId>) {
+        let draft = (
+            std::mem::take(&mut self.prompt),
+            std::mem::take(&mut self.mentioned_sessions),
+            std::mem::take(&mut self.images),
+        );
+        if !draft.0.is_empty() || !draft.2.is_empty() {
+            self.drafts.insert(from, draft);
+        }
+        (self.prompt, self.mentioned_sessions, self.images) =
+            self.drafts.remove(&self.selected).unwrap_or_default();
+        self.slash_dismissed = None;
+        self.mention_dismissed = None;
+        self.image_notice = None;
+        self.draft_switched = true;
+    }
+
     fn forget_pane(&mut self, pane: Pane) {
         match pane {
             Pane::Diff => self.diff = None,
@@ -2606,10 +2633,12 @@ impl Ui {
         if let Event::Deleted { session } = event {
             if self.selected == Some(*session) {
                 self.selected = None;
+                self.switch_draft(Some(*session));
                 self.title_edit = None;
                 self.panes.clear();
                 self.expanded_pane = None;
             }
+            self.drafts.remove(&Some(*session));
         }
         if let Event::SessionCreated { session, .. } = event {
             // A side chat opens in its pane; the session in view stays.
@@ -2856,6 +2885,7 @@ pub fn settled(store: &Store, ui: &mut Ui) -> Vec<Intent> {
 }
 
 pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent> {
+    let shown = ui.selected;
     let mut intents = match files::action(store, ui, action) {
         Some(intents) => intents,
         None => update_action(store, ui, action),
@@ -2866,6 +2896,9 @@ pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent
         ui.slash_dismissed = None;
         ui.restore_prompt
             .get_or_insert_with(|| slash::without_token(&ui.prompt));
+    }
+    if ui.selected != shown {
+        ui.switch_draft(shown);
     }
     intents
 }
