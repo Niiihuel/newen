@@ -616,7 +616,9 @@ impl Router {
     fn account_command(&self, agent: &str, args: &[String]) -> Option<Command> {
         let adapter = adapter(agent)?;
         let plan = adapter.launch(&SessionSpec::default());
-        let mut command = Command::new(self.program(agent).unwrap_or(plan.program));
+        let mut command = Command::from(quill_files::command(
+            self.program(agent).unwrap_or(plan.program),
+        ));
         let home = quill_files::home_dir();
         command
             .args(args)
@@ -921,7 +923,7 @@ impl Router {
             .cloned()
             .collect();
         let spec = SessionSpec {
-            cwd: std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from),
+            cwd: quill_files::home_dir().unwrap_or_else(std::env::temp_dir),
             options: actor.spec.options.clone(),
             ..Default::default()
         };
@@ -3216,7 +3218,9 @@ impl Actor {
             return Ok(());
         }
         let plan = self.adapter.launch(&self.spec);
-        let mut command = Command::new(self.program.as_deref().unwrap_or(&plan.program));
+        let mut command = Command::from(quill_files::command(
+            self.program.as_deref().unwrap_or(&plan.program),
+        ));
         command
             .args(&plan.args)
             .current_dir(&plan.cwd)
@@ -3563,11 +3567,11 @@ fn write_settings(
 /// Windows has none without FFI (`SetThreadExecutionState`), so it stays degraded.
 fn awake_command() -> Option<Command> {
     if cfg!(target_os = "macos") {
-        let mut command = Command::new("caffeinate");
+        let mut command = Command::from(quill_files::command("caffeinate"));
         command.args(["-i", "-w", &std::process::id().to_string()]);
         Some(command)
     } else if cfg!(target_os = "linux") {
-        let mut command = Command::new("systemd-inhibit");
+        let mut command = Command::from(quill_files::command("systemd-inhibit"));
         command.args([
             "--what=sleep",
             "--who=quill",
@@ -3584,12 +3588,13 @@ fn awake_command() -> Option<Command> {
 /// Start quill when the person logs in, or no longer: the desktop's autostart entry
 /// (freedesktop Desktop Application Autostart on Linux), a LaunchAgent on macOS, the user's
 /// `Run` key on Windows; written for this program or removed.
+#[cfg_attr(windows, allow(clippy::needless_return))]
 fn start_at_login(on: bool) -> Result<(), String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let mut reg = Command::new("reg");
+        let mut reg = quill_files::command("reg");
         if on {
             let value = format!("\"{}\"", program.display());
             reg.args([
@@ -3646,7 +3651,7 @@ fn start_at_login(on: bool) -> Result<(), String> {
 /// (none installed) just shows nothing.
 fn notify(title: &str, body: &str, sound: bool) {
     let spawn = |(program, args, env): (&str, Vec<String>, Vec<(&str, String)>)| {
-        Command::new(program)
+        Command::from(quill_files::command(program))
             .args(args)
             .envs(env)
             .stdin(Stdio::null())
@@ -3771,7 +3776,7 @@ async fn run_program(
     run: &quill_agent::ProgramRun,
     cwd: &std::path::Path,
 ) -> Result<String, String> {
-    let mut child = Command::new(program)
+    let mut child = Command::from(quill_files::command(program))
         .args(&run.args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -3829,7 +3834,7 @@ async fn skills_of(
         cwd: cwd.to_owned(),
         ..Default::default()
     });
-    let mut command = Command::new(program);
+    let mut command = Command::from(quill_files::command(program));
     command
         .args(&plan.args)
         .current_dir(&plan.cwd)
@@ -3980,7 +3985,7 @@ async fn read_aloud(
         session,
         reading: true,
     });
-    let voice = Command::new("spd-say")
+    let voice = Command::from(quill_files::command("spd-say"))
         .args(["-w", "-m", "none", "--", &spoken])
         .kill_on_drop(true)
         .spawn();
@@ -3990,7 +3995,7 @@ async fn read_aloud(
             _ = stop => {
                 // The server goes on with what it was given unless told to cancel it.
                 let _ = voice.kill().await;
-                let _ = Command::new("spd-say").arg("-C").status().await;
+                let _ = Command::from(quill_files::command("spd-say")).arg("-C").status().await;
             }
         }
     }

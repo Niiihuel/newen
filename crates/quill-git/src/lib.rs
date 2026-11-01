@@ -9,7 +9,6 @@
 use quill_model::{ChangeKind, FileEffect};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// A patch longer than this is cut, so one generated file cannot flood the transcript.
 const PATCH_LIMIT: usize = 200_000;
@@ -33,7 +32,7 @@ impl Shadow {
         if !shadow.git_dir.join("HEAD").exists() {
             std::fs::create_dir_all(&shadow.git_dir)?;
             // `init --bare` takes no work tree; the shadow is told its folder on each command.
-            let status = Command::new("git")
+            let status = quill_files::command("git")
                 .args(["init", "-q", "--bare"])
                 .arg(&shadow.git_dir)
                 .status()?;
@@ -47,7 +46,7 @@ impl Shadow {
     }
 
     fn git(&self, args: &[&str]) -> io::Result<String> {
-        let output = Command::new("git")
+        let output = quill_files::command("git")
             .env("GIT_DIR", &self.git_dir)
             .env("GIT_WORK_TREE", &self.work)
             .env("GIT_INDEX_FILE", self.git_dir.join("index"))
@@ -172,7 +171,7 @@ fn cut(patch: &mut String) {
 /// of its folders `dir` is.
 pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
     let run = |dir: &Path, args: &[&str]| -> io::Result<String> {
-        let output = Command::new("git")
+        let output = quill_files::command("git")
             .args(["-c", "core.quotePath=false"])
             .args(args)
             .current_dir(dir)
@@ -308,7 +307,7 @@ fn counts(patch: &str) -> (u32, u32) {
 /// `origin` names as its own.
 pub fn repo(dir: &Path) -> Option<quill_model::Repo> {
     let git = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = quill_files::command("git")
             .args(args)
             .current_dir(dir)
             .output()
@@ -326,7 +325,7 @@ pub fn repo(dir: &Path) -> Option<quill_model::Repo> {
 
 /// The branch checked out in `dir`'s own repository, if it is one.
 pub fn branch(dir: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = quill_files::command("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(dir)
         .output()
@@ -351,6 +350,7 @@ pub fn common_dir(dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn folder(name: &str) -> (PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("quill-git-{}-{name}", std::process::id()));

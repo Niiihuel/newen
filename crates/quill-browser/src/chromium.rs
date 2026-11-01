@@ -7,7 +7,9 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
 /// The names Chromium goes by on Linux, most specific first.
 const NAMES: [&str; 5] = [
@@ -55,6 +57,7 @@ pub struct Process {
 /// The switches Playwright launches Chromium with to keep it quiet and steady, less the
 /// automation ones (chromiumSwitches.ts): no first-run or default-browser prompts, no
 /// background traffic to Google, no throttling of pages it does not know are on screen.
+#[cfg(unix)]
 const QUIET: [&str; 12] = [
     "--no-first-run",
     "--no-default-browser-check",

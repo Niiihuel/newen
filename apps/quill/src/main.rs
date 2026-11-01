@@ -1,6 +1,10 @@
 //! quill's window: limn paints quill-ui's view; quill-engine runs the agents.
 //! `quill [folder]` opens new sessions in `folder` (the current directory without one).
 
+// A window, not a console program: Windows opens no console beside it (`--install` prints
+// nothing there).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 // The page presented beneath the window is Wayland's (dmabufs, a subsurface); elsewhere egui
 // draws it and this stand-in never shows.
 #[cfg(target_os = "linux")]
@@ -99,6 +103,8 @@ struct App {
     frames: quill_engine::Frames,
     /// The page presented beneath the window, where the compositor allows (direct.rs).
     direct: Option<Arc<direct::Direct>>,
+    /// Chromium in quill's process, whose loop the window pumps on macOS.
+    native: Option<quill_engine::Native>,
     /// The texture each surface shows from the GPU, as registered with egui's renderer.
     textures: HashMap<String, (egui::TextureId, eframe::wgpu::Texture)>,
     /// The page's share of the window's input.
@@ -647,6 +653,9 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, host: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if let Some(native) = &self.native {
+            native.pump();
+        }
         self.apply_fonts(&ctx);
         if !self.fonts_attached {
             limn_egui::attach_fonts(&mut self.tree, &ctx);
@@ -1456,7 +1465,7 @@ impl eframe::App for App {
 
 /// The local time zone's offset from UTC in seconds, as `date +%z` says it (`-0300`).
 fn utc_offset() -> i64 {
-    let out = std::process::Command::new("date").arg("+%z").output().ok();
+    let out = quill_files::command("date").arg("+%z").output().ok();
     let zone = out
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
@@ -1477,7 +1486,7 @@ fn first_name() -> Option<String> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .ok()?;
-    let full = std::process::Command::new("getent")
+    let full = quill_files::command("getent")
         .args(["passwd", &user])
         .output()
         .ok()
@@ -1525,7 +1534,7 @@ fn install_self() -> Result<String, String> {
 /// Starts the installed program with this one's arguments. It waits for this process to go
 /// (`wait_for_restarter`): the link socket is this window's until then.
 fn restart(program: &std::path::Path) -> std::io::Result<()> {
-    std::process::Command::new(program)
+    quill_files::command(program)
         .args(std::env::args_os().skip(1))
         .env("QUILL_RESTART_AFTER", std::process::id().to_string())
         .spawn()
@@ -1556,10 +1565,10 @@ fn wait_for_restarter() {
 }
 
 fn open_url(url: &str) -> bool {
-    use std::io::{BufRead, Write};
     // The bridge to quill's own browser is a Unix socket; elsewhere the system opens it.
     #[cfg(unix)]
     let handed = (|| -> Option<bool> {
+        use std::io::{BufRead, Write};
         let socket = std::env::var_os("QUILL_BROWSER_BRIDGE")?;
         let key = std::env::var("QUILL_BROWSER_KEY").ok()?;
         let mut stream = std::os::unix::net::UnixStream::connect(socket).ok()?;
@@ -1606,7 +1615,7 @@ fn open_in_editor(
             .map(|exec| editors::command(exec, &url))
             .filter(|c| !c.is_empty());
         let opened = match command {
-            Some(command) => std::process::Command::new(&command[0])
+            Some(command) => quill_files::command(&command[0])
                 .args(&command[1..])
                 .spawn(),
             None => quill_files::open_in_system(url),
@@ -1631,7 +1640,7 @@ fn open_in_editor(
         .and_then(|exe| Some(exe.parent()?.join("quill-ide")))
         .filter(|p| p.is_file())
         .unwrap_or_else(|| "quill-ide".into());
-    let mut command = std::process::Command::new(program);
+    let mut command = quill_files::command(program);
     command.arg(root);
     if let Some(path) = path {
         command.arg(match line {
@@ -1649,19 +1658,16 @@ fn open_in_editor(
 fn show_in_file_manager(folder: &std::path::Path) {
     // Explorer and Finder select the item themselves (explorer exits 1 even then).
     if cfg!(windows) {
-        let _ = std::process::Command::new("explorer")
+        let _ = quill_files::command("explorer")
             .arg(format!("/select,{}", folder.display()))
             .spawn();
         return;
     }
     if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("open")
-            .arg("-R")
-            .arg(folder)
-            .spawn();
+        let _ = quill_files::command("open").arg("-R").arg(folder).spawn();
         return;
     }
-    let shown = std::process::Command::new("dbus-send")
+    let shown = quill_files::command("dbus-send")
         .args([
             "--session",
             "--dest=org.freedesktop.FileManager1",
@@ -1743,8 +1749,8 @@ fn main() -> eframe::Result {
             .with_icon(window_icon(false))
             .with_inner_size([1408.0, 844.0])
             .with_min_inner_size([720.0, 480.0])
-            // Where the page is presented beneath it, the window is see-through.
-            .with_transparent(native),
+            // Where the page is presented beneath it (Wayland), the window is see-through.
+            .with_transparent(native && cfg!(target_os = "linux")),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -1783,6 +1789,10 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .map(|render| (render.device.clone(), render.queue.clone()));
             let native = native.then(|| start_native(&frames, gpu)).flatten();
+            if let Some(native) = &native {
+                let ctx = creation.egui_ctx.clone();
+                native.pump_with(Arc::new(move |delay| ctx.request_repaint_after(delay)));
+            }
             *keep.lock().unwrap() = native.clone();
             let direct = native
                 .as_ref()
@@ -1883,6 +1893,7 @@ fn main() -> eframe::Result {
                 frames,
                 textures: HashMap::new(),
                 direct,
+                native: native.clone(),
                 page: page::Page::default(),
                 browser_shown: None,
                 address: None,
@@ -1974,7 +1985,9 @@ fn native_browser(settings: &quill_model::Settings) -> bool {
     match std::env::var("QUILL_BROWSER").as_deref() {
         Ok("native") => true,
         Ok("headless") => false,
-        _ => settings.browser_native,
+        // Windows has no headless Chromium to drive (chromium.rs) and both it and macOS ship
+        // CEF in the bundle: there it is the browser.
+        _ => settings.browser_native || !cfg!(target_os = "linux"),
     }
 }
 

@@ -1,11 +1,8 @@
-#[cfg(unix)]
-use std::io::Write as _;
-
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 
 use super::*;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::install::Install;
 use crate::serve::{serve, Server};
 
@@ -100,7 +97,7 @@ fn keys_are_base64_and_a_weak_one_is_refused() {
 
 #[test]
 fn a_newer_release_is_offered_mandatory_only_below_its_minimum() {
-    let linux = artifact("https://example.org/quill-x86_64-linux.gz", b"quill");
+    let linux = artifact("https://example.org/quill-x86_64-linux.tar.gz", b"quill");
     let release = manifest("1.2.0", Some("1.1.0"), &[("linux-x86_64", linux.clone())]);
     let offered = |installed: &str| offer(release.clone(), &version(installed), "linux-x86_64");
     assert_eq!(offered("1.2.0"), None);
@@ -125,7 +122,7 @@ fn a_newer_release_is_offered_mandatory_only_below_its_minimum() {
     // An artifact that could not be trusted to install counts as none.
     for bad in [
         Artifact {
-            url: "http://example.org/quill.gz".into(),
+            url: "http://example.org/quill.tar.gz".into(),
             ..linux.clone()
         },
         Artifact {
@@ -235,7 +232,7 @@ fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_th
     let built = program(50_000);
     let server = serve(0).unwrap();
     let linux = artifact(
-        "https://github.com/Niiihuel/quill/releases/download/v2.0.0/quill-x86_64-linux.gz",
+        "https://github.com/Niiihuel/quill/releases/download/v2.0.0/quill-x86_64-linux.tar.gz",
         &built,
     );
     let body =
@@ -247,7 +244,7 @@ fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_th
         &[
             (MANIFEST, body.clone()),
             (SIGNATURE, format!("{signature}\n").into_bytes()),
-            ("quill-x86_64-linux.gz", built.clone()),
+            ("quill-x86_64-linux.tar.gz", built.clone()),
         ],
     );
     let agent = agent();
@@ -389,52 +386,126 @@ fn a_server_without_ranges_sends_it_again_from_the_start() {
     assert_eq!(std::fs::read(path).unwrap(), body);
 }
 
+#[test]
+fn a_program_is_known_by_its_first_bytes_and_a_bundle_by_its_path() {
+    use crate::install::{bundle_root, starts_native};
+    use std::path::Path;
+
+    assert!(starts_native("linux", b"\x7fELF\x02"));
+    assert!(starts_native("windows", b"MZ\x90\x00"));
+    assert!(starts_native("macos", &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]));
+    assert!(starts_native("macos", &[0xca, 0xfe, 0xba, 0xbe]));
+    // Each system refuses the others' programs, and an archive.
+    assert!(!starts_native("linux", b"MZ\x90\x00"));
+    assert!(!starts_native("windows", b"\x7fELF"));
+    assert!(!starts_native("macos", b"\x7fELF"));
+    assert!(!starts_native("linux", b"quill\0\0\0"));
+    assert!(!starts_native("linux", b""));
+
+    let program = Path::new("/Users/ana/Applications/quill.app/Contents/MacOS/quill");
+    assert_eq!(
+        bundle_root(program),
+        Some(Path::new("/Users/ana/Applications"))
+    );
+    assert_eq!(
+        bundle_root(Path::new("/Applications/quill.app/Contents/MacOS/quill")),
+        Some(Path::new("/Applications"))
+    );
+    // Not in a bundle, or in one of another name.
+    assert_eq!(
+        bundle_root(Path::new("/src/quill/target/debug/quill")),
+        None
+    );
+    assert_eq!(
+        bundle_root(Path::new("/Applications/Other.app/Contents/MacOS/quill")),
+        None
+    );
+    assert_eq!(bundle_root(Path::new("quill")), None);
+}
+
 /// A tiny "program": the ELF magic and a marker.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn elf(marker: &str) -> Vec<u8> {
     [b"\x7fELF".as_slice(), marker.as_bytes()].concat()
 }
 
-#[cfg(unix)]
-fn gzip(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(bytes).unwrap();
-    encoder.finish().unwrap()
+/// A bundle as a release holds it, in `dir`: `quill` (an executable starting with `program`),
+/// CEF's library and a locale, each saying `marker`.
+#[cfg(target_os = "linux")]
+fn bundle(dir: &std::path::Path, program: &[u8], marker: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(dir.join("locales")).unwrap();
+    std::fs::write(dir.join("quill"), program).unwrap();
+    std::fs::set_permissions(dir.join("quill"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join("libcef.so"), format!("cef {marker}")).unwrap();
+    std::fs::write(dir.join("locales/en-US.pak"), format!("en-US {marker}")).unwrap();
 }
 
-#[cfg(unix)]
+/// The Linux artifact of a bundle in `dir`: a gzipped tar, flat at its root.
+#[cfg(target_os = "linux")]
+fn tar_gz(dir: &std::path::Path, out: &std::path::Path) -> Vec<u8> {
+    let status = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(out)
+        .arg("-C")
+        .arg(dir)
+        .args(["quill", "libcef.so", "locales"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::read(out).unwrap()
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn an_update_replaces_the_installation_whole_or_not_at_all() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().unwrap();
     let install = Install::at(root.path().join("app"));
-    let source = root.path().join("quill-built");
-    std::fs::write(&source, elf("1.0.0")).unwrap();
-    // `quill --install`: this very program becomes the first version.
-    let program = install.adopt(&source, &version("1.0.0")).unwrap();
+    let built = root.path().join("built");
+    bundle(&built, &elf("1.0.0"), "1.0.0");
+    // A file of the folder that is not the bundle's own, and a folder that is not `locales`.
+    std::fs::create_dir(built.join("deps")).unwrap();
+    // `quill --install`: this very program, and CEF's files beside it, become the first version.
+    let program = install
+        .adopt(&built.join("quill"), &version("1.0.0"))
+        .unwrap();
     assert_eq!(program, install.root().join("current/quill"));
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
+    let current = install.root().join("current");
+    let read = |name: &str| std::fs::read_to_string(current.join(name)).unwrap();
+    assert_eq!(read("libcef.so"), "cef 1.0.0");
+    assert_eq!(read("locales/en-US.pak"), "en-US 1.0.0");
+    assert!(!current.join("deps").exists());
     assert_eq!(install.current().as_deref(), Some("1.0.0"));
     let mode = std::fs::metadata(&program).unwrap().permissions().mode();
     assert_eq!(mode & 0o111, 0o111, "executable");
     let running = std::fs::canonicalize(&program).unwrap();
     assert!(install.runs(&running));
-    assert!(!install.runs(&source));
+    assert!(!install.runs(&built.join("quill")));
+    // The installed program asked again: nothing to do.
+    assert_eq!(install.adopt(&running, &version("1.0.0")).unwrap(), program);
 
-    let write = |name: &str, bytes: &[u8]| {
-        let path = root.path().join(name);
-        std::fs::write(&path, bytes).unwrap();
-        path
+    let artifact = |name: &str, program: &[u8], marker: &str| {
+        let dir = root.path().join(name);
+        bundle(&dir, program, marker);
+        let out = root.path().join(format!("{name}.tar.gz"));
+        tar_gz(&dir, &out);
+        out
     };
-    // A release that is not a Linux program changes nothing.
-    let wrong = write("wrong.gz", &gzip(b"MZ windows"));
+    // A release whose program is not a Linux program changes nothing.
+    let wrong = artifact("wrong", b"MZ windows", "1.1.0");
     assert!(install.apply(&wrong, &version("1.1.0")).is_err());
     // Nor does a damaged archive.
-    let damaged = write("damaged.gz", &gzip(&elf("1.1.0"))[..20]);
+    let good = artifact("good", &elf("1.1.0"), "1.1.0");
+    let damaged = root.path().join("damaged.tar.gz");
+    std::fs::write(&damaged, &std::fs::read(&good).unwrap()[..40]).unwrap();
     assert!(install.apply(&damaged, &version("1.1.0")).is_err());
     assert_eq!(install.current().as_deref(), Some("1.0.0"));
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
+    assert_eq!(read("libcef.so"), "cef 1.0.0");
     let names = |install: &Install| {
         let mut names: Vec<String> = std::fs::read_dir(install.root().join("versions"))
             .unwrap()
@@ -445,12 +516,15 @@ fn an_update_replaces_the_installation_whole_or_not_at_all() {
     };
     assert_eq!(names(&install), ["1.0.0"], "no half-written version left");
 
-    let newer = write("newer.gz", &gzip(&elf("1.1.0")));
-    assert_eq!(install.apply(&newer, &version("1.1.0")).unwrap(), program);
+    assert_eq!(install.apply(&good, &version("1.1.0")).unwrap(), program);
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.1.0"));
+    assert_eq!(read("libcef.so"), "cef 1.1.0");
+    assert_eq!(read("locales/en-US.pak"), "en-US 1.1.0");
+    let mode = std::fs::metadata(&program).unwrap().permissions().mode();
+    assert_eq!(mode & 0o111, 0o111, "the archive's modes are kept");
     // The one running before stays, for whoever still runs it.
     assert_eq!(std::fs::read(&running).unwrap(), elf("1.0.0"));
-    let newest = write("newest.gz", &gzip(&elf("1.2.0")));
+    let newest = artifact("newest", &elf("1.2.0"), "1.2.0");
     install.apply(&newest, &version("1.2.0")).unwrap();
     assert_eq!(names(&install), ["1.1.0", "1.2.0"]);
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.2.0"));
@@ -460,14 +534,42 @@ fn an_update_replaces_the_installation_whole_or_not_at_all() {
     assert_eq!(install.current().as_deref(), Some("1.2.0"));
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_built_alone_is_installed_alone() {
+    let root = tempfile::tempdir().unwrap();
+    let install = Install::at(root.path().join("app"));
+    let built = root.path().join("target/release");
+    std::fs::create_dir_all(&built).unwrap();
+    std::fs::write(built.join("quill"), elf("1.0.0")).unwrap();
+    std::fs::write(built.join("quill.d"), "not CEF's").unwrap();
+    let program = install
+        .adopt(&built.join("quill"), &version("1.0.0"))
+        .unwrap();
+    assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
+    let names: Vec<_> = std::fs::read_dir(install.root().join("current"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["quill"]);
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     let signer = key();
-    let built = gzip(&elf("2.0.0"));
+    let folder = tempfile::tempdir().unwrap();
+    bundle(&folder.path().join("bundle"), &elf("2.0.0"), "2.0.0");
+    let built = tar_gz(
+        &folder.path().join("bundle"),
+        &folder.path().join("quill-x86_64-linux.tar.gz"),
+    );
     let server = serve(0).unwrap();
-    server.put("/quill-x86_64-linux.gz", built.clone());
-    let linux = artifact(&format!("{}/quill-x86_64-linux.gz", server.base()), &built);
+    server.put("/quill-x86_64-linux.tar.gz", built.clone());
+    let linux = artifact(
+        &format!("{}/quill-x86_64-linux.tar.gz", server.base()),
+        &built,
+    );
     publish(
         &server,
         &signer,
@@ -492,5 +594,9 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     )
     .unwrap();
     let program = install.apply(&file, &offered.version).unwrap();
-    assert_eq!(std::fs::read(program).unwrap(), elf("2.0.0"));
+    assert_eq!(std::fs::read(&program).unwrap(), elf("2.0.0"));
+    assert_eq!(
+        std::fs::read_to_string(program.with_file_name("libcef.so")).unwrap(),
+        "cef 2.0.0"
+    );
 }

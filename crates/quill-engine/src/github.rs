@@ -70,7 +70,7 @@ impl Ran {
 }
 
 fn gh(args: &[&str]) -> Command {
-    let mut command = Command::new("gh");
+    let mut command = Command::from(quill_files::command("gh"));
     command
         .args(args)
         .stdin(Stdio::null())
