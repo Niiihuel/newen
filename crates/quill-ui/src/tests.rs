@@ -8223,3 +8223,168 @@ fn a_running_helper_shimmers_in_its_open_group() {
     }
     assert!(inks.len() > 1, "{drawn:?}");
 }
+
+const LONG_TITLE: &str =
+    "hola como estas, implement the release notes and every change the release needs";
+
+/// Session 1 (Claude) waits for session 2 (Codex), which works on a long-titled task.
+fn waiting_store() -> (Store, Ui) {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "codex".into(),
+        cwd: "/work".into(),
+    });
+    store.apply(Event::Queued {
+        session: 2,
+        request: "q2".into(),
+        text: LONG_TITLE.into(),
+        at: None,
+        images: vec![],
+    });
+    store.apply(Event::Status {
+        session: 2,
+        status: SessionStatus::Running,
+    });
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    store.apply(Event::Waiting {
+        session: 1,
+        wait: quill_model::Wait {
+            on: 2,
+            title: "hola".into(),
+            then: "Cut version 0.1.0".into(),
+            at: 0,
+        },
+    });
+    ui.agents = vec![quill_model::AgentInfo {
+        id: "codex".into(),
+        name: "Codex".into(),
+        tested: vec![],
+        options: vec![],
+        icon: None,
+        sign_in_methods: vec![],
+        sign_in_code: false,
+        modes: vec![],
+        default_mode: "auto".into(),
+    }];
+    settle(&store, &mut ui);
+    (store, ui)
+}
+
+/// Under the turns, "Waiting for «…» · Codex" with the agent's name from its list: it sweeps a
+/// highlight while the other session works, and in a narrow column fades out before Cancel.
+#[test]
+fn a_wait_shimmers_under_the_turns_and_fades_before_its_cancel() {
+    let (store, ui) = waiting_store();
+    let words = "Waiting for \u{ab}hola como estas";
+    for width in [648.0, 1408.0] {
+        let window = limn::Size::new(width, 844.0);
+        let mut tree = UiTree::new(view(&store, &ui, window));
+        let start = std::time::Instant::now();
+        tree.layout_at(window, start);
+        let frame = tree.layout_at(window, start + std::time::Duration::from_millis(500));
+        let cancel = region(&frame, "wait-cancel:1:2").expect("its Cancel");
+        let bands: Vec<(f32, f32, limn::Color)> = (frame.commands.iter())
+            .filter_map(|command| match command {
+                limn::DrawCommand::Text {
+                    text,
+                    color,
+                    position,
+                    ..
+                } if text.starts_with(words) => Some((position.x, position.y, *color)),
+                _ => None,
+            })
+            .collect();
+        assert!(!bands.is_empty(), "{width}: no wait row");
+        let mut inks = vec![];
+        for band in &bands {
+            if !inks.contains(&band.2) {
+                inks.push(band.2);
+            }
+        }
+        assert!(inks.len() > 1, "{width}: it shimmers");
+        let spans: Vec<_> = (text_spans(&frame).into_iter())
+            .filter(|s| s.0.starts_with(words))
+            .collect();
+        assert!(spans.iter().all(|s| s.3 <= cancel.x), "{width}: {spans:?}");
+        if width == 1408.0 {
+            assert!(spans.iter().any(|s| s.0.ends_with("\u{bb} \u{b7} Codex")));
+        }
+    }
+}
+
+/// Cancel asks the engine to end the wait; while the other session asks the person, the row
+/// says so; once the wait ends the row goes.
+#[test]
+fn a_wait_s_cancel_sends_its_intent_and_the_row_follows_the_other_session() {
+    let (mut store, mut ui) = waiting_store();
+    assert_eq!(
+        click(&store, &mut ui, "wait-cancel:1:2"),
+        [Intent::CancelWait { session: 1, on: 2 }]
+    );
+    store.apply(Event::Status {
+        session: 2,
+        status: SessionStatus::Awaiting,
+    });
+    assert!(drawn(&store, &ui, "\u{bb} is asking you something"));
+    store.apply(Event::WaitEnded {
+        session: 1,
+        on: 2,
+        outcome: quill_model::WaitOutcome::Canceled,
+    });
+    assert!(store.session(1).unwrap().waits.is_empty());
+    assert!(!drawn(&store, &ui, "is asking you something"));
+    // A wait that ended with the other's task done is heard as such.
+    store.apply(Event::Reported {
+        session: 1,
+        request: "w1".into(),
+        reports: vec![quill_model::Report {
+            from: 2,
+            title: "hola".into(),
+            text: "Merged.".into(),
+            waited: Some((quill_model::WaitOutcome::Finished, "Cut 0.1.0".into())),
+        }],
+    });
+    assert!(drawn(&store, &ui, "Waited for"));
+}
+
+/// In the sidebar a waiting session nests under the one it waits for, on the tree's guide, and
+/// ends in an hourglass; once the wait ends it is a row of its own again.
+#[test]
+fn a_waiting_session_nests_under_the_one_it_waits_for_with_an_hourglass() {
+    let (mut store, ui) = waiting_store();
+    let rows = |store: &Store| {
+        let window = limn::Size::new(1408.0, 844.0);
+        let frame = UiTree::new(view(store, &ui, window)).layout(window);
+        let rows: Vec<(String, limn::Rect)> = (frame.regions.iter())
+            .filter(|r| r.id.starts_with("session:"))
+            .map(|r| (r.id.clone(), r.rect))
+            .collect();
+        let hourglass = (frame.commands.iter()).find_map(|command| match command {
+            limn::DrawCommand::Icon {
+                icon: limn::Icon::Custom(svg),
+                rect,
+                ..
+            } if *svg == crate::icons::HOURGLASS => Some(*rect),
+            _ => None,
+        });
+        (rows, hourglass)
+    };
+    let (listed, hourglass) = rows(&store);
+    let ids: Vec<&str> = listed.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(ids, ["session:2", "session:1"]);
+    assert!(listed[1].1.x > listed[0].1.x, "nested");
+    let mark = hourglass.expect("the waiting mark");
+    assert!(mark.y >= listed[1].1.y && mark.y < listed[1].1.y + listed[1].1.height);
+    store.apply(Event::WaitEnded {
+        session: 1,
+        on: 2,
+        outcome: quill_model::WaitOutcome::Finished,
+    });
+    let (listed, hourglass) = rows(&store);
+    assert_eq!(listed[0].1.x, listed[1].1.x);
+    assert!(hourglass.is_none());
+}

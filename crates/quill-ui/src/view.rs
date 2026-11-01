@@ -1938,7 +1938,8 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
                 .filter(|s| {
                     s.pinned == pinned
                         && !s.archived
-                        && (s.parent.and_then(|p| store.session(p))).is_none_or(|p| p.archived)
+                        && (tree_parent(store, s).and_then(|p| store.session(p)))
+                            .is_none_or(|p| p.archived)
                 })
                 .collect(),
             ui,
@@ -2133,10 +2134,30 @@ fn status_group(session: &Session) -> &'static str {
 /// ends here too.
 const TREE_DEPTH: usize = 8;
 
-/// The sessions `parent` started that the sidebar lists, in the order they were made.
+/// The session the sidebar nests `session` under: the one that started it, else the one it
+/// waits for, unless that one is under it already, so the tree has no loop.
+fn tree_parent(store: &Store, session: &Session) -> Option<quill_model::SessionId> {
+    if session.parent.is_some() {
+        return session.parent;
+    }
+    let on = session.waits.first()?.on;
+    let mut at = store.session(on);
+    for _ in 0..TREE_DEPTH {
+        let Some(above) = at else { break };
+        if above.id == session.id {
+            return None;
+        }
+        let next = above.parent.or(above.waits.first().map(|w| w.on));
+        at = next.and_then(|id| store.session(id));
+    }
+    Some(on)
+}
+
+/// The sessions under `parent` in the sidebar, in the order they were made: those it started
+/// and those that wait for it.
 fn started_by(store: &Store, parent: quill_model::SessionId) -> Vec<&Session> {
     (store.sessions.iter())
-        .filter(|s| s.parent == Some(parent) && !s.archived)
+        .filter(|s| tree_parent(store, s) == Some(parent) && !s.archived)
         .collect()
 }
 
@@ -2485,6 +2506,8 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
     let indicator = match session.status {
         SessionStatus::Awaiting => mark(icons::WARNING, look::palette().text),
         SessionStatus::Failed(_) => status_dot(session),
+        // It waits for another session's task to end (`wait_for_session`).
+        _ if !session.waits.is_empty() => mark(icons::HOURGLASS, look::muted()),
         // Grouped by folder Desktop marks no place.
         _ if depth == 0 && !working && ui.group_by != crate::GroupBy::Folder => {
             mark(icons::LAPTOP, look::muted())
@@ -2685,6 +2708,7 @@ fn transcript(
         items.push(task_card(&list, column, palette));
     }
     items.extend(waiting_cards(store, session, ui, column, palette));
+    items.extend(wait_rows(store, session, ui, column, palette));
     if let Some(status) = status_line(session, running.as_ref(), ui, column, palette) {
         items.push(status);
     }
@@ -3185,6 +3209,68 @@ fn waiting_cards(
             .border(look::card_border(), 1.0)
             .radius(12.0)
             .size(Some(width), None)
+        })
+        .collect()
+}
+
+/// What a "Cancel" of a wait reports: the waiting session and the one it waits for follow.
+pub const WAIT_CANCEL: &str = "wait-cancel:";
+
+/// What the session waits for (`wait_for_session`), under its turns until the wait ends: an
+/// hourglass, "Waiting for «title» · Agent", which shimmers while that session works, or that
+/// it asks the person something or stopped before its task was done; and Cancel. One line,
+/// faded at its end where the column is narrow.
+fn wait_rows(
+    store: &Store,
+    session: &Session,
+    ui: &Ui,
+    column: f32,
+    palette: ComponentPalette,
+) -> Vec<Element> {
+    (session.waits.iter())
+        .map(|wait| {
+            let other = store.session(wait.on);
+            let title = other.map_or_else(|| wait.title.clone(), session_title);
+            let agent = other.map(|o| {
+                let info = ui.agents.iter().find(|a| a.id == o.agent);
+                format!(
+                    " \u{b7} {}",
+                    info.map_or(o.agent.as_str(), |a| a.name.as_str())
+                )
+            });
+            let agent = agent.unwrap_or_default();
+            let words = match other.map(|o| &o.status) {
+                Some(SessionStatus::Running | SessionStatus::Starting) => working_words(
+                    &format!("wait-shimmer:{}:{}", session.id, wait.on),
+                    format!("Waiting for \u{ab}{title}\u{bb}{agent}"),
+                ),
+                Some(SessionStatus::Awaiting) => one_line(
+                    format!("\u{ab}{title}\u{bb} is asking you something{agent}"),
+                    look::muted(),
+                ),
+                _ => one_line(
+                    format!("\u{ab}{title}\u{bb} stopped before its task was done{agent}"),
+                    look::muted(),
+                ),
+            };
+            let cancel = keyed_button(
+                &format!("{WAIT_CANCEL}{}:{}", session.id, wait.on),
+                "Cancel",
+                "",
+                false,
+                true,
+                palette,
+            );
+            Element::row(vec![
+                Element::icon(icons::of(icons::HOURGLASS))
+                    .foreground(look::muted())
+                    .size(Some(14.0), Some(14.0))
+                    .centered_y(),
+                words.flex(1.0).centered_y(),
+                cancel.centered_y(),
+            ])
+            .gap(8.0)
+            .size(Some(column), Some(30.0))
         })
         .collect()
 }
@@ -5264,6 +5350,12 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
             "Passing the message to",
             said("session"),
         ),
+        name if name.ends_with("sessions__wait_for_session") => {
+            ("Set a wait", "Setting a wait", String::new())
+        }
+        name if name.ends_with("sessions__list_sessions") => {
+            ("Listed sessions", "Listing sessions", String::new())
+        }
         "AskUserQuestion" => (
             "Asked",
             "Asking",
@@ -9656,21 +9748,30 @@ fn reports_block(
             let key = format!("report:{request}:{at}");
             let view = crate::current_view(session, &ui.settings);
             let open = is_open(view, ui, &key);
+            // A wait that ended says so; one on a session gone names it as it was.
+            let said = match report.waited {
+                Some(_) => "Waited for",
+                None => "Received message from",
+            };
             let lead = if working {
                 Element::shimmer_text(
                     format!("report-shimmer:{request}:{at}"),
-                    "Received message from",
+                    said,
                     look::palette().text,
                 )
                 .foreground(look::muted())
                 .font_family(FontFamily::Sans)
                 .font_size(chat())
             } else {
-                muted("Received message from").font_size(chat())
+                muted(said).font_size(chat())
+            };
+            let from = match store.session(report.from) {
+                Some(_) => session_chip(store, report.from),
+                None => one_line(format!("\u{ab}{}\u{bb}", report.title), look::muted()),
             };
             let line = Element::row(vec![
                 lead.centered_y(),
-                session_chip(store, report.from).shrink_to_fit(),
+                from.shrink_to_fit(),
                 fold(view, key.clone(), caret(open)).centered_y(),
             ])
             .gap(8.0);

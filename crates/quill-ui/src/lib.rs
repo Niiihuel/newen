@@ -1690,6 +1690,15 @@ fn session_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
                 })
                 .unwrap_or_default(),
         );
+    } else if let Some((session, on)) = id
+        .strip_prefix(view::WAIT_CANCEL)
+        .and_then(|rest| rest.split_once(':'))
+    {
+        let ids = (session.parse(), on.parse());
+        return Some(match ids {
+            (Ok(session), Ok(on)) => vec![Intent::CancelWait { session, on }],
+            _ => vec![],
+        });
     } else if let Some(tasks) = id.strip_prefix("proposal-all:") {
         return Some(
             ui.selected
