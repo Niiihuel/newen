@@ -4771,71 +4771,21 @@ fn hsl(hue: u32, saturation: f32, lightness: f32) -> Color {
     Color::rgb(byte(r), byte(g), byte(b))
 }
 
-/// One entry of the task list.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Todo {
-    pub id: String,
-    pub subject: String,
-    /// "pending", "in_progress" or "completed".
-    pub status: String,
-}
+pub use quill_model::Todo;
 
-/// The task list as the task tools left it: `TaskCreate` adds, `TaskUpdate` changes or
-/// deletes by id, `TodoWrite` writes the whole list.
+/// The task list as the task tools left it ([`quill_model::apply_task_tool`]).
 pub fn todos(items: &[Item]) -> Vec<Todo> {
     let mut list: Vec<Todo> = vec![];
     for item in items {
-        let Item::Tool {
+        if let Item::Tool {
             name,
             input,
             result,
             ..
         } = item
-        else {
-            continue;
-        };
-        match name.as_str() {
-            "TaskCreate" => {
-                // The CLI numbers its tasks and says so: "Task #1 created successfully: …".
-                let id = result
-                    .as_ref()
-                    .and_then(|r| r.output.strip_prefix("Task #"))
-                    .and_then(|rest| rest.split(' ').next())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| (list.len() + 1).to_string());
-                list.push(Todo {
-                    id,
-                    subject: input["subject"].as_str().unwrap_or_default().to_owned(),
-                    status: "pending".into(),
-                });
-            }
-            "TaskUpdate" => {
-                let id = input["taskId"].as_str().unwrap_or_default();
-                if input["status"] == "deleted" {
-                    list.retain(|t| t.id != id);
-                } else if let Some(todo) = list.iter_mut().find(|t| t.id == id) {
-                    if let Some(status) = input["status"].as_str() {
-                        todo.status = status.to_owned();
-                    }
-                    if let Some(subject) = input["subject"].as_str() {
-                        todo.subject = subject.to_owned();
-                    }
-                }
-            }
-            "TodoWrite" => {
-                list = input["todos"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .map(|(i, t)| Todo {
-                        id: (i + 1).to_string(),
-                        subject: t["content"].as_str().unwrap_or_default().to_owned(),
-                        status: t["status"].as_str().unwrap_or("pending").to_owned(),
-                    })
-                    .collect();
-            }
-            _ => {}
+        {
+            let output = result.as_ref().map(|r| r.output.as_str());
+            quill_model::apply_task_tool(&mut list, name, input, output);
         }
     }
     list

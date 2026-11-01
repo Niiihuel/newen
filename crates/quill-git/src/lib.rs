@@ -335,6 +335,18 @@ pub fn branch(dir: &Path) -> Option<String> {
     (output.status.success() && !name.is_empty()).then_some(name)
 }
 
+/// The repository `dir` belongs to, the same for each of its worktrees: its common git
+/// folder, absolute.
+pub fn common_dir(dir: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (output.status.success() && !path.is_empty()).then(|| PathBuf::from(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

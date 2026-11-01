@@ -2312,6 +2312,7 @@ fn proposals_share_a_card_that_starts_them_and_reports_read_back() {
             from: 2,
             title: "Task a".into(),
             text: "All done".into(),
+            waited: None,
         }],
     });
     let window = limn::Size::new(1408.0, 844.0);

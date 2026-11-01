@@ -4,11 +4,11 @@
 use std::path::PathBuf;
 
 pub use quill_agent::{
-    AgentCapabilities, AgentEvent, AgentOption, AgentSlashCommand, AuthState, ConfiguredServer,
-    ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds, ExtensionOp, Extensions,
-    FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool, ModeTone, ModeWords,
-    ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion, TaskUsage,
-    ToolContent, Usage, UsageWindow, WebSearchRun, WebSource,
+    apply_task_tool, AgentCapabilities, AgentEvent, AgentOption, AgentSlashCommand, AuthState,
+    ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
+    ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
+    ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
+    TaskUsage, Todo, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
@@ -809,6 +809,11 @@ pub enum Intent {
         session: SessionId,
         text: String,
     },
+    /// Stop `session` waiting for `on` (`wait_for_session`): nothing wakes it then.
+    CancelWait {
+        session: SessionId,
+        on: SessionId,
+    },
     /// The person's answer to a task the session proposed: start it, do it here, or not.
     AnswerProposal {
         session: SessionId,
@@ -1035,6 +1040,35 @@ pub struct Report {
     pub from: SessionId,
     pub title: String,
     pub text: String,
+    /// Sent because a wait on `from` ended (`wait_for_session`): how, and what the waiting
+    /// session said it would do then. `None` for a session it started.
+    #[serde(default)]
+    pub waited: Option<(WaitOutcome, String)>,
+}
+
+/// A session waiting for another's turn to end with its task done (`wait_for_session`), so it
+/// goes on by itself then.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Wait {
+    /// The session waited for.
+    pub on: SessionId,
+    /// Its name when the wait began, for the message that wakes the waiting one.
+    pub title: String,
+    /// What the waiting session's agent said it would do then, in its own words.
+    pub then: String,
+    /// When the wait began, in seconds since 1970.
+    pub at: u64,
+}
+
+/// How a wait ended.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum WaitOutcome {
+    /// The session waited for finished its task.
+    Finished,
+    /// It was deleted or archived before it finished.
+    Gone,
+    /// The person stopped the wait.
+    Canceled,
 }
 
 /// Where a session's agent process is.
@@ -1394,6 +1428,18 @@ pub enum Event {
         request: RequestId,
         reports: Vec<Report>,
     },
+    /// The session waits for another's task to end (`wait_for_session`); a wait on the same
+    /// session replaces the one before.
+    Waiting {
+        session: SessionId,
+        wait: Wait,
+    },
+    /// The session's wait on `on` is over.
+    WaitEnded {
+        session: SessionId,
+        on: SessionId,
+        outcome: WaitOutcome,
+    },
     /// The session's browser changed; never stored.
     Browser {
         session: SessionId,
@@ -1440,6 +1486,8 @@ impl Event {
             | Event::Proposed { session, .. }
             | Event::ProposalAnswered { session, .. }
             | Event::Reported { session, .. }
+            | Event::Waiting { session, .. }
+            | Event::WaitEnded { session, .. }
             | Event::Browser { session, .. } => *session,
             // quill's own, not a session's: no session has id 0.
             Event::Settings { .. }

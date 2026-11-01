@@ -5,7 +5,7 @@
 use quill_agent::{AgentAdapter, AgentCommand, AgentEvent, SessionSpec};
 use quill_model::{
     Event, Intent, Lane, NewSession, ProposalAnswer, ProposalOutcome, QueuedMessage, RequestId,
-    SessionId, SessionStatus,
+    SessionId, SessionStatus, WaitOutcome,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -194,8 +194,14 @@ enum Internal {
     },
     /// A turn began or the session stopped working.
     Busy { session: SessionId, busy: bool },
-    /// A turn ended; `text` is the last thing the agent said in it.
-    TurnEnded { session: SessionId, text: String },
+    /// A turn ended; `text` is the last thing the agent said in it, and `finished` whether
+    /// it ended with its task done: not stopped nor failed, no task left on its list and no
+    /// plan waiting for the person.
+    TurnEnded {
+        session: SessionId,
+        text: String,
+        finished: bool,
+    },
     /// Time to look at the power source again.
     Power,
     /// Time to ask the pull requests whether they were merged.
@@ -344,6 +350,15 @@ struct Router {
     proposals: HashMap<(SessionId, String), quill_model::Proposal>,
     /// What started sessions said, waiting for their parent to be free to hear it.
     reports: HashMap<SessionId, Vec<quill_model::Report>>,
+    /// Each session's name as the sidebar shows it: its title, else its first message.
+    names: Arc<Mutex<HashMap<SessionId, String>>>,
+    /// Sessions waiting on the person within a turn: a question, a permission.
+    awaiting: Arc<Mutex<std::collections::HashSet<SessionId>>>,
+    /// What each session waits for (`wait_for_session`), as stored.
+    waits: HashMap<SessionId, Vec<quill_model::Wait>>,
+    /// Sessions whose last turn ended before their task did: stopped, failed, with tasks
+    /// left or a plan for the person to answer.
+    unfinished: std::collections::HashSet<SessionId>,
     /// Sessions in the middle of a turn.
     busy: std::collections::HashSet<SessionId>,
     /// The built-in browser, shared by every session (each in a context of its own).
@@ -387,11 +402,28 @@ impl Router {
         let store = Arc::new(Mutex::new(open_store(&config, &ui)));
         let agent_ids: Arc<Mutex<HashMap<SessionId, String>>> = Arc::default();
         let modes: Modes = Arc::default();
+        let names: Arc<Mutex<HashMap<SessionId, String>>> = Arc::default();
+        let awaiting: Arc<Mutex<std::collections::HashSet<SessionId>>> = Arc::default();
         let sink: Sink = {
             let (store, ui, agent_ids) = (store.clone(), ui.clone(), agent_ids.clone());
-            let modes = modes.clone();
+            let (modes, names, awaiting) = (modes.clone(), names.clone(), awaiting.clone());
             Arc::new(move |event: Event| {
                 match &event {
+                    Event::Renamed { session, title } => {
+                        drop(names.lock().unwrap().insert(*session, title.clone()))
+                    }
+                    Event::Queued { session, text, .. } => {
+                        let mut names = names.lock().unwrap();
+                        names.entry(*session).or_insert_with(|| first_line(text));
+                    }
+                    Event::Status { session, status } => {
+                        let mut awaiting = awaiting.lock().unwrap();
+                        if *status == SessionStatus::Awaiting {
+                            awaiting.insert(*session);
+                        } else {
+                            awaiting.remove(session);
+                        }
+                    }
                     Event::Agent {
                         session,
                         event: AgentEvent::Session { id },
@@ -526,6 +558,10 @@ impl Router {
             archived: Default::default(),
             proposals: HashMap::new(),
             reports: HashMap::new(),
+            names,
+            awaiting,
+            waits: HashMap::new(),
+            unfinished: Default::default(),
             busy: Default::default(),
             reading: None,
             settings: Default::default(),
@@ -957,6 +993,12 @@ impl Router {
             if let Some(title) = restored.title.clone() {
                 self.titles.insert(session, title);
             }
+            if let Some(name) = restored.title.clone().or(restored.first.clone()) {
+                self.names.lock().unwrap().insert(session, name);
+            }
+            if !restored.waits.is_empty() {
+                self.waits.insert(session, restored.waits.clone());
+            }
             if let Some(url) = restored.pull_request.clone() {
                 self.pull_requests.insert(session, url);
             }
@@ -1024,6 +1066,7 @@ impl Router {
                 }
             }
             actor.before = restored.before;
+            actor.tasks = restored.tasks;
             // What was queued at the last exit comes back held: it goes only when the person sends it.
             actor.held = !restored.queue.is_empty();
             actor.queue = restored.queue;
@@ -1039,6 +1082,14 @@ impl Router {
                 session,
                 status: SessionStatus::Exited,
             });
+        }
+        // A wait on a session no longer kept ends as one on a deleted session does.
+        let gone: Vec<SessionId> = (self.waits.values().flatten())
+            .map(|wait| wait.on)
+            .filter(|on| !self.folders.contains_key(on))
+            .collect();
+        for on in gone {
+            self.wake(on, WaitOutcome::Gone, "It was deleted before it finished.");
         }
     }
 
@@ -1726,6 +1777,18 @@ impl Router {
                 self.answer(session, task, answer).await;
                 return;
             }
+            Intent::CancelWait { session, on } => {
+                let waits = self.waits.get_mut(&session);
+                if let Some(waits) = waits.filter(|w| w.iter().any(|w| w.on == on)) {
+                    waits.retain(|w| w.on != on);
+                    (self.sink)(Event::WaitEnded {
+                        session,
+                        on,
+                        outcome: WaitOutcome::Canceled,
+                    });
+                }
+                return;
+            }
             // Desktop's /btw forks the session as a side child; it is not a session that reports back.
             Intent::SideChat { session, text } => {
                 let Some(new) = self.started.get(&session).cloned() else {
@@ -1755,6 +1818,15 @@ impl Router {
             }
             // The agent is stopped first, so nothing it says lands after its record is gone.
             Intent::Delete { session } => {
+                // Its own waits go with it; those on it end, and their sessions hear so.
+                self.waits.remove(&session);
+                self.wake(
+                    session,
+                    WaitOutcome::Gone,
+                    "It was deleted before it finished.",
+                );
+                self.unfinished.remove(&session);
+                self.names.lock().unwrap().remove(&session);
                 self.servers.forget(session);
                 let browser = self.browser.clone();
                 tokio::spawn(async move { browser.forget(session).await });
@@ -1842,6 +1914,11 @@ impl Router {
     fn archive(&mut self, session: SessionId, archived: bool) {
         (self.sink)(Event::Archived { session, archived });
         if archived {
+            self.wake(
+                session,
+                WaitOutcome::Gone,
+                "It was archived before it finished.",
+            );
             self.archived.insert(session);
             let browser = self.browser.clone();
             tokio::spawn(async move { browser.forget(session).await });
@@ -1925,6 +2002,28 @@ impl Router {
                     });
                 });
             }
+            // The project's sessions: telling another checkout of the same repository runs git.
+            Internal::HostTool {
+                session, id, name, ..
+            } if name == "list_sessions" => {
+                let here = self.folders.get(&session).cloned();
+                let mut rows: Vec<(SessionId, PathBuf, String)> = (self.folders.iter())
+                    .filter(|(other, _)| **other != session && !self.archived.contains(other))
+                    .map(|(&other, cwd)| (other, cwd.clone(), self.session_line(other, cwd)))
+                    .collect();
+                rows.sort_by_key(|(other, ..)| *other);
+                let internal = self.internal.clone();
+                tokio::spawn(async move {
+                    let list = tokio::task::spawn_blocking(move || same_project(here, rows));
+                    let text = list.await.unwrap_or_default();
+                    let _ = internal.send(Internal::HostAnswered {
+                        session,
+                        id,
+                        content: quill_agent::ToolContent::text(text),
+                        is_error: false,
+                    });
+                });
+            }
             Internal::HostTool {
                 session,
                 id,
@@ -1958,7 +2057,10 @@ impl Router {
                 if busy {
                     self.busy.insert(session);
                 } else {
-                    self.busy.remove(&session);
+                    // Out of work without its turn ending: its agent stopped or never started.
+                    if self.busy.remove(&session) {
+                        self.unfinished.insert(session);
+                    }
                     self.flush(session);
                 }
                 self.hold_awake();
@@ -2003,7 +2105,11 @@ impl Router {
             }
             // What is uncommitted follows the work as it happens, the branch bar's counts with it.
             Internal::FilesChanged { session } => self.read_tree(session),
-            Internal::TurnEnded { session, text } => {
+            Internal::TurnEnded {
+                session,
+                text,
+                finished,
+            } => {
                 self.read_tree(session);
                 if let Some(url) = quill_model::find_pull_request(&text) {
                     if self.pull_requests.get(&session).map(String::as_str) != Some(url) {
@@ -2016,21 +2122,76 @@ impl Router {
                 }
                 self.busy.remove(&session);
                 self.hold_awake();
+                // Sessions that wait for it hear only once its task is done.
+                let woken = if finished {
+                    self.unfinished.remove(&session);
+                    self.wake(session, WaitOutcome::Finished, &text)
+                } else {
+                    self.unfinished.insert(session);
+                    vec![]
+                };
                 if let Some(&parent) = self.parents.get(&session) {
-                    let title = self.titles.get(&session).cloned().unwrap_or_default();
-                    self.reports
-                        .entry(parent)
-                        .or_default()
-                        .push(quill_model::Report {
-                            from: session,
-                            title,
-                            text,
-                        });
+                    // A parent that waited for it heard it already.
+                    if !woken.contains(&parent) {
+                        let title = self.titles.get(&session).cloned().unwrap_or_default();
+                        self.reports
+                            .entry(parent)
+                            .or_default()
+                            .push(quill_model::Report {
+                                from: session,
+                                title,
+                                text,
+                                waited: None,
+                            });
+                    }
                     self.flush(parent);
                 }
                 self.flush(session);
             }
         }
+    }
+
+    /// End every wait on `on`: each session that waited hears `outcome`, with `text` and what it
+    /// said it would do then, once it is free. The sessions woken.
+    fn wake(&mut self, on: SessionId, outcome: WaitOutcome, text: &str) -> Vec<SessionId> {
+        let mut woken = vec![];
+        for (&session, waits) in &mut self.waits {
+            if let Some(at) = waits.iter().position(|w| w.on == on) {
+                woken.push((session, waits.remove(at)));
+            }
+        }
+        self.waits.retain(|_, waits| !waits.is_empty());
+        // Stored before the session hears it, which starts a turn.
+        for (session, wait) in &woken {
+            (self.sink)(Event::WaitEnded {
+                session: *session,
+                on,
+                outcome,
+            });
+            let report = quill_model::Report {
+                from: on,
+                title: wait.title.clone(),
+                text: text.to_owned(),
+                waited: Some((outcome, wait.then.clone())),
+            };
+            self.reports.entry(*session).or_default().push(report);
+            self.flush(*session);
+        }
+        woken.into_iter().map(|(session, _)| session).collect()
+    }
+
+    /// Whether `from` waits for `target`, itself or through the sessions it waits for.
+    fn waits_on(&self, from: SessionId, target: SessionId) -> bool {
+        let (mut seen, mut next) = (std::collections::HashSet::new(), vec![from]);
+        while let Some(at) = next.pop() {
+            if at == target {
+                return true;
+            }
+            if seen.insert(at) {
+                next.extend(self.waits.get(&at).into_iter().flatten().map(|w| w.on));
+            }
+        }
+        false
     }
 
     /// Tell `parent` what the sessions it started said, once it is between turns and none of
@@ -2180,9 +2341,130 @@ impl Router {
                 self.tell(child, Input::Send(message, vec![], vec![], Lane::default()));
                 (format!("Passed on to \u{201c}{name}\u{201d}."), false)
             }
+            "wait_for_session" => self.wait_for(session, input),
             other => (format!("quill has no tool named {other}."), true),
         }
     }
+
+    /// `wait_for_session`: what to answer `session`'s agent. A wait is stored before anyone
+    /// hears of it; one on a session whose task is already done is not kept.
+    fn wait_for(&mut self, session: SessionId, input: &serde_json::Value) -> (String, bool) {
+        let then = input["then"].as_str().map(str::trim).unwrap_or_default();
+        let Some(on) = input["session_id"].as_u64().filter(|_| !then.is_empty()) else {
+            return (
+                "wait_for_session needs a session_id and what you will do then.".into(),
+                true,
+            );
+        };
+        if on == session {
+            return ("A session cannot wait for itself.".into(), true);
+        }
+        if !self.folders.contains_key(&on) || self.archived.contains(&on) {
+            return (
+                "No such session. list_sessions lists this project's sessions.".into(),
+                true,
+            );
+        }
+        let names = self.names.lock().unwrap();
+        let title = names
+            .get(&on)
+            .cloned()
+            .unwrap_or_else(|| format!("session {on}"));
+        drop(names);
+        if self.waits_on(on, session) {
+            return (
+                format!("\u{201c}{title}\u{201d} already waits for this session, itself or through others: both would wait forever."),
+                true,
+            );
+        }
+        let waits = self.waits.get(&session).map_or(&[][..], Vec::as_slice);
+        if waits.len() >= MAX_WAITS && !waits.iter().any(|w| w.on == on) {
+            return (
+                format!("This session already waits for {MAX_WAITS} sessions, as many as it can."),
+                true,
+            );
+        }
+        if !self.busy.contains(&on) && !self.unfinished.contains(&on) {
+            return (
+                format!("\u{201c}{title}\u{201d} is not working: its last turn already ended with its task done. Read it with read_session (session_id {on}) and go on now."),
+                false,
+            );
+        }
+        let wait = quill_model::Wait {
+            on,
+            title: title.clone(),
+            then: then.to_owned(),
+            at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        };
+        (self.sink)(Event::Waiting {
+            session,
+            wait: wait.clone(),
+        });
+        let waits = self.waits.entry(session).or_default();
+        waits.retain(|w| w.on != on);
+        waits.push(wait);
+        (
+            format!("Waiting for \u{201c}{title}\u{201d} (session {on}). quill sends you a message when it finishes its task; nothing runs here until then. End your turn now, telling the user in a line what you will do then."),
+            false,
+        )
+    }
+
+    /// One line of `list_sessions`: the session's id, name, agent, what it is doing and its
+    /// folder.
+    fn session_line(&self, session: SessionId, cwd: &std::path::Path) -> String {
+        let name = self.names.lock().unwrap().get(&session).cloned();
+        let agent = (self.started.get(&session))
+            .and_then(|new| adapter(&new.agent))
+            .map_or("an agent", |a| a.name());
+        let doing = if self.awaiting.lock().unwrap().contains(&session) {
+            "waiting for the user"
+        } else if self.busy.contains(&session) {
+            "working"
+        } else if self.unfinished.contains(&session) {
+            "stopped before its task was done"
+        } else {
+            "idle"
+        };
+        format!(
+            "session {session}: \u{201c}{}\u{201d} \u{b7} {agent} \u{b7} {doing} \u{b7} {}",
+            name.unwrap_or_default(),
+            cwd.display()
+        )
+    }
+}
+
+/// How many sessions one session can wait for at once.
+const MAX_WAITS: usize = 5;
+
+/// The lines of `rows` whose folder is `here`, or another checkout of its repository.
+fn same_project(here: Option<PathBuf>, rows: Vec<(SessionId, PathBuf, String)>) -> String {
+    let repo = |dir: &std::path::Path| quill_git::common_dir(dir).unwrap_or_else(|| dir.into());
+    let lines: Vec<String> = match here {
+        Some(here) => {
+            let mine = repo(&here);
+            (rows.into_iter())
+                .filter(|(_, dir, _)| *dir == here || repo(dir) == mine)
+                .map(|(.., line)| line)
+                .collect()
+        }
+        None => vec![],
+    };
+    if lines.is_empty() {
+        return "No other session works in this project.".into();
+    }
+    lines.join("\n")
+}
+
+/// The first line of a message, as long as a session's name from it is.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(60)
+        .collect()
 }
 
 /// What a kept session needs to continue: how it started and the agent's own id for it.
@@ -2208,6 +2490,12 @@ struct Restored {
     rewound: Option<Option<String>>,
     /// The queue as the last exit left it.
     queue: Vec<QueuedMessage>,
+    /// Its first message's first line, which names it until it is renamed.
+    first: Option<String>,
+    /// What it waits for (`wait_for_session`).
+    waits: Vec<quill_model::Wait>,
+    /// Its agent's task list.
+    tasks: TaskList,
 }
 
 impl Restored {
@@ -2229,8 +2517,21 @@ impl Restored {
         let mut rewound = None;
         let (mut pull_request, mut archived) = (None, false);
         let mut queue = vec![];
+        let (mut first, mut waits, mut tasks) = (None, vec![], TaskList::default());
         for event in events {
+            if let Event::Agent { event, .. } = event {
+                tasks.heard(event);
+            }
             match event {
+                Event::Queued { text, .. } if first.is_none() => {
+                    first = Some(first_line(text));
+                    rewound = None;
+                }
+                Event::Waiting { wait, .. } => {
+                    waits.retain(|w: &quill_model::Wait| w.on != wait.on);
+                    waits.push(wait.clone());
+                }
+                Event::WaitEnded { on, .. } => waits.retain(|w| w.on != *on),
                 Event::RewoundTo { at, .. } => rewound = Some(at.clone()),
                 Event::QueueChanged { entries, .. } => queue = entries.clone(),
                 Event::ModelChosen { model, .. } => new.model = Some(model.clone()),
@@ -2280,7 +2581,45 @@ impl Restored {
             pull_request,
             archived,
             queue,
+            first,
+            waits,
+            tasks,
         })
+    }
+}
+
+/// An agent's task list as its task tools' calls and answers leave it.
+#[derive(Default)]
+struct TaskList {
+    list: Vec<quill_model::Todo>,
+    /// The task tools' calls not answered yet.
+    calls: HashMap<String, (String, serde_json::Value)>,
+}
+
+impl TaskList {
+    fn heard(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::ToolUse {
+                call,
+                name,
+                input,
+                parent: None,
+            } if matches!(name.as_str(), "TodoWrite" | "TaskCreate" | "TaskUpdate") => {
+                self.calls
+                    .insert(call.clone(), (name.clone(), input.clone()));
+            }
+            AgentEvent::ToolResult { call, output, .. } => {
+                if let Some((name, input)) = self.calls.remove(call) {
+                    quill_model::apply_task_tool(&mut self.list, &name, &input, Some(output));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether a task is left that is not done.
+    fn open(&self) -> bool {
+        self.list.iter().any(|t| t.status != "completed")
     }
 }
 
@@ -2340,6 +2679,10 @@ struct Actor {
     route: Option<UnboundedSender<Internal>>,
     /// The last thing the agent said in the turn under way, for its report.
     last_text: String,
+    /// Its task list, and the plans of the turn under way that no card asked about: a plan
+    /// the turn ends with waits for the person.
+    tasks: TaskList,
+    plans: std::collections::HashSet<String>,
     /// Added to the agent's environment: the `$BROWSER` bridge, and the secrets of the global
     /// servers.
     env: Vec<(String, String)>,
@@ -2405,6 +2748,8 @@ impl Actor {
             before: HashMap::new(),
             route: None,
             last_text: String::new(),
+            tasks: TaskList::default(),
+            plans: Default::default(),
             env: Vec::new(),
             injected: Vec::new(),
             unrewind: None,
@@ -3080,6 +3425,27 @@ impl Actor {
                         .unwrap_or_default();
                 }
             }
+            self.tasks.heard(&event);
+            match &event {
+                AgentEvent::ToolUse {
+                    call,
+                    name,
+                    parent: None,
+                    ..
+                } if name == "ExitPlanMode" => drop(self.plans.insert(call.clone())),
+                AgentEvent::PermissionRequest {
+                    call: Some(call), ..
+                } => drop(self.plans.remove(call)),
+                _ => {}
+            }
+            let done = matches!(
+                event,
+                AgentEvent::TurnFinished {
+                    ok: true,
+                    interrupted: false,
+                    ..
+                }
+            );
             let finished = matches!(event, AgentEvent::TurnFinished { .. });
             // A step that wrote files or ran a command, or work beside the turn that ended,
             // may have changed the folder.
@@ -3107,9 +3473,11 @@ impl Actor {
                 self.busy = false;
                 self.status(SessionStatus::Idle);
                 let text = std::mem::take(&mut self.last_text);
+                let planned = !std::mem::take(&mut self.plans).is_empty();
                 self.tell(Internal::TurnEnded {
                     session: self.id,
                     text,
+                    finished: done && !planned && !self.tasks.open(),
                 });
                 self.drain().await;
             }
@@ -3668,13 +4036,9 @@ async fn read_session(
         return (quill_agent::ToolContent::text("No such session."), true);
     };
     // A session never renamed is named by its first message, as the sidebar names it.
-    let first = events.iter().find_map(|event| match event {
-        Event::Queued { text, .. } => Some(text.lines().next().unwrap_or_default().to_owned()),
-        _ => None,
-    });
     let text = format!(
         "Title: {}\nFolder: {}\n\n{}",
-        restored.title.or(first).unwrap_or_default(),
+        restored.title.or(restored.first).unwrap_or_default(),
         restored.new.cwd.display(),
         transcript(&events)
     );
@@ -3725,16 +4089,51 @@ fn transcript(events: &[Event]) -> String {
 }
 
 fn report_text(reports: &[quill_model::Report]) -> String {
-    let mut text =
-        String::from("<sessions-report>\nSessions you started have finished their turn.\n");
-    for report in reports {
-        text.push_str(&format!(
-            "\n## {} (session {})\n{}\n",
-            report.title, report.from, report.text
+    let (waited, started): (Vec<_>, Vec<_>) = reports.iter().partition(|r| r.waited.is_some());
+    let mut blocks = vec![];
+    if !started.is_empty() {
+        let mut text =
+            String::from("<sessions-report>\nSessions you started have finished their turn.\n");
+        for report in started {
+            text.push_str(&format!(
+                "\n## {} (session {})\n{}\n",
+                report.title, report.from, report.text
+            ));
+        }
+        text.push_str("\nIf what the user asked you here has steps these results unblock, carry on with them; otherwise tell the user the outcome in a line or two.\n</sessions-report>");
+        blocks.push(text);
+    }
+    for report in waited {
+        let Some((outcome, then)) = &report.waited else {
+            continue;
+        };
+        let (title, from) = (&report.title, report.from);
+        let what = match outcome {
+            WaitOutcome::Finished => format!(
+                "The session \u{201c}{title}\u{201d} (session {from}) you were waiting for finished its task. Its last report:\n{}",
+                last_report(&report.text, from)
+            ),
+            WaitOutcome::Gone | WaitOutcome::Canceled => format!(
+                "The session \u{201c}{title}\u{201d} (session {from}) you were waiting for will not finish: {}",
+                report.text
+            ),
+        };
+        blocks.push(format!(
+            "<session-wait>\nThis message is from quill, not from the user.\n\n{what}\n\nWhat you said you would do then: {then}\n\nDo it now if it still makes sense, then tell the user in a line or two what you did.\n</session-wait>"
         ));
     }
-    text.push_str("\nIf what the user asked you here has steps these results unblock, carry on with them; otherwise tell the user the outcome in a line or two.\n</sessions-report>");
-    text
+    blocks.join("\n\n")
+}
+
+/// A session's last reply as a wait's message carries it: whole, or its first
+/// [`TRANSCRIPT_CHARS`] / 4 characters and where the rest is.
+fn last_report(text: &str, from: SessionId) -> String {
+    let cap = TRANSCRIPT_CHARS / 4;
+    if text.chars().count() <= cap {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(cap).collect();
+    format!("{kept}\n[\u{2026} cut here; read_session (session_id {from}) has all of it]")
 }
 
 /// Whether `mode` is one of the agent's modes that skip every approval (its adapter's words).
@@ -3753,6 +4152,156 @@ fn waives_server_consent(agent: Option<&str>, mode: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A router of eight busy sessions, with every event it tells kept.
+    fn router() -> (Router, Arc<Mutex<Vec<Event>>>) {
+        let (internal, _) = unbounded_channel();
+        let heard: Arc<Mutex<Vec<Event>>> = Arc::default();
+        let kept = heard.clone();
+        let ui: Sink = Arc::new(move |event| kept.lock().unwrap().push(event));
+        let mut router = Router::new(ui, Config::default(), internal);
+        for session in 1..=8 {
+            router.folders.insert(session, std::env::temp_dir());
+            router.busy.insert(session);
+        }
+        (router, heard)
+    }
+
+    fn wait(on: SessionId) -> serde_json::Value {
+        serde_json::json!({ "session_id": on, "then": "Cut version 0.1.0" })
+    }
+
+    #[tokio::test]
+    async fn a_wait_is_refused_on_itself_in_a_cycle_and_past_the_cap() {
+        let (mut router, heard) = router();
+        assert!(router.wait_for(1, &wait(1)).1, "itself");
+        assert!(router.wait_for(1, &wait(42)).1, "no such session");
+        assert!(!router.wait_for(1, &wait(2)).1);
+        assert!(router.wait_for(2, &wait(1)).1, "a cycle");
+        assert!(!router.wait_for(2, &wait(3)).1);
+        assert!(router.wait_for(3, &wait(1)).1, "a cycle through 2");
+        for on in 4..=7 {
+            assert!(!router.wait_for(1, &wait(on)).1);
+        }
+        assert!(router.wait_for(1, &wait(8)).1, "past the cap");
+        assert!(
+            !router.wait_for(1, &wait(2)).1,
+            "the same one again replaces it"
+        );
+        assert_eq!(router.waits[&1].len(), MAX_WAITS);
+        // Stored, so it is told again after a restart.
+        let stored = heard
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, Event::Waiting { .. }))
+            .count();
+        assert_eq!(stored, 7);
+        // A session already done is not waited for: the agent goes on now.
+        router.busy.remove(&8);
+        let (said, refused) = router.wait_for(3, &wait(8));
+        assert!(!refused && said.contains("read_session"));
+        assert!(!router.waits.contains_key(&3));
+    }
+
+    #[tokio::test]
+    async fn a_wait_wakes_once_when_the_task_is_done_and_can_be_canceled() {
+        let (mut router, heard) = router();
+        router.wait_for(1, &wait(2));
+        router.wait_for(3, &wait(2));
+        let ended = |heard: &Arc<Mutex<Vec<Event>>>| {
+            (heard.lock().unwrap().iter())
+                .filter_map(|e| match e {
+                    Event::WaitEnded {
+                        session, outcome, ..
+                    } => Some((*session, *outcome)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        router
+            .internal(Internal::TurnEnded {
+                session: 2,
+                text: "Which name?".into(),
+                finished: false,
+            })
+            .await;
+        assert!(
+            ended(&heard).is_empty(),
+            "a turn that left its task undone wakes no one"
+        );
+        // Not working, but its task not done: a wait on it is still kept.
+        assert!(!router.wait_for(4, &wait(2)).1);
+        assert!(router.waits.contains_key(&4));
+        router
+            .intent(Intent::CancelWait { session: 4, on: 2 })
+            .await;
+        assert_eq!(ended(&heard), [(4, WaitOutcome::Canceled)]);
+        router
+            .internal(Internal::TurnEnded {
+                session: 2,
+                text: "Merged.".into(),
+                finished: true,
+            })
+            .await;
+        let mut woken = ended(&heard)[1..].to_vec();
+        woken.sort_by_key(|(session, _)| *session);
+        assert_eq!(
+            woken,
+            [(1, WaitOutcome::Finished), (3, WaitOutcome::Finished)]
+        );
+        let report = &router.reports[&1][0];
+        assert_eq!(report.text, "Merged.");
+        assert_eq!(
+            report.waited,
+            Some((WaitOutcome::Finished, "Cut version 0.1.0".into()))
+        );
+        router
+            .internal(Internal::TurnEnded {
+                session: 2,
+                text: "Again.".into(),
+                finished: true,
+            })
+            .await;
+        assert_eq!(ended(&heard).len(), 3, "each wait wakes once");
+        // A session put away ends the waits on it.
+        router.wait_for(5, &wait(6));
+        router.archive(6, true);
+        assert_eq!(ended(&heard).last(), Some(&(5, WaitOutcome::Gone)));
+    }
+
+    #[test]
+    fn list_sessions_keeps_this_project_s_sessions() {
+        let here = std::env::temp_dir().join(format!("quill-list-{}", std::process::id()));
+        let rows = vec![
+            (2, here.clone(), "session 2".to_owned()),
+            (3, here.join("elsewhere"), "session 3".to_owned()),
+        ];
+        assert_eq!(same_project(Some(here), rows), "session 2");
+        assert_eq!(
+            same_project(None, vec![]),
+            "No other session works in this project."
+        );
+    }
+
+    #[test]
+    fn a_wait_s_message_says_it_is_quill_s_with_the_report_and_what_to_do() {
+        let report = quill_model::Report {
+            from: 3,
+            title: "hola como estas".into(),
+            text: "Done.".into(),
+            waited: Some((WaitOutcome::Finished, "Cut version 0.1.0".into())),
+        };
+        let text = report_text(&[report]);
+        assert!(text.starts_with("<session-wait>\nThis message is from quill, not from the user."));
+        assert!(text.contains("\u{201c}hola como estas\u{201d} (session 3)"));
+        assert!(text.contains("Its last report:\nDone."));
+        assert!(text.contains("What you said you would do then: Cut version 0.1.0"));
+        let long = "x".repeat(TRANSCRIPT_CHARS);
+        assert!(last_report(&long, 3).ends_with("read_session (session_id 3) has all of it]"));
+    }
+
     #[test]
     fn the_modes_that_skip_every_approval_are_the_adapters_unsafe_ones() {
         assert!(super::skips_every_approval("codex", "full-access"));
@@ -3772,8 +4321,6 @@ mod tests {
         assert!(waives("codex", "full-access"));
         assert!(!waives("codex", "auto"));
     }
-
-    use super::*;
 
     #[test]
     fn the_claude_adapter_ships_its_logo() {

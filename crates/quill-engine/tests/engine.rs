@@ -2121,3 +2121,217 @@ fn an_answer_is_not_kept_with_the_session() {
         })
     ));
 }
+
+/// A folder whose capture is sessions.jsonl with its start_session call made a call of
+/// wait_for_session on `on`: the agent waits, then says "done" and ends its turn.
+fn waiting_workdir(on: u64) -> std::path::PathBuf {
+    let dir = workdir("sessions");
+    let started = r#"{"initiation": "own_initiative", "title": "Add a README", "prompt": "Write a short README.md"}"#;
+    let waits = format!(r#"{{"session_id": {on}, "then": "Cut version 0.1.0"}}"#);
+    let capture = std::fs::read_to_string(fixture("sessions"))
+        .unwrap()
+        .replace(started, &waits)
+        .replace("start_session", "wait_for_session");
+    std::fs::write(dir.join("wait.jsonl"), capture).unwrap();
+    std::fs::write(
+        dir.join(".fake-agent"),
+        dir.join("wait.jsonl").to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    dir
+}
+
+fn send(engine: &Engine, session: u64, text: &str) {
+    engine.send(Intent::Send {
+        session,
+        text: text.into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+}
+
+fn turn_finished(session: u64) -> impl Fn(&Event) -> bool {
+    move |e| matches!(e, Event::Agent { session: s, event: AgentEvent::TurnFinished { .. }, .. } if *s == session)
+}
+
+/// The wait the agent of session 2 asks for on session 1, as stored: session 2's turn ends
+/// with it set, and nothing wakes it yet.
+fn waits_for_one(engine: &Engine, rx: &Receiver<Event>, agent: &str) -> Vec<Event> {
+    engine.send(Intent::NewSession(NewSession {
+        agent: agent.into(),
+        cwd: waiting_workdir(1),
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    send(engine, 2, "Cut 0.1.0 when the other conversation finishes");
+    let events = until(rx, turn_finished(2));
+    let waits: Vec<&quill_model::Wait> = (events.iter())
+        .filter_map(|e| match e {
+            Event::Waiting { session: 2, wait } => Some(wait),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(waits.len(), 1, "{events:#?}");
+    assert_eq!(
+        (waits[0].on, waits[0].then.as_str()),
+        (1, "Cut version 0.1.0")
+    );
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, Event::WaitEnded { .. } | Event::Reported { .. })));
+    events
+}
+
+/// The report that woke session 2: its wait on session 1 ended first, as stored.
+fn woken(rx: &Receiver<Event>) -> quill_model::Report {
+    let events = until(rx, |e| matches!(e, Event::Reported { session: 2, .. }));
+    let ended = events.iter().position(|e| {
+        matches!(
+            e,
+            Event::WaitEnded {
+                session: 2,
+                on: 1,
+                outcome: quill_model::WaitOutcome::Finished
+            }
+        )
+    });
+    assert!(ended.is_some(), "{events:#?}");
+    let Some(Event::Reported { reports, .. }) = events.last() else {
+        unreachable!()
+    };
+    assert_eq!(reports.len(), 1);
+    reports[0].clone()
+}
+
+#[test]
+fn a_wait_is_kept_across_a_restart_and_wakes_its_session_when_the_other_finishes() {
+    let database = std::env::temp_dir().join(format!("quill-test-wait-{}.db", uuid_like()));
+    let start = || {
+        let (tx, rx) = channel();
+        let programs = HashMap::from([(
+            "claude".to_string(),
+            env!("CARGO_BIN_EXE_fake-agent").to_string(),
+        )]);
+        let config = quill_engine::Config {
+            programs,
+            database: Some(database.clone()),
+            ..Default::default()
+        };
+        (
+            Engine::start_with(move |event| drop(tx.send(event)), config),
+            rx,
+        )
+    };
+    let (engine, rx) = start();
+    // Session 1 holds its turn open at the capture's steer line.
+    busy_steer_session(&engine, &rx);
+    waits_for_one(&engine, &rx, "claude");
+    drop(engine);
+
+    // Told again at the start, and armed: nothing ended it.
+    let (engine, rx) = start();
+    let replayed = until(&rx, |e| matches!(e, Event::Restored));
+    assert!(replayed
+        .iter()
+        .any(|e| matches!(e, Event::Waiting { session: 2, wait } if wait.on == 1)));
+    assert!(!replayed
+        .iter()
+        .any(|e| matches!(e, Event::WaitEnded { .. })));
+    // Session 1 goes on and finishes; session 2 hears what it said last.
+    send(&engine, 1, "Count from 1 to 40");
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                session: 1,
+                event: AgentEvent::Ready { .. },
+                ..
+            }
+        )
+    });
+    send(&engine, 1, "Change of plans: stop at 5.");
+    let report = woken(&rx);
+    assert_eq!(report.from, 1);
+    assert_eq!(
+        report.waited,
+        Some((
+            quill_model::WaitOutcome::Finished,
+            "Cut version 0.1.0".into()
+        ))
+    );
+    assert!(report.text.starts_with("1\n2\n3"));
+    // Woken, session 2's agent runs its capture again and asks to wait once more: session 1 is
+    // done by then, so nothing is kept, and the wait that was used up wakes no one again.
+    let events = until(&rx, turn_finished(2));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, Event::Reported { .. } | Event::Waiting { .. })));
+    drop(engine);
+    let _ = std::fs::remove_file(&database);
+}
+
+/// Claude's session waits on Codex's: the wait holds while Codex asks the person, and wakes
+/// once its turn ends.
+#[test]
+fn a_wait_holds_while_the_other_agent_asks_and_wakes_across_agents() {
+    let (tx, rx) = channel();
+    let fake = env!("CARGO_BIN_EXE_fake-agent").to_string();
+    let programs = HashMap::from([
+        ("claude".to_string(), fake.clone()),
+        ("codex".to_string(), fake),
+    ]);
+    let config = quill_engine::Config {
+        programs,
+        ..Default::default()
+    };
+    let engine = Engine::start_with(move |event| drop(tx.send(event)), config);
+    let dir = workdir("simple");
+    let capture = format!(
+        "{}/../quill-agent-codex/fixtures/0.163.0/deny.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::write(dir.join(".fake-agent"), capture).unwrap();
+    engine.send(Intent::NewSession(NewSession {
+        agent: "codex".into(),
+        cwd: dir,
+        model: Some("gpt-6-luna".into()),
+        effort: Some("low".into()),
+        mode: None,
+    }));
+    send(
+        &engine,
+        1,
+        "Use the shell tool to run exactly: touch denied.txt",
+    );
+    let events = until(&rx, |e| {
+        matches!(
+            e,
+            Event::Agent {
+                session: 1,
+                event: AgentEvent::PermissionRequest { .. },
+                ..
+            }
+        )
+    });
+    let Some(Event::Agent {
+        event: AgentEvent::PermissionRequest { id, .. },
+        ..
+    }) = events.last()
+    else {
+        unreachable!()
+    };
+    let permission = id.clone();
+    waits_for_one(&engine, &rx, "claude");
+    engine.send(Intent::Decide {
+        session: 1,
+        permission,
+        decision: Decision::Deny {
+            message: "no".into(),
+        },
+    });
+    let report = woken(&rx);
+    assert_eq!(report.from, 1);
+    assert!(!report.text.is_empty());
+}

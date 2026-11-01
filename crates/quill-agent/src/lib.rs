@@ -830,7 +830,7 @@ impl ToolContent {
 
 /// quill's own tools, which an adapter offers its agent where the agent can take tools from
 /// its host: a tool's name, what it is for, and the JSON schema of its input.
-pub const HOST_TOOLS: [(&str, &str, &str); 4] = [
+pub const HOST_TOOLS: [(&str, &str, &str); 6] = [
     (
         "start_session",
         "Start a separate session for a task of its own while you stay with the user, or propose one. `initiation` says who wants it: \"user_asked\" (the user asked in words for separate, parallel or background work) starts it now; \"own_initiative\" (follow-up work you noticed or that your own work turned up, which the user has not asked for) shows the user a card, and nothing runs until they start it there. Both need `prompt`: the brief, standing alone (the task, the files or area, what done looks like). context \"fresh\" (default) gives the new session your `prompt` and `background` only, so `background` is required: the goal, decisions and constraints so far, for someone who has not seen this conversation; \"fork\" gives it this whole conversation and your `prompt`. A session you start reports back to you when its turn ends. A session is for a task of its own that ends in something of its own; searching, independent parts of one change, and checking what you built stay here or go to a subagent. Start nothing the user did not ask for.",
@@ -850,6 +850,16 @@ pub const HOST_TOOLS: [(&str, &str, &str); 4] = [
         "read_session",
         "Read another quill session the user mentioned: its title, folder and conversation so far (the people's messages and the agent's replies, the latest last). Read-only.",
         r#"{"type":"object","properties":{"session_id":{"type":"integer"}},"required":["session_id"]}"#,
+    ),
+    (
+        "list_sessions",
+        "List the other quill sessions of this project (this folder, or another checkout of the same repository): each one's id, title, agent, whether it is working, idle or waiting for the user, and its folder. Read-only.",
+        r#"{"type":"object","properties":{}}"#,
+    ),
+    (
+        "wait_for_session",
+        "Wait for another quill session to finish its task, then go on here by yourself. Use it when the user ties work to another conversation finishing (\"when the other conversation is done, cut the release\"); never promise to wait without it, since nothing of that conversation reaches you otherwise. Find the session with list_sessions, or by the id a mention of it gives; if more than one running session could be meant, ask the user with your question tool instead of guessing. The call returns at once: then end your turn, telling the user in a line what you will do when it finishes. quill sends you a message when that session's turn ends with its task done (not while it asks the user something), with its last report and your `then`; if it is deleted or archived first, you are told that instead.",
+        r#"{"type":"object","properties":{"session_id":{"type":"integer","description":"The session to wait for."},"then":{"type":"string","description":"What you will do when it finishes, standing alone: it is given back to you then."}},"required":["session_id","then"]}"#,
     ),
 ];
 
@@ -1142,14 +1152,105 @@ pub const BROWSER_TOOLS: [(&str, &str, &str); 19] = [
 /// How an agent is asked to work with the user, in words of quill's own: ask before work that
 /// leaves room for doubt, plan what is large, keep a task list, check, and close with what is
 /// left. Every adapter hands it to its agent.
-pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
+pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When the user wants something done after another conversation finishes, call wait_for_session instead of promising to wait: nothing of that conversation reaches you otherwise. Then end your turn.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
 
 /// What an agent is told of the built-in browser, in words of quill's own.
 pub const BROWSER_GUIDE: &str = "# Built-in browser\n\nYou have a browser built into this app, with the browser tools (navigate, read_page, find, get_page_text, form_input, computer, javascript_tool, read_console_messages, read_network_requests, tabs_*). The user sees its tab beside the conversation and can use it too. Use it to check what you build for the web: start the dev server, open it, read the console and the page, act on it, and take a screenshot to show the result instead of asking the user to look. Prefer read_page and find to pick elements by ref; use screenshots to see layout. Local addresses are always allowed; other sites may ask the user first. Do not use it for what a plain fetch answers.";
 
+/// One entry of an agent's task list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Todo {
+    pub id: String,
+    pub subject: String,
+    /// "pending", "in_progress" or "completed".
+    pub status: String,
+}
+
+/// The task list after one call of the task tools, as adapters name them: `TaskCreate` adds
+/// (its id read from `output`, the CLI's "Task #1 created successfully: …"), `TaskUpdate`
+/// changes or deletes by id, `TodoWrite` writes the whole list.
+pub fn apply_task_tool(list: &mut Vec<Todo>, name: &str, input: &Value, output: Option<&str>) {
+    match name {
+        "TaskCreate" => {
+            let id = output
+                .and_then(|o| o.strip_prefix("Task #"))
+                .and_then(|rest| rest.split(' ').next())
+                .map(str::to_owned)
+                .unwrap_or_else(|| (list.len() + 1).to_string());
+            list.push(Todo {
+                id,
+                subject: input["subject"].as_str().unwrap_or_default().to_owned(),
+                status: "pending".into(),
+            });
+        }
+        "TaskUpdate" => {
+            let id = input["taskId"].as_str().unwrap_or_default();
+            if input["status"] == "deleted" {
+                list.retain(|t| t.id != id);
+            } else if let Some(todo) = list.iter_mut().find(|t| t.id == id) {
+                if let Some(status) = input["status"].as_str() {
+                    todo.status = status.to_owned();
+                }
+                if let Some(subject) = input["subject"].as_str() {
+                    todo.subject = subject.to_owned();
+                }
+            }
+        }
+        "TodoWrite" => {
+            *list = input["todos"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, t)| Todo {
+                    id: (i + 1).to_string(),
+                    subject: t["content"].as_str().unwrap_or_default().to_owned(),
+                    status: t["status"].as_str().unwrap_or("pending").to_owned(),
+                })
+                .collect();
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_task_tools_build_one_list() {
+        let mut list = vec![];
+        let create = serde_json::json!({ "subject": "Write it" });
+        apply_task_tool(
+            &mut list,
+            "TaskCreate",
+            &create,
+            Some("Task #7 created successfully: Write it"),
+        );
+        assert_eq!(list[0].id, "7");
+        let done = serde_json::json!({ "taskId": "7", "status": "completed" });
+        apply_task_tool(&mut list, "TaskUpdate", &done, None);
+        assert_eq!(list[0].status, "completed");
+        let todos = serde_json::json!({ "todos": [{ "content": "a", "status": "completed" }, { "content": "b" }] });
+        apply_task_tool(&mut list, "TodoWrite", &todos, None);
+        assert_eq!((list.len(), list[1].status.as_str()), (2, "pending"));
+    }
+
+    #[test]
+    fn wait_for_session_takes_a_session_and_what_to_do_then() {
+        let schema = HOST_TOOLS
+            .iter()
+            .find(|(name, ..)| *name == "wait_for_session")
+            .map(|(_, _, schema)| *schema)
+            .expect("wait_for_session is a host tool");
+        let schema: serde_json::Value = serde_json::from_str(schema).unwrap();
+        assert_eq!(schema["properties"]["session_id"]["type"], "integer");
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["session_id", "then"])
+        );
+        assert!(WORK_GUIDE.contains("wait_for_session"));
+    }
 
     #[test]
     fn read_session_is_a_host_tool_with_a_session_id() {

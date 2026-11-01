@@ -194,6 +194,8 @@ pub struct Session {
     /// What the agent suggests the person asks next, while the session waits for them: the
     /// empty composer shows it until a message is sent, a turn starts or the agent stops.
     pub suggestion: Option<String>,
+    /// The sessions it waits for (`wait_for_session`), until their task is done.
+    pub waits: Vec<quill_model::Wait>,
 }
 
 /// Whether a session can be reached from another device through its agent's own service.
@@ -321,6 +323,7 @@ impl Store {
                 remote: Remote::Off,
                 remote_code: None,
                 suggestion: None,
+                waits: vec![],
             }),
             Event::Status { session, status } => {
                 if let Some(s) = self.session_mut(session) {
@@ -605,6 +608,17 @@ impl Store {
                 if let (Some(s), Some((items, title))) = (self.session_mut(session), parent) {
                     s.items = items;
                     s.title = format!("{title} (fork)");
+                }
+            }
+            Event::Waiting { session, wait } => {
+                if let Some(s) = self.session_mut(session) {
+                    s.waits.retain(|w| w.on != wait.on);
+                    s.waits.push(wait);
+                }
+            }
+            Event::WaitEnded { session, on, .. } => {
+                if let Some(s) = self.session_mut(session) {
+                    s.waits.retain(|w| w.on != on);
                 }
             }
             Event::Forwarded { session, from } => {
