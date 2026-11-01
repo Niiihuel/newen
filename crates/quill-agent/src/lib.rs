@@ -655,6 +655,13 @@ pub enum AgentEvent {
     ModeChanged {
         mode: String,
     },
+    /// The agent would not switch to `mode` ([`AgentCommand::SetMode`]); `error` is its reason.
+    /// The engine starts it again in that mode when its process was launched without the
+    /// Settings that allow it.
+    ModeRefused {
+        mode: String,
+        error: String,
+    },
     TurnFinished {
         ok: bool,
         interrupted: bool,

@@ -2055,6 +2055,11 @@ fn a_mode_chosen_before_the_agent_runs_is_the_one_it_starts_in() {
         session: 1,
         mode: "plan".into(),
     });
+    // The session's mode now, kept for a restart, though no agent runs to say so.
+    until(
+        &rx,
+        |e| matches!(e, Event::Agent { event: AgentEvent::ModeChanged { mode }, .. } if mode == "plan"),
+    );
     engine.send(Intent::Send {
         session: 1,
         text: "hi".into(),
@@ -2076,6 +2081,183 @@ fn a_mode_chosen_before_the_agent_runs_is_the_one_it_starts_in() {
         .skip_while(|l| *l != "--permission-mode")
         .nth(1);
     assert_eq!(mode, Some("plan"), "{launched}");
+}
+
+fn finished(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Agent {
+            event: AgentEvent::TurnFinished { .. },
+            ..
+        }
+    )
+}
+
+/// The agent launched answered its start (a replay answers it under the capture's id, so a
+/// second launch of one adapter hears it as a reply).
+fn started(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Agent {
+            event: AgentEvent::Ready { .. } | AgentEvent::Reply { .. },
+            ..
+        }
+    )
+}
+
+/// The mode the agent ran with, as the fake agent's launch was told it.
+fn launched_mode(dir: &std::path::Path) -> (Option<String>, bool) {
+    let launched = std::fs::read_to_string(dir.join(".fake-launch")).unwrap();
+    let mode = (launched.lines())
+        .skip_while(|l| *l != "--permission-mode")
+        .nth(1)
+        .map(str::to_owned);
+    (
+        mode,
+        launched.contains("--allow-dangerously-skip-permissions"),
+    )
+}
+
+/// A mode the agent switched to itself (it left planning when its plan was allowed) is the
+/// one it starts in again, not the one the session began with.
+#[test]
+fn the_mode_the_agent_left_planning_for_survives_a_new_launch() {
+    let (engine, rx) = engine();
+    let dir = workdir("plan");
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.clone(),
+        model: None,
+        effort: None,
+        mode: Some("plan".into()),
+    }));
+    engine.send(Intent::Send {
+        session: 1,
+        text: "plan it".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    let mut request = None;
+    loop {
+        let event = until(&rx, |e| {
+            finished(e)
+                || matches!(e, Event::Queued { .. })
+                || matches!(
+                    e,
+                    Event::Agent {
+                        event: AgentEvent::PermissionRequest { .. },
+                        ..
+                    }
+                )
+        })
+        .pop()
+        .unwrap();
+        match event {
+            Event::Queued { request: r, .. } => request = Some(r),
+            Event::Agent {
+                event: AgentEvent::PermissionRequest { id, .. },
+                ..
+            } => engine.send(Intent::Decide {
+                session: 1,
+                permission: id,
+                decision: Decision::Allow,
+            }),
+            _ => break,
+        }
+    }
+    assert_eq!(launched_mode(&dir).0.as_deref(), Some("plan"));
+    // Rewinding ends the agent; the next message starts it again.
+    std::fs::remove_file(dir.join(".fake-launch")).unwrap();
+    engine.send(Intent::RewindTo {
+        session: 1,
+        request: request.unwrap(),
+        at: None,
+    });
+    engine.send(Intent::Send {
+        session: 1,
+        text: "again".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    until(&rx, started);
+    assert_eq!(launched_mode(&dir).0.as_deref(), Some("default"));
+}
+
+/// Settings allowing the unsafe modes after a session started: picking one the running agent
+/// refuses (it was launched without them) starts it again in that mode, allowed.
+#[test]
+fn an_unsafe_mode_allowed_after_the_session_started_is_had_by_a_new_launch() {
+    let (engine, rx) = engine();
+    let dir = workdir("simple");
+    new_session_in(&engine, &dir);
+    engine.send(Intent::Send {
+        session: 1,
+        text: "hi".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    until(&rx, finished);
+    assert_eq!(launched_mode(&dir), (Some("default".into()), false));
+    let mut settings = quill_model::Settings::default();
+    settings.agents.insert(
+        "claude".into(),
+        quill_model::AgentSettings {
+            allow_unsafe: true,
+            ..Default::default()
+        },
+    );
+    engine.send(Intent::SaveSettings(settings));
+    until(&rx, |e| matches!(e, Event::Settings { .. }));
+    std::fs::remove_file(dir.join(".fake-launch")).unwrap();
+    engine.send(Intent::SetMode {
+        session: 1,
+        mode: "bypassPermissions".into(),
+    });
+    let seen = until(&rx, started);
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Notice { .. })),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        launched_mode(&dir),
+        (Some("bypassPermissions".into()), true)
+    );
+}
+
+/// A session kept in bypass starts in the agent's own mode once Settings no longer allow it.
+#[test]
+fn an_unsafe_mode_settings_do_not_allow_is_not_launched() {
+    let (engine, rx) = engine();
+    let dir = workdir("simple");
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.clone(),
+        model: None,
+        effort: None,
+        mode: Some("bypassPermissions".into()),
+    }));
+    engine.send(Intent::Send {
+        session: 1,
+        text: "hi".into(),
+        mentions: vec![],
+        images: vec![],
+        lane: Lane::Steer,
+    });
+    until(&rx, finished);
+    assert_eq!(launched_mode(&dir), (Some("default".into()), false));
+}
+
+fn new_session_in(engine: &Engine, dir: &std::path::Path) {
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.to_owned(),
+        model: None,
+        effort: None,
+        mode: None,
+    }));
 }
 
 /// An answer goes to the agent and nowhere else: what is kept of it only says the card was

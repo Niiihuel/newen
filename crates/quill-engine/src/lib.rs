@@ -436,7 +436,11 @@ impl Router {
                     } => drop(agent_ids.lock().unwrap().insert(*session, id.clone())),
                     Event::Agent {
                         session,
-                        event: AgentEvent::ModeChanged { mode },
+                        event:
+                            AgentEvent::ModeChanged { mode }
+                            | AgentEvent::Ready {
+                                mode: Some(mode), ..
+                            },
                         ..
                     } => {
                         if let Some(entry) = modes.lock().unwrap().get_mut(session) {
@@ -1261,6 +1265,13 @@ impl Router {
             return;
         }
         self.settings = settings;
+        // Sessions already running follow Settings as they are now, at their next launch.
+        for (session, tx) in &self.sessions {
+            if let Some(new) = self.started.get(session) {
+                let allow = self.settings.agent(&new.agent).allow_unsafe;
+                let _ = tx.send(Input::AllowUnsafe(allow));
+            }
+        }
         self.updates.auto(self.settings.auto_update);
         self.hold_awake();
         self.announce_settings();
@@ -1353,6 +1364,10 @@ impl Router {
                     .is_some_and(|a| skips_every_approval(a, &mode));
                 if skips && !agent.is_some_and(|a| self.settings.agent(&a).allow_unsafe) {
                     return;
+                }
+                // Kept with the session, for a fork of it.
+                if let Some(new) = self.started.get_mut(&session) {
+                    new.mode = Some(mode.clone());
                 }
                 (session, Input::Command(AgentCommand::SetMode(mode)))
             }
@@ -2621,8 +2636,13 @@ impl Restored {
                     event: AgentEvent::Session { id },
                     ..
                 } => resume = Some(id.clone()),
+                // The mode it was last in: as the agent last started or switched.
                 Event::Agent {
-                    event: AgentEvent::ModeChanged { mode },
+                    event:
+                        AgentEvent::ModeChanged { mode }
+                        | AgentEvent::Ready {
+                            mode: Some(mode), ..
+                        },
                     ..
                 } => new.mode = Some(mode.clone()),
                 Event::Changes {
@@ -2780,6 +2800,8 @@ enum Input {
     RewindTo(RequestId, Option<String>),
     UndoRewind,
     Command(AgentCommand),
+    /// Settings now allow the agent's modes that skip every approval, or no longer do.
+    AllowUnsafe(bool),
     Line {
         generation: u64,
         line: String,
@@ -2844,6 +2866,10 @@ struct Actor {
     /// The process the agent's sessions share, when it runs them so, and whether this one is in it.
     shared: Option<shared::Shared>,
     attached: bool,
+    /// The running process was launched while Settings allowed the unsafe modes.
+    launched_unsafe: bool,
+    /// Launch it again once the turn ends: it refused a mode Settings allow now.
+    relaunch: bool,
 }
 
 impl Actor {
@@ -2900,6 +2926,8 @@ impl Actor {
             remote_at_start: false,
             shared: None,
             attached: false,
+            launched_unsafe: false,
+            relaunch: false,
         }
     }
 
@@ -3209,6 +3237,35 @@ impl Actor {
         self.remote_gone();
     }
 
+    /// The agent would not switch to `mode`. One that skips every approval, which Settings
+    /// allow now but did not when the process was launched, is had by launching it again in
+    /// it (after the turn under way); anything else the person is told.
+    async fn mode_refused(&mut self, mode: String, error: String) {
+        let unsafe_mode = skips_every_approval(self.adapter.id(), &mode);
+        if unsafe_mode && self.spec.allow_unsafe && !self.launched_unsafe {
+            self.spec.mode = Some(mode);
+            match self.busy {
+                true => self.relaunch = true,
+                false => self.relaunch().await,
+            }
+            return;
+        }
+        (self.sink)(Event::Notice {
+            session: self.id,
+            text: format!("The mode did not change: {error}"),
+        });
+    }
+
+    /// End the agent and start it again on the same conversation, as `spec` says now; one
+    /// reachable from another device is made so again.
+    async fn relaunch(&mut self) {
+        self.remote_at_start |= self.remote;
+        self.stop().await;
+        if let Err(error) = self.ensure_running().await {
+            self.status(SessionStatus::Failed(error));
+        }
+    }
+
     /// The agent's process ended, and the other device lost the session with it.
     fn remote_gone(&mut self) {
         if std::mem::take(&mut self.remote) {
@@ -3275,13 +3332,25 @@ impl Actor {
                 Input::Rewind(request) => self.rewind(request).await,
                 Input::RewindTo(request, at) => self.rewind_to(request, at).await,
                 Input::UndoRewind => self.undo_rewind().await,
+                Input::AllowUnsafe(allow) => self.spec.allow_unsafe = allow,
                 Input::Command(command) => {
                     // A launch after this one runs at what was chosen last.
                     match &command {
                         AgentCommand::SetModel(model) => self.spec.model = Some(model.clone()),
                         AgentCommand::SetEffort(effort) => self.spec.effort = Some(effort.clone()),
-                        // Also when no process runs yet (a session read back): the next starts in it.
-                        AgentCommand::SetMode(mode) => self.spec.mode = Some(mode.clone()),
+                        // Also when no process runs yet (a session read back): the next starts
+                        // in it, and it is the session's mode now, kept for a restart.
+                        AgentCommand::SetMode(mode) => {
+                            self.spec.mode = Some(mode.clone());
+                            if self.process.is_none() && !self.attached {
+                                (self.sink)(Event::Agent {
+                                    session: self.id,
+                                    request: None,
+                                    event: AgentEvent::ModeChanged { mode: mode.clone() },
+                                });
+                                continue;
+                            }
+                        }
                         // Reaching the session from another device needs its agent running.
                         AgentCommand::Remote { on: true, .. } => {
                             if let Err(error) = self.ensure_running().await {
@@ -3318,6 +3387,8 @@ impl Actor {
                 Input::Exited { generation, code } if generation == self.generation => {
                     self.process = None;
                     self.attached = false;
+                    // The next launch takes the mode from Settings anyway.
+                    self.relaunch = false;
                     self.remote_gone();
                     self.running = None;
                     self.busy = false;
@@ -3353,6 +3424,15 @@ impl Actor {
         if self.process.is_some() || self.attached {
             return Ok(());
         }
+        // Settings' rule at every launch: a mode that skips every approval only while they
+        // allow it; otherwise the agent starts in its own.
+        let mode = self.spec.mode.as_deref();
+        if !self.spec.allow_unsafe
+            && mode.is_some_and(|m| skips_every_approval(self.adapter.id(), m))
+        {
+            self.spec.mode = None;
+        }
+        self.launched_unsafe = self.spec.allow_unsafe;
         if let Some(shared) = &self.shared {
             // The adapter takes the session's spec as it launches, though the process is shared.
             let _ = self.adapter.launch(&self.spec);
@@ -3478,6 +3558,10 @@ impl Actor {
                 });
                 continue;
             }
+            if let AgentEvent::ModeRefused { mode, error } = event {
+                self.mode_refused(mode, error).await;
+                continue;
+            }
             // A message from another device is the person's, kept and shown as if typed here,
             // and what its turn changes is its own.
             if let AgentEvent::Prompt { request, text } = event {
@@ -3538,6 +3622,14 @@ impl Actor {
                     let _ = quill_files::open_in_system(url);
                 }
                 _ => {}
+            }
+            // The mode the agent is in (left planning, say) is the one a later launch keeps.
+            if let AgentEvent::ModeChanged { mode }
+            | AgentEvent::Ready {
+                mode: Some(mode), ..
+            } = &event
+            {
+                self.spec.mode = Some(mode.clone());
             }
             // Settings' new sessions are reachable from another device from their start.
             let connect = matches!(&event, AgentEvent::Ready { capabilities, .. } if capabilities.remote)
@@ -3601,6 +3693,9 @@ impl Actor {
                 self.attribute().await;
                 self.running = None;
                 self.busy = false;
+                if std::mem::take(&mut self.relaunch) {
+                    self.relaunch().await;
+                }
                 self.status(SessionStatus::Idle);
                 let text = std::mem::take(&mut self.last_text);
                 self.tell(Internal::TurnEnded {
@@ -4764,6 +4859,39 @@ mod tests {
         ]
         .concat();
         assert!(!Restored::from(&unarchived).unwrap().archived);
+    }
+
+    /// The mode a session comes back in is the last it ran in: the one it started in (its
+    /// `Ready`) counts as much as a switch, so bypass started with is not lost to a restart.
+    #[test]
+    fn a_restored_session_goes_on_in_the_mode_it_was_last_in() {
+        let agent = |event| Event::Agent {
+            session: 1,
+            request: None,
+            event,
+        };
+        let ready = |mode: Option<&str>| {
+            agent(AgentEvent::Ready {
+                version: "1".into(),
+                capabilities: Default::default(),
+                mode: mode.map(str::to_owned),
+            })
+        };
+        let mut events = vec![
+            Event::SessionCreated {
+                session: 1,
+                agent: "claude".into(),
+                cwd: "/work".into(),
+            },
+            ready(Some("bypassPermissions")),
+            ready(None),
+        ];
+        let mode = |events: &[Event]| Restored::from(events).unwrap().new.mode;
+        assert_eq!(mode(&events).as_deref(), Some("bypassPermissions"));
+        events.push(agent(AgentEvent::ModeChanged {
+            mode: "acceptEdits".into(),
+        }));
+        assert_eq!(mode(&events).as_deref(), Some("acceptEdits"));
     }
 
     #[test]

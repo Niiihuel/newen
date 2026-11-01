@@ -56,6 +56,8 @@ pub struct Claude {
     /// quill's tool calls waiting for the engine: the control request's id and the JSON-RPC id
     /// the answer goes back under.
     host_calls: HashMap<String, Value>,
+    /// `set_permission_mode` requests waiting for their answers, with the mode asked for.
+    mode_requests: HashMap<String, String>,
     /// The `remote_control` request waiting for its answer, and whether it turns it on.
     remote_request: Option<(String, bool)>,
     /// Remote Control is on, as the CLI last said.
@@ -858,7 +860,9 @@ impl AgentAdapter for Claude {
             }
             AgentCommand::Decide { id, decision } => self.decide(id, decision),
             AgentCommand::SetMode(mode) => {
-                vec![self.request(json!({ "subtype": "set_permission_mode", "mode": mode }))]
+                let line = self.request(json!({ "subtype": "set_permission_mode", "mode": mode }));
+                self.mode_requests.insert(self.last_request_id(), mode);
+                vec![line]
             }
             AgentCommand::SetModel(model) => {
                 vec![self.request(json!({ "subtype": "set_model", "model": model }))]
@@ -994,6 +998,21 @@ impl AgentAdapter for Claude {
                         on: self.remote,
                         url: body["session_url"].as_str().map(str::to_owned),
                         error: (!ok).then(|| text(&response["error"])),
+                    });
+                    return decoded;
+                }
+                // Verified on 2.1.316: a session launched without
+                // `--allow-dangerously-skip-permissions` answers bypass with an error, and a
+                // switch made answers `{mode}` (its `system/status` follows).
+                if let Some(mode) = self.mode_requests.remove(&id) {
+                    decoded.events.push(match ok {
+                        true => AgentEvent::ModeChanged {
+                            mode: body["mode"].as_str().map_or(mode, str::to_owned),
+                        },
+                        false => AgentEvent::ModeRefused {
+                            mode,
+                            error: text(&response["error"]),
+                        },
                     });
                     return decoded;
                 }
