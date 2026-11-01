@@ -319,6 +319,8 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
         download(&agent, &files(), &wrong, folder.path(), |_, _| {}),
         Err(Error::Digest)
     );
+    // The earlier release's bundle is not kept beside it.
+    assert!(!path.exists());
     assert!(!folder
         .path()
         .join(format!("quill-{}.part", wrong.sha256))

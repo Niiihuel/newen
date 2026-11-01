@@ -130,7 +130,11 @@ impl Updates {
                     })
                 });
             match installed {
-                Ok(program) => updates.set(UpdateState::Installed { version, program }),
+                Ok(program) => {
+                    // A whole bundle with CEF: it is not kept once installed.
+                    let _ = std::fs::remove_file(&file);
+                    updates.set(UpdateState::Installed { version, program })
+                }
                 Err(error) => updates.set(failure(error)),
             }
         });

@@ -511,6 +511,14 @@ pub fn download(
     let done = folder.join(format!("quill-{digest}"));
     let part = folder.join(format!("quill-{digest}.part"));
     std::fs::create_dir_all(folder).map_err(disk)?;
+    // Another release's download, done or partial, is never resumed: it goes.
+    for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("quill-") && !name.starts_with(&format!("quill-{digest}")) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
     // Downloaded by an earlier try whose installation failed.
     if sha256(&done).is_ok_and(|found| found == digest) {
         return Ok(done);
