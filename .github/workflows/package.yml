@@ -1,0 +1,250 @@
+# The bundles a release ships, one per platform (docs/UPDATES.md): quill with the CEF it was
+# built against. release.yml calls it for a tag (macOS signed and notarized). Run alone, on a
+# pull request that touches packaging or by hand, it shows the bundles come out: macOS is then
+# signed when the secrets are there (else ad hoc) and never notarized.
+name: Package
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: A release's bundles; macOS must be signed and notarized.
+        type: boolean
+        default: false
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/package.sh
+      - .github/workflows/package.yml
+      - .github/workflows/release.yml
+      - apps/quill/build.rs
+      - apps/quill/assets/**
+      - crates/quill-browser/**
+      - crates/quill-update/**
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The symbols stay, for a panic's backtrace in the log.
+  CARGO_PROFILE_RELEASE_STRIP: debuginfo
+
+# Actions are pinned by commit, the release they were in beside it.
+jobs:
+  linux:
+    name: Linux x86_64
+    # glibc 2.39 and the libraries below are what Ubuntu 24.04 has (docs/UPDATES.md#linux).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # limn is a path dependency (Cargo.toml): its branch, beside this checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Niiihuel/limn
+          ref: quill/integration
+          token: ${{ secrets.LIMN_READ_TOKEN || github.token }}
+          path: limn-quill-integration
+      - name: limn beside the workspace, where its path says
+        run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
+      # The distribution's libraries, not Nix's: the program must find them where every
+      # distribution keeps them. The equivalents of quill's shell.nix.
+      - name: build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config clang libclang-dev \
+            libwayland-dev libxkbcommon-dev libgbm-dev
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: package
+      - id: cef
+        name: where CEF is downloaded, and its version
+        run: |
+          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+          echo "version=$(grep -A1 '^name = "cef-dll-sys"' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
+      - run: cargo build --release --locked -p quill
+      - run: scripts/package.sh linux target/release dist
+      # The libraries it needs at run time, in the log (docs/UPDATES.md#linux).
+      - run: ldd dist/quill/quill
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quill-linux
+          path: dist/quill-x86_64-linux.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    # A release builds it once the owner sets the repository variable QUILL_WINDOWS_RELEASES to
+    # "true" (docs/UPDATES.md#windows); a pull request or a run by hand always does.
+    if: ${{ !inputs.release || vars.QUILL_WINDOWS_RELEASES == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Git's bash would turn /… arguments into paths.
+      MSYS_NO_PATHCONV: "1"
+    steps:
+      # The sources as they are in the repository: Git for Windows would turn their line ends
+      # into CRLF.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Niiihuel/limn
+          ref: quill/integration
+          token: ${{ secrets.LIMN_READ_TOKEN || github.token }}
+          path: limn-quill-integration
+      - name: limn beside the workspace, where its path says
+        run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          toolchain: 1.95.0
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: package
+      - id: cef
+        name: where CEF is downloaded, and its version
+        run: |
+          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+          echo "version=$(grep -A1 '^name = "cef-dll-sys"' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
+      - name: build
+        env:
+          # The C runtime inside quill.exe, so no Visual C++ Redistributable has to be installed
+          # (CEF's wrapper is built against the static one too); with --target it reaches only
+          # the program, not build scripts.
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p quill
+      - run: scripts/package.sh windows target/x86_64-pc-windows-msvc/release dist
+      # Its entries flat at the root: quill.exe beside CEF's files.
+      - run: cd dist/quill && 7z a -tzip -mx=9 ../quill-x86_64-windows.zip -- *
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quill-windows
+          path: dist/quill-x86_64-windows.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64
+    # A release builds it once the owner sets the repository variable QUILL_MACOS_RELEASES to
+    # "true" and the signing secrets (docs/UPDATES.md#macos); a pull request always does.
+    if: ${{ !inputs.release || vars.QUILL_MACOS_RELEASES == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Niiihuel/limn
+          ref: quill/integration
+          token: ${{ secrets.LIMN_READ_TOKEN || github.token }}
+          path: limn-quill-integration
+      - name: limn beside the workspace, where its path says
+        run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          toolchain: 1.95.0
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: package
+      - id: cef
+        name: where CEF is downloaded, and its version
+        run: |
+          echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+          echo "version=$(grep -A1 '^name = "cef-dll-sys"' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
+      # quill and the helper apps' program (quill-helper).
+      - run: cargo build --release --locked --target aarch64-apple-darwin -p quill -p quill-browser --bins
+      - run: scripts/package.sh macos target/aarch64-apple-darwin/release dist
+      - name: sign
+        env:
+          RELEASE: ${{ inputs.release && 'true' || '' }}
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [ -n "$CERTIFICATE" ]; then
+            keychain=$RUNNER_TEMP/signing.keychain-db
+            password=$(openssl rand -hex 16)
+            echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security create-keychain -p "$password" "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p "$password" "$keychain"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" \
+              -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+            rm "$RUNNER_TEMP/certificate.p12"
+            sign=(--sign "$IDENTITY" --timestamp)
+          elif [ -n "$RELEASE" ]; then
+            echo "a release must be signed: the MACOS_CERTIFICATE secrets are missing" >&2
+            exit 1
+          else
+            sign=(--sign - --timestamp=none)
+          fi
+          app=dist/quill.app
+          framework="$app/Contents/Frameworks/Chromium Embedded Framework.framework"
+          entitlements=apps/quill/assets/quill.entitlements
+          # From the inside out: the framework's libraries, the framework, the helpers, quill.
+          find "$framework" -name '*.dylib' -print0 |
+            xargs -0 codesign --force --options runtime "${sign[@]}"
+          codesign --force --options runtime "${sign[@]}" "$framework"
+          for helper in "$app"/Contents/Frameworks/*.app; do
+            codesign --force --options runtime --entitlements "$entitlements" "${sign[@]}" "$helper"
+          done
+          codesign --force --options runtime --entitlements "$entitlements" "${sign[@]}" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+      - name: notarize
+        if: ${{ inputs.release }}
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/key.p8"
+          ditto -c -k --keepParent dist/quill.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$RUNNER_TEMP/key.p8" \
+            --key-id "$API_KEY_ID" --issuer "$API_ISSUER" --wait --timeout 60m \
+            --output-format json | tee "$RUNNER_TEMP/notary.json"
+          rm "$RUNNER_TEMP/key.p8"
+          status=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["status"])' \
+            "$RUNNER_TEMP/notary.json")
+          if [ "$status" != Accepted ]; then
+            echo "Apple did not accept quill.app; its log: xcrun notarytool log <id>" >&2
+            exit 1
+          fi
+          xcrun stapler staple dist/quill.app
+          spctl --assess --type execute --verbose=2 dist/quill.app
+      - run: ditto -c -k --keepParent dist/quill.app dist/quill-aarch64-macos.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quill-macos
+          path: dist/quill-aarch64-macos.zip
+          compression-level: 0
+          if-no-files-found: error
+      - name: forget the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
