@@ -3002,6 +3002,20 @@ pub fn add_images(ui: &mut Ui, paths: Vec<PathBuf>) {
     ui.images.extend(paths.into_iter().take(room));
 }
 
+/// A picture pasted into the composer, for the host to save and add: its width, height and
+/// RGBA pixels.
+pub fn pasted_image(action: &limn::UiAction) -> Option<(usize, usize, &std::sync::Arc<[u8]>)> {
+    match action {
+        limn::UiAction::PasteImage {
+            target: Some(target),
+            width,
+            height,
+            rgba,
+        } if target == view::COMPOSER => Some((*width, *height, rgba)),
+        _ => None,
+    }
+}
+
 /// The images the host decodes thumbnails for: the composer's and those of the shown session's
 /// messages.
 /// The name a server's logo is looked up and kept by: the Connectors page's label for the

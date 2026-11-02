@@ -10951,3 +10951,114 @@ fn a_new_page_centers_the_greeting_over_the_card_then_the_composer_docks() {
     );
     assert!(docked > 1200.0 - 140.0, "composer not docked: {docked}");
 }
+
+/// One frame of the window's input, as egui-winit 0.37 hands a Ctrl+V over (the key press
+/// kept, its release left): limn-egui's translation, the tree, `update`, the view again.
+fn egui_frame(
+    store: &Store,
+    ui: &mut Ui,
+    tree: &mut UiTree,
+    events: Vec<eframe::egui::Event>,
+) -> Vec<UiAction> {
+    use eframe::egui;
+    let ctx = egui::Context::default();
+    let mut translated = Vec::new();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            limn_egui::normalize_keyboard_input(ui.ctx());
+            translated = limn_egui::events(ui.ctx(), egui::Pos2::ZERO);
+        },
+    );
+    output.textures_delta.clear();
+    let mut actions = Vec::new();
+    for event in translated {
+        for action in tree.handle_event(event) {
+            update(store, ui, &action);
+            actions.push(action);
+        }
+    }
+    tree.set_root(view(store, ui, BIG_WINDOW));
+    tree.layout(BIG_WINDOW);
+    actions
+}
+
+fn ctrl_v_release() -> eframe::egui::Event {
+    eframe::egui::Event::Key {
+        key: eframe::egui::Key::V,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: eframe::egui::Modifiers::CTRL,
+    }
+}
+
+/// Text pasted into `field`, focused in the window `store` and `ui` show.
+fn paste_into(store: &Store, ui: &mut Ui, field: &str, text: &str) {
+    let mut tree = UiTree::new(view(store, ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.layout(BIG_WINDOW);
+    assert!(tree.focus(field), "{field} takes the focus");
+    egui_frame(
+        store,
+        ui,
+        &mut tree,
+        vec![eframe::egui::Event::Paste(text.into()), ctrl_v_release()],
+    );
+    // A frame later, as the window goes on: the composer keeps what was pasted.
+    egui_frame(store, ui, &mut tree, vec![]);
+}
+
+#[test]
+fn text_pastes_into_the_composer_of_a_new_conversation() {
+    let store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    paste_into(&store, &mut ui, view::COMPOSER, "pegado ñ\nsecond line");
+    assert_eq!(ui.prompt, "pegado ñ\nsecond line");
+}
+
+#[test]
+fn text_pastes_into_the_composer_of_a_session() {
+    let (store, mut ui) = store_with_session();
+    paste_into(&store, &mut ui, view::COMPOSER, "pasted");
+    assert_eq!(ui.prompt, "pasted");
+}
+
+#[test]
+fn text_pastes_into_the_title_and_the_search() {
+    let (store, mut ui) = store_with_session();
+    ui.title_edit = Some(String::new());
+    paste_into(&store, &mut ui, view::TITLE_FIELD, "New title");
+    assert_eq!(ui.title_edit.as_deref(), Some("New title"));
+    let (store, mut ui) = store_with_session();
+    ui.search = Some(String::new());
+    paste_into(&store, &mut ui, view::SEARCH_FIELD, "bug");
+    assert_eq!(ui.search.as_deref(), Some("bug"));
+}
+
+/// An image copied with no text: egui-winit hands it over as a pasted picture, which joins the
+/// composer's images (the host saves it, off the window's thread).
+#[test]
+fn a_pasted_picture_is_the_composer_s() {
+    let (store, mut ui) = store_with_session();
+    let mut tree = UiTree::new(view(&store, &ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.layout(BIG_WINDOW);
+    let image = eframe::egui::ColorImage::new([1, 1], vec![eframe::egui::Color32::RED]);
+    let paste = || {
+        vec![eframe::egui::Event::PasteImage(std::sync::Arc::new(
+            image.clone(),
+        ))]
+    };
+    // Nowhere to put it with the composer not focused.
+    let actions = egui_frame(&store, &mut ui, &mut tree, paste());
+    assert!(actions.iter().all(|a| pasted_image(a).is_none()));
+    assert!(tree.focus(view::COMPOSER));
+    let actions = egui_frame(&store, &mut ui, &mut tree, paste());
+    let pictures: Vec<_> = actions.iter().filter_map(pasted_image).collect();
+    assert_eq!(pictures, [(1, 1, &std::sync::Arc::from([255, 0, 0, 255]))]);
+}

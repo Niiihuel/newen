@@ -65,8 +65,6 @@ struct App {
     attached: Arc<Mutex<Vec<PathBuf>>>,
     /// Images pasted from the clipboard, saved, waiting to join the composer's.
     pasted: Arc<Mutex<Vec<PathBuf>>>,
-    /// V is down as a key of its own, not as a paste egui-winit kept.
-    v_down: bool,
     /// The engine has retold the kept sessions; events from here on are news.
     restored: bool,
     /// Thumbnails decoded off the window's thread, and the images asked for so far (each once).
@@ -224,6 +222,14 @@ impl App {
         if self.tree.focused_id() != Some(quill_ui::view::TERMINAL) {
             return false;
         }
+        let folder = quill_ui::folder(&self.store, &self.ui);
+        let terminal = self.terminals.get_mut(&folder).and_then(|t| t.active_mut());
+        if let limn::UiEvent::Paste(text) = event {
+            if let Some(terminal) = terminal {
+                terminal.paste(text);
+            }
+            return true;
+        }
         let bytes = match event {
             limn::UiEvent::Text(text) => text.as_bytes().to_vec(),
             limn::UiEvent::Key {
@@ -237,8 +243,7 @@ impl App {
             }
             _ => return false,
         };
-        let folder = quill_ui::folder(&self.store, &self.ui);
-        if let Some(terminal) = self.terminals.get_mut(&folder).and_then(|t| t.active_mut()) {
+        if let Some(terminal) = terminal {
             terminal.write(&bytes);
         }
         true
@@ -806,26 +811,6 @@ impl eframe::App for App {
                 .collect::<Vec<_>>()
         }));
         self.add_files(files);
-        // Ctrl+V (Cmd+V on macOS) in the composer: egui pastes text only, so the clipboard is
-        // asked for an image too. egui-winit 0.36 keeps a paste's key press for itself, so a V
-        // released without its press is a paste, whatever was let go first; text pastes go on.
-        let mut pasting = false;
-        ctx.input(|i| {
-            for event in &i.events {
-                if let egui::Event::Key {
-                    key: egui::Key::V,
-                    pressed,
-                    ..
-                } = event
-                {
-                    pasting |= !*pressed && !self.v_down;
-                    self.v_down = *pressed;
-                }
-            }
-        });
-        if pasting && self.tree.focused_id() == Some(quill_ui::view::COMPOSER) {
-            images::paste(self.pasted.clone(), ctx.clone());
-        }
         let pasted = std::mem::take(&mut *self.pasted.lock().unwrap());
         if !pasted.is_empty() {
             quill_ui::add_images(&mut self.ui, pasted);
@@ -1214,6 +1199,14 @@ impl eframe::App for App {
             }
             if let limn::UiAction::CopyRequested { text } = &action {
                 ctx.copy_text(text.clone());
+            }
+            // An image copied with no text, pasted into the composer: saved off this thread.
+            if let Some((width, height, rgba)) = quill_ui::pasted_image(&action) {
+                images::paste(
+                    self.pasted.clone(),
+                    ctx.clone(),
+                    (width, height, rgba.clone()),
+                );
             }
             if matches!(&action, limn::UiAction::Clicked { id } if id == quill_ui::view::PICK_FOLDER)
             {
@@ -1972,7 +1965,6 @@ fn main() -> eframe::Result {
                 skill_file: Arc::default(),
                 attached: Arc::default(),
                 pasted: Arc::default(),
-                v_down: false,
                 restored: false,
                 thumbs_done: Arc::default(),
                 thumbs_asked: Default::default(),

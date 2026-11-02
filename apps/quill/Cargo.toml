@@ -34,8 +34,6 @@ quill-link = { path = "../../crates/quill-link" }
 # already in the tree).
 sha2 = "0.10"
 base64 = "0.22"
-# Clipboard images: egui pastes text only; Wayland's own clipboard through data-control.
-arboard = { version = "3.7", features = ["wayland-data-control"] }
 # Thumbnails of the attached images, PNG for pasted ones, and the window's icon.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # The QR code of a session's Remote Control link, for a phone's camera.

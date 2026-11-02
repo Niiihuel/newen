@@ -130,6 +130,13 @@ impl Terminal {
         let _ = self.writer.flush();
     }
 
+    /// Pasted text, wrapped in the bracketed-paste marks when the program asked for them
+    /// (shells and editors then take it as text, not as typed keys).
+    pub fn paste(&mut self, text: &str) {
+        let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
+        self.write(&pasted_bytes(text, bracketed));
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let (current_rows, current_cols) = self.parser.lock().unwrap().screen().size();
         if (cols, rows) == (current_cols, current_rows) || cols == 0 || rows == 0 {
@@ -454,9 +461,24 @@ pub fn key_bytes(key: Key, ctrl: bool, shift: bool) -> Option<Vec<u8>> {
     })
 }
 
+fn pasted_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    if !bracketed {
+        return text.as_bytes().to_vec();
+    }
+    // The end mark inside the text would close the paste early.
+    let text = text.replace("\x1b[201~", "");
+    [b"\x1b[200~", text.as_bytes(), b"\x1b[201~"].concat()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paste_is_bracketed_when_the_program_asks() {
+        assert_eq!(pasted_bytes("a\nb", false), b"a\nb");
+        assert_eq!(pasted_bytes("a\x1b[201~b", true), b"\x1b[200~ab\x1b[201~");
+    }
 
     #[test]
     fn keys_become_what_a_terminal_sends() {

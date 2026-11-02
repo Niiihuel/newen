@@ -492,7 +492,7 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
 
 **Imágenes** (`crates/quill-ui/src/lib.rs`: `is_image`, `add_images`; `apps/quill/src/images.rs`).
 
-- **Fuentes:** Ctrl+V (Cmd+V en macOS) con el composer enfocado pega la imagen del portapapeles, si la hay; el texto se pega como siempre. Arrastrar a la ventana y "+" › "Add files or photos". Son imágenes PNG, JPEG, GIF y WebP por extensión; los demás archivos siguen como @-menciones.
+- **Fuentes:** Ctrl+V (Cmd+V en macOS) con el composer enfocado pega el texto del portapapeles del sistema o, si no tiene texto, su imagen (la lee egui-winit, con la función `clipboard` de eframe). En la terminal el texto va entre las marcas de bracketed paste cuando el programa las pidió. Arrastrar a la ventana y "+" › "Add files or photos". Son imágenes PNG, JPEG, GIF y WebP por extensión; los demás archivos siguen como @-menciones.
 - **Límite:** 20 imágenes por mensaje. Las que sobran no entran y el composer dice "Maximum of 20 images allowed.". El motor revisa formato y tamaño al enviar.
 - **Miniatura:** cuadrado de 85 px, esquinas redondeadas, recorte "cover". Se decodifica en un hilo, a 256 px como máximo, una sola vez por imagen; mientras tanto, o si no decodifica, muestra el icono de archivo. En la transcripción, las imágenes de un mensaje van encima del globo, alineadas a la derecha (`image:msg:{request}:{índice}`).
 - **Pegadas:** se guardan como PNG en `attachments/`, junto a la base de datos de quill (`…/quill/attachments/pasted-<milisegundos>.png`), antes de mostrarse.
