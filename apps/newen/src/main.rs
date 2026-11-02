@@ -1771,7 +1771,7 @@ fn open_in_editor(
     line: Option<u32>,
 ) {
     let target = path.unwrap_or(root);
-    if editor != newen_ui::view::QUILL_IDE {
+    if editor != newen_ui::view::NEWEN_IDE {
         let shown = target.display().to_string();
         // As Desktop: a path the URL would have to escape is not sent at all.
         if shown.contains(['%', '#', '?', '\\']) || shown.chars().any(char::is_whitespace) {
@@ -1808,9 +1808,9 @@ fn open_in_editor(
     // Beside quill when they were built together, else the one on PATH.
     let program = std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join("quill-ide")))
+        .and_then(|exe| Some(exe.parent()?.join(newen_ui::view::NEWEN_IDE)))
         .filter(|p| p.is_file())
-        .unwrap_or_else(|| "quill-ide".into());
+        .unwrap_or_else(|| newen_ui::view::NEWEN_IDE.into());
     let mut command = newen_files::command(program);
     command.arg(root);
     if let Some(path) = path {
@@ -1820,7 +1820,7 @@ fn open_in_editor(
         });
     }
     if let Err(error) = command.spawn() {
-        eprintln!("quill: quill-ide did not start: {error}");
+        eprintln!("quill: newen-ide did not start: {error}");
     }
 }
 

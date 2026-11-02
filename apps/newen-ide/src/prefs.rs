@@ -27,7 +27,7 @@ pub struct Prefs {
     pub spaces: bool,
     pub wrap: bool,
     pub minimap: bool,
-    /// The file icons' pack: `packs::QUILL`, `packs::MATERIAL`, or a theme's key.
+    /// The file icons' pack: `packs::NEWEN`, `packs::MATERIAL`, or a theme's key.
     pub icons: String,
     /// Folders the person added to look for icon themes in, beside the editors' own.
     pub icon_folders: Vec<PathBuf>,
@@ -58,10 +58,16 @@ pub fn path() -> PathBuf {
 
 /// The ones kept, or the defaults when there are none or they can't be read.
 pub fn load() -> Prefs {
-    std::fs::read_to_string(path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    read(&std::fs::read_to_string(path()).unwrap_or_default())
+}
+
+/// Prefs kept as `text`; quill-ide's own icon pack, as it saved it, is Newen's.
+fn read(text: &str) -> Prefs {
+    let mut prefs: Prefs = serde_json::from_str(text).unwrap_or_default();
+    if prefs.icons == packs::LEGACY_NEWEN {
+        prefs.icons = packs::NEWEN.into();
+    }
+    prefs
 }
 
 const SWITCHES: [&str; 4] = ["vim", "wrap", "minimap", "spaces"];
@@ -115,7 +121,7 @@ pub fn pages(
     let mut families = choices(&[("", "System monospace")]);
     families.extend(fonts.iter().map(|f| (f.clone(), f.clone())));
     let mut packs = choices(&[
-        (packs::QUILL, "quill"),
+        (packs::NEWEN, "Newen"),
         (packs::MATERIAL, "Material Icon Theme"),
     ]);
     packs.extend(offered.iter().map(|o| (o.key.clone(), o.label.clone())));
@@ -234,7 +240,10 @@ mod tests {
         let json = serde_json::to_string(&prefs).unwrap();
         assert_eq!(serde_json::from_str::<Prefs>(&json).unwrap(), prefs);
         // What a later version adds is filled in from the defaults.
-        let old: Prefs = serde_json::from_str(r#"{"vim": false}"#).unwrap();
+        let old = read(r#"{"vim": false}"#);
         assert_eq!((old.vim, old.font_size), (false, 13));
+        // quill-ide's own pack is Newen's; nothing kept, the defaults.
+        assert_eq!(read(r#"{"icons": "quill"}"#).icons, packs::NEWEN);
+        assert_eq!(read(""), Prefs::default());
     }
 }

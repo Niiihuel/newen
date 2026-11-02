@@ -3964,6 +3964,10 @@ fn read_settings(path: Option<&std::path::Path>) -> newen_model::Settings {
     if std::mem::take(&mut settings.wide) && settings.width == newen_model::Width::Narrow {
         settings.width = newen_model::Width::Medium;
     }
+    // quill's own editor, as quill saved it.
+    if settings.editor == "quill-ide" {
+        settings.editor = "newen-ide".into();
+    }
     settings
 }
 
@@ -5462,15 +5466,16 @@ mod tests {
     }
 
     #[test]
-    fn the_old_wide_column_reads_as_medium_and_env_lines_as_pairs() {
-        let path = std::env::temp_dir().join(format!("quill-wide-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"wide": true}"#).unwrap();
+    fn the_old_wide_column_reads_as_medium_quill_s_editor_as_newen_s_and_env_lines_as_pairs() {
+        let path = std::env::temp_dir().join(format!("newen-wide-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"wide": true, "editor": "quill-ide"}"#).unwrap();
         let settings = read_settings(Some(&path));
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             (settings.width, settings.wide),
             (newen_model::Width::Medium, false)
         );
+        assert_eq!(settings.editor, "newen-ide");
         let lines = [
             "A=1".to_owned(),
             "B = two".into(),

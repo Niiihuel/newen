@@ -85,8 +85,8 @@ pub const OPEN_FILE_MENU: &str = "open-file-menu:";
 pub const OPEN_FILE_IN: &str = "open-file-in:";
 /// The top bar's "Open in" menu, of the folder on screen.
 pub const OPEN_IN_MENU: &str = "open-in-menu";
-/// quill's own editor, offered whatever else is installed.
-pub const QUILL_IDE: &str = "quill-ide";
+/// Newen's own editor, offered whatever else is installed.
+pub const NEWEN_IDE: &str = "newen-ide";
 pub const DIFF_CLOSE: &str = "pane:diff:close";
 pub const PANEL_TOGGLE: &str = "panel:toggle";
 /// Asks the host for the platform folder picker; the host sets `Ui::cwd` with the answer.
@@ -873,7 +873,7 @@ fn files_pane(ui: &Ui, width: f32, height: f32, palette: ComponentPalette) -> El
         column.push(if pane.filter.is_empty() {
             tree::view(
                 &pane.tree,
-                &Pack::Quill,
+                &Pack::Newen,
                 tree::Look::Desktop,
                 shown.as_deref(),
                 None,
@@ -1657,7 +1657,7 @@ fn open_in_entries(target: &str, ui: &Ui) -> Vec<limn::DropdownMenuEntry> {
 fn open_in_rows(prefix: &str, target: &str, ui: &Ui) -> Vec<limn::DropdownMenuEntry> {
     let mut entries = vec![
         limn::DropdownMenuEntry::Heading("Open in".into()),
-        limn::DropdownMenuItem::new(format!("{prefix}{QUILL_IDE}:{target}"), "quill-ide")
+        limn::DropdownMenuItem::new(format!("{prefix}{NEWEN_IDE}:{target}"), NEWEN_IDE)
             .icon(icons::of(icons::CODE))
             .into(),
     ];

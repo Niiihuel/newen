@@ -488,7 +488,7 @@ impl Ide {
             jobs.push(Job::LoadFont(prefs.editor_font.clone()));
         }
         let pack = match prefs.icons.as_str() {
-            packs::QUILL => Pack::Quill,
+            packs::NEWEN => Pack::Newen,
             key => {
                 jobs.extend(
                     key.strip_prefix(packs::THEME)
@@ -764,7 +764,7 @@ impl Ide {
         if name == "icons" {
             self.pack_error = None;
             match self.prefs.icons.as_str() {
-                packs::QUILL => self.pack = Pack::Quill,
+                packs::NEWEN => self.pack = Pack::Newen,
                 packs::MATERIAL => self.pack = Pack::Material,
                 key => jobs.extend(
                     key.strip_prefix(packs::THEME)
@@ -3304,9 +3304,9 @@ mod tests {
             matches!(&jobs[..], [Job::SavePrefs(_), Job::LoadPack(p)] if p == Path::new("/t/theme.json"))
         );
         // A theme that comes late, after another was chosen, is not put in use.
-        click(&mut ide, "set:icons=quill");
+        click(&mut ide, "set:icons=newen");
         ide.loaded(Loaded::Pack("/t/theme.json".into(), Ok(Theme::default())));
-        assert!(matches!(ide.pack, Pack::Quill));
+        assert!(matches!(ide.pack, Pack::Newen));
         let jobs = click(&mut ide, "set:vim");
         assert!(!ide.prefs.vim && matches!(&jobs[..], [Job::SavePrefs(p)] if !p.vim));
         click(&mut ide, SETTINGS_CLOSE);

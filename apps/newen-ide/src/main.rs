@@ -62,9 +62,9 @@ impl App {
             // Beside the IDE when they were built together, else the one on PATH.
             let program = std::env::current_exe()
                 .ok()
-                .and_then(|exe| Some(exe.parent()?.join("quill")))
+                .and_then(|exe| Some(exe.parent()?.join("newen")))
                 .filter(|p| p.is_file())
-                .unwrap_or_else(|| "quill".into());
+                .unwrap_or_else(|| "newen".into());
             if let Err(error) = newen_files::command(&program).spawn() {
                 self.ide.link_note = Some(format!("quill did not start: {error}"));
                 continue;

@@ -8,13 +8,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub const QUILL: &str = "quill";
+pub const NEWEN: &str = "newen";
+/// [`NEWEN`] as quill-ide, the IDE's name before, saved it.
+pub const LEGACY_NEWEN: &str = "quill";
 pub const MATERIAL: &str = "material";
 /// A theme's key: this, then the path of its JSON.
 pub const THEME: &str = "theme:";
 
 pub enum Pack {
-    Quill,
+    Newen,
     Material,
     Theme(Box<Theme>),
 }
@@ -49,7 +51,7 @@ impl Pack {
             .map(|n| n.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         let (icon, colored) = match self {
-            Pack::Quill => {
+            Pack::Newen => {
                 let drawing = match (dir, open) {
                     (true, true) => icons::FOLDER_OPEN,
                     (true, false) => icons::FOLDER,
@@ -62,7 +64,7 @@ impl Pack {
             Pack::Theme(theme) => match theme.svg(&name, dir, open) {
                 Some(svg) => (Icon::Custom(svg), true),
                 // A theme without a default falls back on quill's drawings.
-                None => return Pack::Quill.icon(path, dir, open),
+                None => return Pack::Newen.icon(path, dir, open),
             },
         };
         (icon, if colored { Color::WHITE } else { look::muted() })
