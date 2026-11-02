@@ -3304,6 +3304,8 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                     "env" => &mut adding.env,
                     "secret-env" => &mut adding.secret_env,
                     "secret-headers" => &mut adding.secret_headers,
+                    "client-id" => &mut adding.client_id,
+                    "client-secret" => &mut adding.client_secret,
                     _ => &mut adding.headers,
                 };
                 *field = value.clone();
@@ -4657,6 +4659,10 @@ pub struct AddServer {
     /// For "All agents": `KEY=value` and `Name: value` lines kept in the keychain.
     pub secret_env: String,
     pub secret_headers: String,
+    /// "Advanced settings" open, and the OAuth client of the person's own they hold.
+    pub advanced: bool,
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 /// "New skill" or "Import skill" for "All agents": what is typed.
@@ -4697,8 +4703,11 @@ impl AddServer {
                 },
                 remote,
                 scope: None,
-                client_id: None,
-                client_secret: None,
+                client_id: (remote && !self.client_id.trim().is_empty())
+                    .then(|| self.client_id.trim().to_owned()),
+                client_secret: (remote && !self.client_id.trim().is_empty())
+                    .then(|| self.client_secret.trim().to_owned())
+                    .filter(|s| !s.is_empty()),
                 env: lines(&self.env, '='),
                 headers: if remote {
                     lines(&self.headers, ':')
@@ -4746,12 +4755,90 @@ impl AddServer {
         })
     }
 
+    /// Why the address cannot be added as it is: plain `http` anywhere but this computer.
+    pub fn refused(&self) -> Option<&'static str> {
+        let target = self.target.trim();
+        let rest = target.strip_prefix("http://")?;
+        let host = address_host(rest);
+        let here = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+        (!here).then_some(
+            "Use an https:// address. Only a server on this computer (localhost) may be http://.",
+        )
+    }
+
     /// [`server`](Self::server) for `agent`, with the scope chosen for it.
     pub fn server_for(&self, agent: &str) -> Option<quill_model::NewServer> {
         let mut server = self.server()?;
         server.scope = self.scopes.get(agent).cloned();
         Some(server)
     }
+}
+
+/// What an address of "Add custom connector" should make the person look twice at: hidden
+/// characters, letters outside plain ASCII in its host (one can pass for another), a name or
+/// password before its host (which can hide the real one), and a host that does not hold any
+/// word of the connector's name.
+pub fn url_warnings(name: &str, target: &str) -> Vec<String> {
+    let target = target.trim();
+    let Some(rest) = target
+        .strip_prefix("https://")
+        .or_else(|| target.strip_prefix("http://"))
+    else {
+        return vec![];
+    };
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{00ad}')
+    };
+    let mut warnings = vec![];
+    if target.chars().any(hidden) {
+        warnings.push("The address has hidden characters in it.".to_owned());
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        warnings.push(
+            "The address has a name or password before its host, which can hide the real host."
+                .to_owned(),
+        );
+    }
+    let host = address_host(rest);
+    if !host.is_ascii() {
+        warnings.push(format!(
+            "{host} has letters outside plain ASCII, which can look like others."
+        ));
+    }
+    // Words of the name worth finding in the host: not "mcp", "server" and the like.
+    let words: Vec<String> = name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 3)
+        .filter(|w| !["mcp", "server", "api", "app", "the", "my"].contains(w))
+        .map(str::to_owned)
+        .collect();
+    let plain: String = host
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.')
+        .collect();
+    if !words.is_empty() && !host.is_empty() && !words.iter().any(|w| plain.contains(w.as_str())) {
+        warnings.push(format!(
+            "{host} doesn\u{2019}t look like {}\u{2019}s site. Make sure it\u{2019}s the one you mean.",
+            name.trim()
+        ));
+    }
+    warnings
+}
+
+/// The host of an address after its scheme, lowercased, without a name or password before it
+/// and without its port.
+fn address_host(rest: &str) -> String {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = if host.starts_with('[') {
+        host.split_inclusive(']').next().unwrap_or(host)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    host.to_lowercase()
 }
 
 /// What Customize asks before it removes: a plugin, or a marketplace with its plugins.
@@ -5177,6 +5264,10 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             let adding = c.adding.as_mut()?;
             adding.sse = !adding.sse;
         }
+        ("advanced", _) => {
+            let adding = c.adding.as_mut()?;
+            adding.advanced = !adding.advanced;
+        }
         // An agent the server goes to, ticked or not; one stays.
         ("to", agent) => {
             let adding = c.adding.as_mut()?;
@@ -5197,6 +5288,9 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ("cancel", _) => c.adding = None,
         // Each agent adds it with its own program, and keeps or fails on its own.
         ("save", _) => {
+            if c.adding.as_ref()?.refused().is_some() {
+                return Some(vec![]);
+            }
             let adding = c.adding.take()?;
             adding.server()?;
             let mut intents = vec![];

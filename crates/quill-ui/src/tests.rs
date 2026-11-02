@@ -1713,6 +1713,58 @@ fn a_custom_connector_is_an_address_or_a_command_with_its_settings() {
     assert!(adding.server().is_none());
 }
 
+/// "Add custom connector" warns of an address that hides something, or whose host is not the
+/// name's site; takes plain http only on this computer; and gives an OAuth client of the
+/// person's own to the server it adds.
+#[test]
+fn a_custom_connectors_address_is_warned_about_and_https_unless_local() {
+    let warned = |name: &str, url: &str| crate::url_warnings(name, url);
+    assert!(warned("github", "https://api.githubcopilot.com/mcp/").is_empty());
+    assert!(warned("my-server", "https://example.com/mcp").is_empty());
+    assert!(warned("github", "https://git\u{200b}hub.com/mcp")[0].contains("hidden characters"));
+    assert!(warned("github", "https://github.com@evil.example/mcp")
+        .iter()
+        .any(|w| w.contains("before its host")));
+    assert!(warned("github", "https://evil.example/mcp")[0]
+        .contains("evil.example doesn\u{2019}t look like github\u{2019}s site"));
+    assert!(warned("paypal", "https://p\u{0430}ypal.com/mcp")
+        .iter()
+        .any(|w| w.contains("outside plain ASCII")));
+    // A command is not an address.
+    assert!(warned("github", "npx -y server-github").is_empty());
+    let mut adding = crate::AddServer {
+        agents: vec!["claude".into()],
+        name: "linear".into(),
+        target: "http://mcp.linear.app/mcp".into(),
+        ..Default::default()
+    };
+    assert!(adding.refused().is_some());
+    adding.target = "http://localhost:3000/mcp".into();
+    assert!(adding.refused().is_none());
+    adding.target = "https://mcp.linear.app/mcp".into();
+    adding.client_id = " abc ".into();
+    adding.client_secret = "s3cret".into();
+    let server = adding.server().unwrap();
+    assert_eq!(server.client_id.as_deref(), Some("abc"));
+    assert_eq!(server.client_secret.as_deref(), Some("s3cret"));
+    // An address refused is not added from the dialog.
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    ui.connectors.adding = Some(crate::AddServer {
+        target: "http://example.com/mcp".into(),
+        ..adding
+    });
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    for c in &frame.commands {
+        if let limn::DrawCommand::Text { text, .. } = c {
+            eprintln!("T {text}");
+        }
+    }
+    assert!(drawn(&store, &ui, "Use an https:// address"));
+    assert!(click(&store, &mut ui, "srv:save").is_empty());
+    assert!(ui.connectors.adding.is_some());
+}
+
 #[test]
 fn inactive_sessions_are_the_ones_quiet_for_the_days_chosen() {
     let (mut store, _) = store_with_session();

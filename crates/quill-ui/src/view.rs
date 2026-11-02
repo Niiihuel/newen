@@ -10460,20 +10460,83 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
     body.extend(vec![
         label("Name"),
         field("name", &adding.name, "my-server"),
-        label("Address or command"),
+        note("Shown in the connectors list."),
+        label("MCP server URL, or command"),
         field(
             "target",
             &adding.target,
             "https://\u{2026}/mcp, or npx -y package",
         ),
-        note("An https:// address, or the command that starts it with its arguments."),
-        label("Environment variables"),
-        area("env", &adding.env, "KEY=value, one a line"),
+        note("The HTTPS address where the server accepts MCP requests, or the command that starts it on this computer with its arguments."),
     ]);
+    // What to look at twice before adding it, and why it cannot be added as it is.
+    let warn = |words: String, ink: limn::Color, icon: &'static str| {
+        Element::row(vec![
+            Element::icon(icons::of(icon))
+                .foreground(ink)
+                .size(Some(14.0), Some(14.0)),
+            text(words).font_size(SMALL).foreground(ink).flex(1.0),
+        ])
+        .gap(6.0)
+        .size(Some(460.0), None)
+    };
+    body.extend(
+        crate::url_warnings(&adding.name, &adding.target)
+            .into_iter()
+            .map(|w| warn(w, look::awaiting(), icons::WARNING)),
+    );
+    body.extend((adding.refused()).map(|w| warn(w.to_owned(), look::failed(), icons::ERROR)));
+    body.push(label("Environment variables"));
+    body.push(area("env", &adding.env, "KEY=value, one a line"));
     let remote = adding.target.trim_start().starts_with("http");
     if remote {
         body.push(label("Headers"));
         body.push(area("headers", &adding.headers, "Name: value, one a line"));
+    }
+    // "Advanced settings": an OAuth client of the person's own, for the agents that take one.
+    if remote {
+        body.push(Element::row(vec![keyed_button(
+            "srv:advanced",
+            "Advanced settings",
+            "",
+            adding.advanced,
+            true,
+            palette,
+        )]));
+    }
+    if remote && adding.advanced {
+        let cannot: Vec<&str> = (ui.agents.iter())
+            .filter(|a| adding.all || adding.agents.contains(&a.id))
+            .filter(|a| adding.all || !a.customize.oauth_client)
+            .map(|a| a.name.as_str())
+            .collect();
+        if adding.all || !cannot.is_empty() {
+            body.push(warn(
+                if adding.all {
+                    "quill\u{2019}s own layer can\u{2019}t take an OAuth client: each agent signs in by itself.".to_owned()
+                } else {
+                    format!("{} can\u{2019}t take an OAuth client of your own: it signs in by itself.", cannot.join(" and "))
+                },
+                look::muted(),
+                icons::LOCK,
+            ));
+        } else {
+            body.push(label("OAuth Client ID"));
+            body.push(field("client-id", &adding.client_id, "Optional"));
+            body.push(label("OAuth Client Secret"));
+            body.push(
+                limn::TextField::new(
+                    format!("{SRV_FIELD}client-secret"),
+                    &adding.client_secret,
+                    "Optional",
+                    palette,
+                )
+                .password(true)
+                .render()
+                .size(Some(460.0), Some(32.0)),
+            );
+            body.push(note("For a server that wants a client registered for it. The secret goes to the agent's program, never into its arguments."));
+        }
     }
     // A secret is kept in the system's keychain and reaches the agent only as a variable of
     // its process: only quill's own layer has them.
@@ -10555,7 +10618,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
             "Add",
             "",
             true,
-            adding.server().is_some(),
+            adding.server().is_some() && adding.refused().is_none(),
             palette,
         ),
     ])
