@@ -1,0 +1,25 @@
+# The notes of 0.1.9 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Updates download in the background and apply at the next start; a quiet notice says when one is ready.",
+    "A new version that cannot start rolls back to the one that worked.",
+    "Updates come from the public releases with no GitHub token, and download only the files that changed.",
+    "This version prepares quill's move to its new name, Newen: the next update brings it.",
+]
+improved = [
+    "Customize fits its tools in one row, its layer and sort menus work, and long lists scroll smoothly.",
+]
+fixed = [
+    "A message taken back to the composer no longer comes back.",
+    "What's new closes with its own button, and Settings keeps a card with the latest announcement and notes.",
+]
+
+[announcement]
+title = "quill is becoming Newen"
+body = "This is the last version called quill. Updates now arrive in the background, download only what changed, and roll back if a new version can't start. The next update brings Newen: the same app, with your sessions and settings carried over."
+bullets = [
+    "Updates apply at the next start, with a quiet notice.",
+    "Only the files that changed download; no token needed.",
+    "A version that fails to start rolls back on its own.",
+    "Next: Newen, with your sessions and settings carried over.",
+]
