@@ -645,9 +645,11 @@ pub enum Intent {
         session: SessionId,
         title: String,
     },
-    /// Show an OS banner, from the computer's own notifier, with quill's own sound if any
-    /// (the banner itself stays silent); nothing waits on it.
+    /// Show an OS banner about `session`, from the computer's own notifier, with quill's own
+    /// sound if any (the banner itself stays silent). A click on it is
+    /// `Event::NotificationClicked`, where the system tells it.
     Notify {
+        session: SessionId,
         title: String,
         body: String,
         sound: Option<Chime>,
@@ -1459,6 +1461,10 @@ pub enum Event {
         session: SessionId,
         update: BrowserUpdate,
     },
+    /// The person clicked the banner about the session; never stored.
+    NotificationClicked {
+        session: SessionId,
+    },
 }
 
 impl Event {
@@ -1502,7 +1508,8 @@ impl Event {
             | Event::Reported { session, .. }
             | Event::Waiting { session, .. }
             | Event::WaitEnded { session, .. }
-            | Event::Browser { session, .. } => *session,
+            | Event::Browser { session, .. }
+            | Event::NotificationClicked { session } => *session,
             // quill's own, not a session's: no session has id 0.
             Event::Settings { .. }
             | Event::Restored

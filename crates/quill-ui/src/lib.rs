@@ -654,7 +654,8 @@ impl Store {
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }
-            | Event::SignInFailed { .. } => {}
+            | Event::SignInFailed { .. }
+            | Event::NotificationClicked { .. } => {}
         }
     }
 }
@@ -1045,11 +1046,23 @@ pub fn notice(
         Chime::Ask
     };
     let banner = Intent::Notify {
+        session: *session,
         title,
         body: text.into(),
         sound: ui.settings.notification_sound.then_some(chime),
     };
     Some((level, banner))
+}
+
+/// A click on a session's banner opens it, as a click on its row does.
+pub fn banner_clicked(store: &Store, ui: &mut Ui, session: SessionId) -> Vec<Intent> {
+    update(
+        store,
+        ui,
+        &limn::UiAction::Clicked {
+            id: format!("session:{session}"),
+        },
+    )
 }
 
 /// The folder the terminal and new sessions work in: the selected session's, else the chosen one.

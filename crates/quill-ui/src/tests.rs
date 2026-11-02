@@ -3965,6 +3965,7 @@ fn a_notice_is_a_banner_only_while_its_session_is_out_of_view() {
         Some((
             NotifyLevel::Banner,
             Intent::Notify {
+                session: 1,
                 title: "Fix the bug".into(),
                 body: NOTICE_PERMISSION.into(),
                 sound: Some(quill_model::Chime::Ask),
@@ -4062,6 +4063,23 @@ fn a_banner_asks_for_quills_own_sound_per_settings_and_not_in_view() {
     // "None" in Settings: the banner alone.
     ui.settings.notification_sound = false;
     assert_eq!(sound(&ui, true), Some(None));
+}
+
+/// A click on a session's banner opens that session and reads it.
+#[test]
+fn a_banner_click_opens_its_session() {
+    let (mut store, mut ui) = store_with_session();
+    ui.selected = None;
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    let intents = banner_clicked(&store, &mut ui, 1);
+    assert_eq!(ui.selected, Some(1));
+    assert!(intents.contains(&Intent::MarkUnread {
+        session: 1,
+        unread: false
+    }));
 }
 
 fn slash_command(name: &str, aliases: &[&str]) -> quill_model::AgentSlashCommand {

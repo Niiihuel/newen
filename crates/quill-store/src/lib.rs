@@ -61,7 +61,8 @@ impl Store {
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }
-            | Event::SignInFailed { .. } => false,
+            | Event::SignInFailed { .. }
+            | Event::NotificationClicked { .. } => false,
             // What a session's browser shows is the moment's; its tabs' addresses are kept.
             Event::Browser { update, .. } => {
                 matches!(update, quill_model::BrowserUpdate::Kept(_))

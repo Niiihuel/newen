@@ -70,7 +70,7 @@ se publican **macOS arm64 y Windows x64** además de Linux x86_64.
 | Iniciar al abrir sesión | autostart `.desktop` | clave `Run` (`reg`) | LaunchAgent | Win/mac sin probar; el plist toma efecto en el próximo login |
 | No dejar dormir | `systemd-inhibit` | **falta** (`SetThreadExecutionState` necesita FFI) | `caffeinate` | |
 | Batería | `/sys/class/power_supply` | vacío | vacío | "no mantener despierto a batería" no distingue fuera de Linux |
-| Notificaciones | `notify-send`/`busctl` | PowerShell | `osascript` | |
+| Notificaciones | `notify-send`/`busctl` | PowerShell | `osascript` | Un clic abre la sesión: Linux con `notify-send --action --wait` (no por `busctl`); Windows mientras su PowerShell espera, 10 min, sin probar; macOS **falta** (pide una app firmada) |
 | Sonido propio de quill | `pw-play`, `paplay`, `aplay` | PowerShell `SoundPlayer` | `afplay` | Windows y macOS sin probar |
 | Leer en voz alta | `spd-say` | **falta** | **falta** (sería `say`) | |
 | Servidores de `preview_start` | grupo + `PDEATHSIG` | `taskkill /T /F` | grupo, sin `PDEATHSIG` | En Windows no mueren si quill muere de golpe |

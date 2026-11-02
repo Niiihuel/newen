@@ -1437,12 +1437,21 @@ impl Router {
                 (self.sink)(Event::Pinned { session, pinned });
                 return;
             }
-            Intent::Notify { title, body, sound } => {
-                // quill's own sound, so the banner itself stays silent.
+            Intent::Notify {
+                session,
+                title,
+                body,
+                sound,
+            } => {
                 if let Some(chime) = sound {
                     tokio::spawn(chime::play(chime));
                 }
-                notify(&title, &body, false);
+                let sink = self.sink.clone();
+                tokio::spawn(async move {
+                    if notify(&title, &body).await {
+                        sink(Event::NotificationClicked { session });
+                    }
+                });
                 return;
             }
             Intent::ChooseView { session, view } => {
@@ -3872,22 +3881,37 @@ fn start_at_login(on: bool) -> Result<(), String> {
 }
 
 /// The bytes the files under `path` take.
-/// Show a banner with the computer's own notifier. Nothing waits on it: a missing notifier
-/// (none installed) just shows nothing.
-fn notify(title: &str, body: &str, sound: bool) {
-    let spawn = |(program, args, env): (&str, Vec<String>, Vec<(&str, String)>)| {
+/// Show a banner with the computer's own notifier, silent (quill plays its own sound), and
+/// wait for it to be clicked: true if the person clicked it. A missing notifier (none
+/// installed) just shows nothing.
+async fn notify(title: &str, body: &str) -> bool {
+    let run = |(program, args, env): (&str, Vec<String>, Vec<(&str, String)>)| {
         Command::from(quill_files::command(program))
             .args(args)
             .envs(env)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
+            .kill_on_drop(true)
+            .output()
     };
-    // Without `notify-send`, the same server is asked over D-Bus.
-    if spawn(notifier(title, body, sound)).is_err() && cfg!(unix) && !cfg!(target_os = "macos") {
-        let _ = spawn(bus_notifier(title, body, sound));
+    match run(notifier(title, body)).await {
+        Ok(out) if out.status.success() => clicked(&out.stdout),
+        // Without `notify-send`, or one too old for `--action`, the same server is asked over
+        // D-Bus, without the click.
+        _ if cfg!(unix) && !cfg!(target_os = "macos") => {
+            let _ = run(bus_notifier(title, body)).await;
+            false
+        }
+        _ => false,
     }
+}
+
+/// Whether the notifier said its banner was clicked: it prints the action's name.
+fn clicked(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .any(|line| line.trim() == "default")
 }
 
 /// `notify-send`'s request made with `busctl`: the freedesktop Notifications server's
@@ -3895,9 +3919,8 @@ fn notify(title: &str, body: &str, sound: bool) {
 fn bus_notifier(
     title: &str,
     body: &str,
-    sound: bool,
 ) -> (&'static str, Vec<String>, Vec<(&'static str, String)>) {
-    let mut args: Vec<String> = [
+    let args: Vec<String> = [
         "--user",
         "call",
         // What follows is the call's own, a `-1` timeout included, not busctl's options.
@@ -3913,70 +3936,68 @@ fn bus_notifier(
         title,
         body,
         "0",
+        "1",
+        "suppress-sound",
+        "b",
+        "true",
+        "-1",
     ]
     .map(String::from)
     .to_vec();
-    if sound {
-        args.extend(["1", "sound-name", "s", "message-new-instant"].map(String::from));
-    } else {
-        args.push("0".into());
-    }
-    args.push("-1".into());
     ("busctl", args, vec![])
 }
 
-/// The program, arguments and environment that show a banner on this OS. The text reaches
-/// the notifier as an argument or an environment variable, never as script text.
-fn notifier(
-    title: &str,
-    body: &str,
-    sound: bool,
-) -> (&'static str, Vec<String>, Vec<(&'static str, String)>) {
+/// The program, arguments and environment that show a silent banner on this OS and, where
+/// the system can tell, print `default` when it is clicked. The text reaches the notifier
+/// as an argument or an environment variable, never as script text.
+fn notifier(title: &str, body: &str) -> (&'static str, Vec<String>, Vec<(&'static str, String)>) {
     if cfg!(target_os = "macos") {
+        // `display notification` tells no one of a click: that needs a signed app of its own.
         let quoted = |text: &str| text.replace('\\', "\\\\").replace('"', "\\\"");
-        let mut script = format!(
+        let script = format!(
             "display notification \"{}\" with title \"{}\"",
             quoted(body),
             quoted(title)
         );
-        if sound {
-            script.push_str(" sound name \"default\"");
-        }
         ("osascript", vec!["-e".into(), script], vec![])
     } else if cfg!(windows) {
         // shortcut: the toast carries PowerShell's own AppUserModelID, so it is titled as
-        // PowerShell; upgrade when quill registers its own.
-        let silent = if sound {
-            ""
-        } else {
-            "$a=$x.CreateElement('audio');$a.SetAttribute('silent','true');[void]$x.DocumentElement.AppendChild($a);"
-        };
-        let script = format!(
-            "[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
+        // PowerShell; upgrade when quill registers its own. Its click reaches this PowerShell
+        // while it waits (ten minutes at most), not after.
+        let script = "[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
              $x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);\
              $t=$x.GetElementsByTagName('text');\
              [void]$t.Item(0).AppendChild($x.CreateTextNode($env:QUILL_TITLE));\
              [void]$t.Item(1).AppendChild($x.CreateTextNode($env:QUILL_BODY));\
-             {silent}\
-             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))"
-        );
+             $a=$x.CreateElement('audio');$a.SetAttribute('silent','true');[void]$x.DocumentElement.AppendChild($a);\
+             $n=[Windows.UI.Notifications.ToastNotification]::new($x);\
+             [void](Register-ObjectEvent -InputObject $n -EventName Activated -SourceIdentifier quill);\
+             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($n);\
+             if(Wait-Event -SourceIdentifier quill -Timeout 600){'default'}";
         (
             "powershell",
             vec![
                 "-NoProfile".into(),
                 "-NonInteractive".into(),
                 "-Command".into(),
-                script,
+                script.into(),
             ],
             vec![("QUILL_TITLE", title.into()), ("QUILL_BODY", body.into())],
         )
     } else {
-        // Linux and the BSDs: the desktop's notification server, through `notify-send`.
-        let mut args = vec!["--app-name=quill".into()];
-        if sound {
-            args.push("--hint=string:sound-name:message-new-instant".into());
-        }
-        args.extend(["--".into(), title.into(), body.into()]);
+        // Linux and the BSDs: the desktop's notification server, through `notify-send`, which
+        // waits on the banner and prints the action clicked.
+        let args = [
+            "--app-name=quill",
+            "--hint=boolean:suppress-sound:true",
+            "--action=default=Open",
+            "--wait",
+            "--",
+            title,
+            body,
+        ]
+        .map(String::from)
+        .to_vec();
         ("notify-send", args, vec![])
     }
 }
@@ -5018,27 +5039,35 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_banner_goes_through_notify_send_with_or_without_its_sound() {
-        let (program, args, env) = notifier("Fix the bug", "Body", true);
+    fn a_banner_goes_through_notify_send_silent_and_waits_for_its_click() {
+        let (program, args, env) = notifier("Fix the bug", "Body");
         assert_eq!(program, "notify-send");
         assert_eq!(
             args,
             [
                 "--app-name=quill",
-                "--hint=string:sound-name:message-new-instant",
+                "--hint=boolean:suppress-sound:true",
+                "--action=default=Open",
+                "--wait",
                 "--",
                 "Fix the bug",
                 "Body"
             ]
         );
         assert!(env.is_empty());
-        let (_, args, _) = notifier("Fix the bug", "Body", false);
-        assert_eq!(args, ["--app-name=quill", "--", "Fix the bug", "Body"]);
     }
 
     #[test]
-    fn without_notify_send_a_banner_goes_over_d_bus() {
-        let (program, args, _) = bus_notifier("Fix the bug", "Body", true);
+    fn a_banner_is_clicked_when_its_notifier_prints_the_default_action() {
+        assert!(clicked(b"default\n"));
+        assert!(clicked(b"default\r\n"));
+        assert!(!clicked(b""));
+        assert!(!clicked(b"other\n"));
+    }
+
+    #[test]
+    fn without_notify_send_a_banner_goes_over_d_bus_silent() {
+        let (program, args, _) = bus_notifier("Fix the bug", "Body");
         assert_eq!(program, "busctl");
         assert_eq!(
             args[7..],
@@ -5051,38 +5080,36 @@ mod tests {
                 "Body",
                 "0",
                 "1",
-                "sound-name",
-                "s",
-                "message-new-instant",
+                "suppress-sound",
+                "b",
+                "true",
                 "-1"
             ]
         );
-        let (_, args, _) = bus_notifier("t", "b", false);
-        assert_eq!(args[args.len() - 2..], ["0", "-1"]);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn a_banner_goes_through_osascript_with_escaped_text() {
-        let (program, args, _) = notifier("a \"b\"\\", "Body", true);
+        let (program, args, _) = notifier("a \"b\"\\", "Body");
         assert_eq!(program, "osascript");
         assert_eq!(
             args,
             [
                 "-e",
-                "display notification \"Body\" with title \"a \\\"b\\\"\\\\\" sound name \"default\""
+                "display notification \"Body\" with title \"a \\\"b\\\"\\\\\""
             ]
         );
-        let (_, args, _) = notifier("Fix", "Body", false);
-        assert_eq!(args[1], "display notification \"Body\" with title \"Fix\"");
     }
 
     #[cfg(windows)]
     #[test]
-    fn a_banner_passes_its_text_in_the_environment_not_the_script() {
-        let (program, args, env) = notifier("Fix'; calc", "Body", false);
+    fn a_banner_passes_its_text_in_the_environment_and_waits_for_its_click() {
+        let (program, args, env) = notifier("Fix'; calc", "Body");
         assert_eq!(program, "powershell");
         assert!(args[3].contains("silent"));
+        assert!(args[3].contains("-EventName Activated"));
+        assert!(args[3].contains("{'default'}"));
         assert!(!args[3].contains("Fix"));
         assert_eq!(
             env,
@@ -5091,8 +5118,6 @@ mod tests {
                 ("QUILL_BODY", "Body".to_owned())
             ]
         );
-        let (_, args, _) = notifier("Fix", "Body", true);
-        assert!(!args[3].contains("silent"));
     }
 
     #[test]

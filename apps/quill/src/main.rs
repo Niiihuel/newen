@@ -702,6 +702,13 @@ impl eframe::App for App {
                     ));
                 }
             }
+            // A click on a banner brings the window up on its session.
+            if let Event::NotificationClicked { session } = &event {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                let intents = quill_ui::banner_clicked(&self.store, &mut self.ui, *session);
+                self.dispatch(intents);
+            }
             // What the page had selected goes on the clipboard.
             if let Event::Browser {
                 update: quill_model::BrowserUpdate::Copied(text),
