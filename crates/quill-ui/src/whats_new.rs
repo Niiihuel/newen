@@ -226,8 +226,8 @@ pub(crate) fn sidebar_button(ui: &Ui, palette: ComponentPalette) -> Option<Eleme
     ]))
 }
 
-/// The card's widest, and the words' margin inside it.
-const CARD_WIDTH: f32 = 640.0;
+/// The card's and the notes' widest, and the words' margin inside the card.
+const CARD_WIDTH: f32 = 720.0;
 const MARGIN: f32 = 20.0;
 /// What the words and buttons take at most under the picture: a two-line title, the body,
 /// the points and the buttons. Without that much room left, the picture goes.
@@ -243,16 +243,15 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, window: Size, palette: ComponentPa
     let inner = width - 2.0 - 2.0 * MARGIN;
     let tall = (width - 2.0) * 9.0 / 16.0;
     let room = window.height - 48.0 - tall >= WORDS;
-    let close = limn::DismissButton::new(CARD_CLOSE, palette)
-        .dispatch_as(CARD)
-        .target_size(28.0)
-        .render();
+    let palette = settings_palette(palette);
+    // The ✕ every titled modal has; over a picture, on the surface at 80 % so it reads.
+    let close = || {
+        limn::DismissButton::new(CARD_CLOSE, palette)
+            .dispatch_as(CARD)
+            .target_size(24.0)
+            .render()
+    };
     let surface = look::palette().surface;
-    let close = Element::row(vec![close])
-        // The surface at 80 %, so the picture shows through.
-        .background(limn::Color { a: 204, ..surface })
-        .border(look::divider(), 1.0)
-        .radius(14.0);
     let mut parts = vec![];
     let mut words = vec![];
     match announcement.media.as_ref().filter(|_| room) {
@@ -286,14 +285,20 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, window: Size, palette: ComponentPa
             }
             let corner = Element::column(vec![
                 Element::spacer().size(None, Some(16.0)),
-                Element::row(vec![Element::spacer().flex(1.0), close, hgap(16.0)]),
+                Element::row(vec![
+                    Element::spacer().flex(1.0),
+                    Element::row(vec![close()])
+                        .background(limn::Color { a: 204, ..surface })
+                        .radius(6.0),
+                    hgap(16.0),
+                ]),
             ]);
             parts.push(Element::stack(vec![
                 shown.size(Some(width - 2.0), Some(tall)),
                 corner,
             ]));
         }
-        None => words.push(Element::row(vec![Element::spacer().flex(1.0), close])),
+        None => words.push(Element::row(vec![Element::spacer().flex(1.0), close()])),
     }
     words.push(
         text(announcement.title.clone())
@@ -357,6 +362,7 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, window: Size, palette: ComponentPa
         palette,
     )
     .width(width)
+    .outline(look::settings_outline())
     .headless(true)
     .body(Element::column(parts))
     .footer(Element::row(footer).gap(8.0))
@@ -396,7 +402,8 @@ fn notes_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
     if !ui.notes_open {
         return base;
     }
-    let width = Modal::fit_width(window.width, 480.0);
+    let palette = settings_palette(palette);
+    let width = Modal::fit_width(window.width, CARD_WIDTH);
     let inner = Modal::body_width(width);
     let secondary = ComponentPalette {
         text: look::muted(),
@@ -438,10 +445,23 @@ fn notes_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
     if sections.is_empty() {
         sections.push(muted("No release notes yet."));
     }
+    // As tall as the notes, up to Settings' height (its title row and outline aside).
+    let most = (window.height - 72.0).clamp(320.0, 772.0) - 45.0 - 2.0 - 32.0;
+    let body =
+        Element::scroll("whats_new:notes", Element::column(sections).gap(16.0)).max_height(most);
     Modal::new(base, true, "What's new", "", NOTES, palette)
         .width(width)
-        .height((window.height * 0.85).min(720.0))
-        .body(Element::column(sections).gap(16.0))
+        .outline(look::settings_outline())
+        .body(body)
         .scrim(look::scrim())
         .render()
+}
+
+/// Settings' card: its surface and its title row's line, so every dialog reads as one.
+fn settings_palette(palette: ComponentPalette) -> ComponentPalette {
+    ComponentPalette {
+        surface: look::settings_page(),
+        border: look::settings_title_line(),
+        ..palette
+    }
 }
