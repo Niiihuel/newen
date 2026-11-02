@@ -9,7 +9,8 @@ new = [
     "An announcement can play a short clip, once you let quill download Cisco's OpenH264 video codec; it asks first.",
     "Settings › System › quill › **Licenses** shows the terms of third-party software quill uses.",
     "**Customize** is a page of its own, from the sidebar: Skills, Connectors and Plugins with search, Discover and Add, for all agents or one.",
-    "Connectors list their state, filter by it, and offer *Reconnect all* when some need it; each one's page says what it can do and sets its tools to always allow, ask or block.",
+    "Connectors show their state, filter by it, and offer *Reconnect all* when some need it.",
+    "Each connector's page says what it can do and sets its tools to always allow, ask or block.",
     "Skills can be uploaded (.md, .zip, .skill), replaced, downloaded and deleted; a custom connector's form warns about addresses that look deceptive.",
 ]
 improved = [
