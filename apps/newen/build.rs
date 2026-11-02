@@ -14,7 +14,7 @@ fn main() {
     // from Linux leaves the exe without its icon; check CARGO_CFG_TARGET_OS if that is needed.
     #[cfg(windows)]
     winresource::WindowsResource::new()
-        .set_icon("assets/icons/quill.ico")
+        .set_icon("assets/icons/newen.ico")
         // The systems it supports, as CEF's own programs declare them.
         .set_manifest(include_str!("assets/newen.exe.manifest"))
         .compile()

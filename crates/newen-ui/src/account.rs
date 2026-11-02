@@ -285,7 +285,7 @@ pub fn screen(ui: &Ui, window: Size) -> Element {
     let mut column = vec![
         centered(
             Element::icon(icons::of(include_str!(
-                "../../../apps/newen/assets/icons/quill-mark.svg"
+                "../../../apps/newen/assets/icons/newen-mark.svg"
             )))
             .foreground(look::palette().text)
             .large_icon(56.0),

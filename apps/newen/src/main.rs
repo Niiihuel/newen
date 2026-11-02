@@ -1882,9 +1882,9 @@ fn show_in_file_manager(folder: &std::path::Path) {
 /// takes it by the app id from the icon theme instead (`scripts/install-desktop.sh`).
 fn window_icon(dark: bool) -> egui::IconData {
     let png: &[u8] = if dark {
-        include_bytes!("../assets/icons/quill-dark-256.png")
+        include_bytes!("../assets/icons/newen-dark-256.png")
     } else {
-        include_bytes!("../assets/icons/quill-256.png")
+        include_bytes!("../assets/icons/newen-256.png")
     };
     let decoded = image::load_from_memory(png)
         .map(|image| image.to_rgba8())

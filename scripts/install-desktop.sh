@@ -18,9 +18,9 @@ if [ -z "${1:-}" ] && [ -f "$apps/quill.desktop" ]; then
   case $old in "" | *"$data/quill/app/"* | *"$root/target/"*) ;; *) exec_line=$old ;; esac
 fi
 for size in 16 24 32 48 64 128 256 512; do
-  install -Dm644 "$root/apps/newen/assets/icons/quill-$size.png" "$data/icons/hicolor/${size}x${size}/apps/newen.png"
+  install -Dm644 "$root/apps/newen/assets/icons/newen-$size.png" "$data/icons/hicolor/${size}x${size}/apps/newen.png"
 done
-install -Dm644 "$root/apps/newen/assets/icons/quill.svg" "$data/icons/hicolor/scalable/apps/newen.svg"
+install -Dm644 "$root/apps/newen/assets/icons/newen.svg" "$data/icons/hicolor/scalable/apps/newen.svg"
 install -Dm644 /dev/stdin "$apps/newen.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application

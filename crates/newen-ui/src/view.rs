@@ -4030,11 +4030,9 @@ fn working_words(id: &str, words: String) -> Element {
         .shrink_to_fit()
 }
 
-/// The line under the turn: Newen's pen writing (in place of Desktop's orange
-/// dots, as the person chose), then the step running, or the
-/// turn's clock, its tokens, the work running beside it and whether the model thinks, muted,
-/// at the transcript's size. Waiting on the person it says so; with only background work
-/// left, it counts it.
+/// The line under the turn: the step running, or the turn's clock, its tokens, the work
+/// running beside it and whether the model thinks, muted, at the transcript's size. Waiting
+/// on the person it says so; with only background work left, it counts it.
 fn status_line(
     session: &Session,
     running: Option<&Step>,

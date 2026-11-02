@@ -105,9 +105,9 @@ PLIST
   mkdir -p "$iconset"
   icons=$root/apps/newen/assets/icons
   for size in 16 32 128 256 512; do
-    cp "$icons/quill-$size.png" "$iconset/icon_${size}x${size}.png"
+    cp "$icons/newen-$size.png" "$iconset/icon_${size}x${size}.png"
     if [ "$size" -lt 512 ]; then
-      cp "$icons/quill-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
+      cp "$icons/newen-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
     fi
   done
   iconutil -c icns "$iconset" -o "$app/Contents/Resources/newen.icns"

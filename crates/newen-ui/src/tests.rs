@@ -5964,6 +5964,15 @@ fn the_welcome_shows_once_the_settings_are_known_until_get_started() {
         }],
     });
     assert!(crate::welcoming(&ui));
+    // The mark's horizon is drawn first, a frame at a time, then the rest comes in; under
+    // reduced motion all of it is there at once.
+    assert!(!drawn(&store, &ui, "Get started"));
+    assert_eq!(
+        ui.repaint_after(),
+        Some(std::time::Duration::from_millis(16))
+    );
+    ui.reduced_motion = true;
+    assert!(drawn(&store, &ui, "Get started"));
     let saved = click(&store, &mut ui, crate::welcome::START);
     assert!(
         matches!(&saved[..], [Intent::SaveSettings(s)] if s.welcomed),

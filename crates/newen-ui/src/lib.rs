@@ -1309,7 +1309,8 @@ pub struct Ui {
     pub pointer: Option<limn::Point>,
     pub hovered: Option<String>,
     /// The right panel's width, on a spring to 0 or its own width as it closes and opens.
-    /// When the welcome was first drawn: what comes in under its word is timed from it.
+    /// When the welcome was first drawn: its horizon and what comes in under it are timed
+    /// from it.
     pub welcome_since: std::cell::OnceCell<std::time::Instant>,
     /// The host runs Newen with a stand-in agent and no settings kept (tests, captures): the
     /// welcome is not shown, unless `NEWEN_WELCOME` asks for it.
@@ -2234,8 +2235,8 @@ impl Ui {
     }
 
     /// When the host should paint again for what moves on its own: at once for a moving
-    /// thumb, every 33 ms for the Ultracode field, as the reference draws it, and when a copy
-    /// button's check is due to go.
+    /// thumb, every 33 ms for the Ultracode field, as the reference draws it, every 16 ms
+    /// while the welcome's horizon is drawn, and when a copy button's check is due to go.
     pub fn repaint_after(&self) -> Option<std::time::Duration> {
         let check = self
             .copied
@@ -2257,10 +2258,13 @@ impl Ui {
             .min();
         let tools =
             (self.tool_changed).map(|at| customize::KEEP_AFTER.saturating_sub(at.elapsed()));
+        let welcome = (self.welcome_since.get())
+            .filter(|since| since.elapsed().as_secs_f64() < welcome::REVEAL)
+            .map(|_| std::time::Duration::from_millis(16));
         if self.animating() {
             Some(std::time::Duration::ZERO)
         } else {
-            [check, ultra, mcp, questions, tools]
+            [check, ultra, mcp, questions, tools, welcome]
                 .into_iter()
                 .flatten()
                 .min()
