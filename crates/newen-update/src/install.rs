@@ -58,6 +58,19 @@ pub(crate) fn app_root(data: &Path) -> PathBuf {
     newen_files::own_dir(data).join("app")
 }
 
+/// Windows: the installation in `programs` (`%LOCALAPPDATA%\Programs`): `newen\`, or quill's
+/// `quill\` while Newen's is not there. Only one quill made, which always has `versions\`:
+/// another app's folder of that name (its `Quill.exe` is `quill.exe` to Windows) is not taken.
+#[cfg(any(test, windows))]
+pub(crate) fn programs_root(programs: &Path) -> PathBuf {
+    let (newen, quill) = (programs.join("newen"), programs.join("quill"));
+    if fs::symlink_metadata(&newen).is_err() && quill.join("versions").is_dir() {
+        quill
+    } else {
+        newen
+    }
+}
+
 /// The program in `dir`, a bundle's folder: [`PROGRAM`]; quill's [`LEGACY_PROGRAM`] when only
 /// that one is there.
 pub(crate) fn program_in(dir: &Path) -> PathBuf {
@@ -84,18 +97,15 @@ pub struct Install {
 impl Install {
     /// `NEWEN_UPDATE_ROOT` when set (a test installation), or this person's:
     /// `$XDG_DATA_HOME/newen/app` on Linux ([`app_root`]), `%LOCALAPPDATA%\Programs\newen` on
-    /// Windows (quill's `Programs\quill` while that is there and Newen's is not), and on macOS
-    /// the folder holding the `Newen.app` this program runs from, else `~/Applications`.
+    /// Windows ([`programs_root`]), and on macOS the folder holding the `Newen.app` this program
+    /// runs from, else `~/Applications`.
     pub fn locate() -> Option<Self> {
         if let Some(root) = newen_files::env("UPDATE_ROOT").filter(|root| !root.is_empty()) {
             return Some(Self::at(root));
         }
         #[cfg(windows)]
-        let root = newen_files::named_dir(
-            &PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Programs"),
-            "newen",
-            "quill",
-        );
+        let root =
+            programs_root(&PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Programs"));
         #[cfg(target_os = "macos")]
         let program = std::env::current_exe().ok();
         #[cfg(target_os = "macos")]

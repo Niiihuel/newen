@@ -896,6 +896,32 @@ fn the_installation_is_newen_s_or_quill_s_until_moved() {
     }
 }
 
+/// On Windows the installation is `Programs\newen`, or `Programs\quill` while that one is
+/// there and Newen's is not, only when quill made it (with its `versions`): another app's
+/// `quill` folder is never taken over.
+#[test]
+fn windows_installation_is_newen_s_or_one_quill_made() {
+    use crate::install::programs_root;
+    let folder = tempfile::tempdir().unwrap();
+    let programs = folder.path();
+    assert_eq!(
+        programs_root(programs),
+        programs.join("newen"),
+        "a first install"
+    );
+    std::fs::create_dir_all(programs.join("quill")).unwrap();
+    std::fs::write(programs.join("quill/Quill.exe"), "another app").unwrap();
+    assert_eq!(
+        programs_root(programs),
+        programs.join("newen"),
+        "another app's"
+    );
+    std::fs::create_dir_all(programs.join("quill/versions")).unwrap();
+    assert_eq!(programs_root(programs), programs.join("quill"), "quill's");
+    std::fs::create_dir_all(programs.join("newen")).unwrap();
+    assert_eq!(programs_root(programs), programs.join("newen"), "Newen's");
+}
+
 /// A bundle's program is Newen's, or quill's when it has only that one, on every system.
 #[test]
 fn a_bundle_s_program_is_newen_s_or_quill_s_when_it_has_only_that() {

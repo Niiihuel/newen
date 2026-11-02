@@ -530,7 +530,7 @@ misma forma al arrancar.
 | Inicio de sesión de quill | `login_entry` (newen-engine) | `autostart/quill.desktop`, el valor `quill` de la clave Run y `dev.quill.quill.plist` se borran al escribir o quitar el de Newen |
 | `quill.desktop` y los íconos `quill` del menú | la migración; `scripts/install-desktop.sh` | se reemplazan por los de Newen; un `Exec` hecho a mano queda |
 | Releases de quill | `REPOSITORIES`, `LEGACY_MANIFEST`, `LEGACY_PRODUCT` (newen-update) | después de `Niiihuel/newen` y `newen-update.json`; el `product` `"quill"` se acepta |
-| Programa `quill` / `quill.exe` | `install::LEGACY_PROGRAM`, `program_in` | la versión de quill a la que vuelve una vuelta atrás; en Windows, una instalación en `Programs\quill` (si no hay `Programs\newen`) sigue con `quill.exe` y se actualiza ahí. Cada versión que Newen prepara en Linux lleva un enlace `quill -> newen` para los lanzadores de `current/quill` |
+| Programa `quill` / `quill.exe` | `install::LEGACY_PROGRAM`, `program_in` | la versión de quill a la que vuelve una vuelta atrás; en Windows, una instalación en `Programs\quill` (si no hay `Programs\newen`, y sólo si tiene `versions\`: la carpeta `quill` de otra app, con un `Quill.exe` que Windows confunde con `quill.exe`, no se toca) sigue con `quill.exe` y se actualiza ahí. Cada versión que Newen prepara en Linux lleva un enlace `quill -> newen` para los lanzadores de `current/quill` |
 | Descargas a medias `quill-*.part` | `newen-update/src/lib.rs` | se borran como las de Newen |
 | La release anterior | `release.yml`, `newen-release --previous` | bajan y leen `newen-update.json` o `quill-update.json`, para que 0.2.0 siga la `sequence` y reuse los blobs de 0.1.9 |
 
