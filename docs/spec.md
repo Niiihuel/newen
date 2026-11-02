@@ -1,8 +1,8 @@
-# quill: especificación
+# Newen: especificación
 
 **Estado:** borrador para revisión · **Fecha:** 2026-10-25
 
-quill es una app de escritorio nativa, en Rust con [limn](https://github.com/Niiihuel/limn), para trabajar con **agentes de código de cualquier proveedor**: la persona elige el CLI (Claude Code, Codex, Antigravity, OpenCode, Grok…) y quill lo maneja mediante un adaptador. El primer adaptador, y el del MVP, es **Claude Code**. La experiencia se inspira en **Code** de Claude Desktop: toma comportamientos, protocolos observables de los CLI y estructura visual, descritos por lo que la persona ve. No usa código, fuentes, íconos ni marca de Anthropic ni de otros proveedores.
+Newen es una app de escritorio nativa, en Rust con [limn](https://github.com/Niiihuel/limn), para trabajar con **agentes de código de cualquier proveedor**: la persona elige el CLI (Claude Code, Codex, Antigravity, OpenCode, Grok…) y Newen lo maneja mediante un adaptador. El primer adaptador, y el del MVP, es **Claude Code**. La experiencia se inspira en **Code** de Claude Desktop: toma comportamientos, protocolos observables de los CLI y estructura visual, descritos por lo que la persona ve. No usa código, fuentes, íconos ni marca de Anthropic ni de otros proveedores.
 
 Documentos de detalle:
 - [`engine.md`](engine.md): motor de agente (proceso del CLI, protocolo, permisos, atribución, persistencia, git, PTY).
@@ -23,42 +23,42 @@ Ambos documentos son borradores. Si algo choca con este documento, manda este.
 
 | # | Decisión | Por qué |
 |---|---|---|
-| D1 | quill habla **directamente con cada CLI** por su protocolo nativo, sin SDKs de otros lenguajes. Para Claude Code, el adaptador `quill-agent-claude` usa stream-json (stdin/stdout) y el protocolo de control, y reimplementa la capa delgada del Agent SDK de TypeScript. | Evita Node en el proceso y mantiene todo en Rust. |
-| D2 | quill **no se presenta como otro cliente**: con Claude Code no usa `CLAUDE_CODE_ENTRYPOINT=claude-desktop` ni `client_platform: desktop_app`, y vale lo mismo para cada proveedor. La autenticación es el login propio de cada CLI. | Honestidad del cliente; engine.md §11.1. |
+| D1 | Newen habla **directamente con cada CLI** por su protocolo nativo, sin SDKs de otros lenguajes. Para Claude Code, el adaptador `newen-agent-claude` usa stream-json (stdin/stdout) y el protocolo de control, y reimplementa la capa delgada del Agent SDK de TypeScript. | Evita Node en el proceso y mantiene todo en Rust. |
+| D2 | Newen **no se presenta como otro cliente**: con Claude Code no usa `CLAUDE_CODE_ENTRYPOINT=claude-desktop` ni `client_platform: desktop_app`, y vale lo mismo para cada proveedor. La autenticación es el login propio de cada CLI. | Honestidad del cliente; engine.md §11.1. |
 | D3 | **Rango de versiones probado por adaptador** (piso y techo), fixtures por versión y tipos con fallback `Unknown`. | Ninguno de estos protocolos es una API pública estable. |
-| D4 | **Atribución por petición independiente del agente:** un `request_id` propio, más **snapshots en un repo git sombra** (`$XDG_DATA_HOME/quill/snapshots`) al abrir cada turno y, si el adaptador expone hooks de herramienta (Claude Code: `PostToolUse`), tras cada herramienta que escribe. | Ni el CLI ni Bash dicen qué archivos cambió cada petición (engine.md §6). quill registra creados, modificados, borrados y renombrados por petición con cualquier CLI, y ofrece un rewind real. |
-| D11 | **Adaptadores de agente.** `quill-agent` define el trait `AgentAdapter`, las `AgentCapabilities` (modelos, niveles de esfuerzo, modos de permiso, hooks por herramienta, resume, fork, steering, interrupt) y los eventos normalizados (texto, pensamiento, herramienta y resultado, permiso, uso, fin de turno). Cada CLI tiene su crate `quill-agent-<id>` (`claude` en el MVP; después `codex`, `opencode`, `grok`, `antigravity`…). El motor, el store, el git sombra y la UI solo conocen `quill-agent`. La UI arma los selectores desde las capacidades. | Agregar un proveedor no toca la UI ni el motor; los nombres genéricos no llevan "claude". |
-| D5 | **SQLite como fuente de la UI** (`quill-store`). El JSONL del CLI se usa solo a través de `--resume`, y el fork con `--fork-session`. | El formato del JSONL es interno del CLI. |
+| D4 | **Atribución por petición independiente del agente:** un `request_id` propio, más **snapshots en un repo git sombra** (`$XDG_DATA_HOME/newen/snapshots`) al abrir cada turno y, si el adaptador expone hooks de herramienta (Claude Code: `PostToolUse`), tras cada herramienta que escribe. | Ni el CLI ni Bash dicen qué archivos cambió cada petición (engine.md §6). Newen registra creados, modificados, borrados y renombrados por petición con cualquier CLI, y ofrece un rewind real. |
+| D11 | **Adaptadores de agente.** `newen-agent` define el trait `AgentAdapter`, las `AgentCapabilities` (modelos, niveles de esfuerzo, modos de permiso, hooks por herramienta, resume, fork, steering, interrupt) y los eventos normalizados (texto, pensamiento, herramienta y resultado, permiso, uso, fin de turno). Cada CLI tiene su crate `newen-agent-<id>` (`claude` en el MVP; después `codex`, `opencode`, `grok`, `antigravity`…). El motor, el store, el git sombra y la UI solo conocen `newen-agent`. La UI arma los selectores desde las capacidades. | Agregar un proveedor no toca la UI ni el motor; los nombres genéricos no llevan "claude". |
+| D5 | **SQLite como fuente de la UI** (`newen-store`). El JSONL del CLI se usa solo a través de `--resume`, y el fork con `--fork-session`. | El formato del JSONL es interno del CLI. |
 | D6 | **Un actor Tokio por sesión**. Un gobernador limita los procesos a `max(6, RAM/3 GiB)`; un guard detiene la sesión si se cae en bucle; para detenerla, `interrupt` → SIGTERM → SIGKILL al grupo. | Ver engine.md §1, §5. |
-| D7 | **Capas solo hacia abajo** (modelo RUNE): la UI no depende del motor; se comunican por `quill-model` (`Event` hacia la UI, `Intent` hacia el motor). El shell y el bucle de cuadros siguen a surco. | Testeable sin ventana ni CLI, y reemplazable por un `MockEngine` que reproduce fixtures. |
-| D8 | Todo lo genérico que falte en limn va **como PR a limn**, un worktree por tema (`../limn-<tema>`). quill depende de la rama `quill/integration` de limn hasta que se mezcle. | Política del proyecto (ui.md §4–5). |
+| D7 | **Capas solo hacia abajo** (modelo RUNE): la UI no depende del motor; se comunican por `newen-model` (`Event` hacia la UI, `Intent` hacia el motor). El shell y el bucle de cuadros siguen a surco. | Testeable sin ventana ni CLI, y reemplazable por un `MockEngine` que reproduce fixtures. |
+| D8 | Todo lo genérico que falte en limn va **como PR a limn**, un worktree por tema (`../limn-<tema>`). Newen depende de la rama `quill/integration` de limn hasta que se mezcle. | Política del proyecto (ui.md §4–5). |
 | D9 | Git a través del binario `git` (sin git2). `gix` queda como opción a futuro. | Simple y con el mismo comportamiento que el git del usuario. |
 | D10 | Tokens visuales propios: Inter y JetBrains Mono, acento propio. Las medidas salen de las capturas, a 1408×844. | Fuentes e íconos de Anthropic son propietarios (ui.md §3). |
 
 ## 3. Arquitectura
 
 ```text
-apps/quill ──► quill-ui ──► quill-components ──► limn
-     │            │   └──► quill-state ──────────┐
-     │            └──────────────────────────────┴──► quill-model
-     ├──► quill-engine ──► quill-agent, quill-store, quill-git, quill-pty ──► quill-model
-     │         └──► quill-agent-claude (y futuros quill-agent-<id>) ──► quill-agent
+apps/newen ──► newen-ui ──► newen-components ──► limn
+     │            │   └──► newen-state ──────────┐
+     │            └──────────────────────────────┴──► newen-model
+     ├──► newen-engine ──► newen-agent, newen-store, newen-git, newen-pty ──► newen-model
+     │         └──► newen-agent-claude (y futuros newen-agent-<id>) ──► newen-agent
      └──► limn-egui (solo el host)
 ```
 
 | Crate | Responsabilidad |
 |---|---|
-| `quill-model` | Tipos de dominio e IDs (`AgentId`, `SessionId`, `RequestId`…); contratos `Event`, `Intent`, `Envelope`, `EventSink`. Sin IO. |
-| `quill-agent` | Trait `AgentAdapter` (lanzar, enviar, interrumpir, decidir permiso, reanudar, fork), `AgentCapabilities` y eventos normalizados. Registro de adaptadores disponibles. Sin IO de procesos. |
-| `quill-agent-claude` | Adaptador de Claude Code: mensajes stream-json y de control (serde), codec por línea, `LaunchSpec` (flags y entorno), mapeo a eventos normalizados, hooks `PreToolUse`/`PostToolUse`. |
-| `quill-engine` | `Engine` y actores de sesión, independientes del agente: proceso, `PermissionBroker`, cola y steering, `TurnTracker`, gobernador. Llama al adaptador de la sesión. También `MockEngine` (reproduce fixtures). |
-| `quill-store` | SQLite (rusqlite bundled y migraciones): sesiones, turnos, eventos, efectos por petición y blobs. |
-| `quill-git` | Wrapper de `git`, estado, diff y parser unified → líneas, repo sombra (snapshot/restore/diff) y worktrees. |
-| `quill-pty` | PTY por pestaña (`portable-pty`), parser VT → `TerminalScreen`, OSC 133 y PTY oculto para `!`. |
-| `quill-state` | `Store` de la UI: aplica `Event` y deriva el estado de filas, sesiones y turnos. |
-| `quill-components` | `Look` (tokens) y piezas puras props → `Element` (UserBubble, ToolRow, TurnSummary, PermissionCard…). |
-| `quill-ui` | `Ui`, `view`, `update`, atajos; tests en los que el test hace de host. |
-| `apps/quill` | Ventana (eframe + wgpu vía `limn-egui`), marco sin borde, bucle de cuadros, `--fixture` y `--screenshot`. |
+| `newen-model` | Tipos de dominio e IDs (`AgentId`, `SessionId`, `RequestId`…); contratos `Event`, `Intent`, `Envelope`, `EventSink`. Sin IO. |
+| `newen-agent` | Trait `AgentAdapter` (lanzar, enviar, interrumpir, decidir permiso, reanudar, fork), `AgentCapabilities` y eventos normalizados. Registro de adaptadores disponibles. Sin IO de procesos. |
+| `newen-agent-claude` | Adaptador de Claude Code: mensajes stream-json y de control (serde), codec por línea, `LaunchSpec` (flags y entorno), mapeo a eventos normalizados, hooks `PreToolUse`/`PostToolUse`. |
+| `newen-engine` | `Engine` y actores de sesión, independientes del agente: proceso, `PermissionBroker`, cola y steering, `TurnTracker`, gobernador. Llama al adaptador de la sesión. También `MockEngine` (reproduce fixtures). |
+| `newen-store` | SQLite (rusqlite bundled y migraciones): sesiones, turnos, eventos, efectos por petición y blobs. |
+| `newen-git` | Wrapper de `git`, estado, diff y parser unified → líneas, repo sombra (snapshot/restore/diff) y worktrees. |
+| `newen-pty` | PTY por pestaña (`portable-pty`), parser VT → `TerminalScreen`, OSC 133 y PTY oculto para `!`. |
+| `newen-state` | `Store` de la UI: aplica `Event` y deriva el estado de filas, sesiones y turnos. |
+| `newen-components` | `Look` (tokens) y piezas puras props → `Element` (UserBubble, ToolRow, TurnSummary, PermissionCard…). |
+| `newen-ui` | `Ui`, `view`, `update`, atajos; tests en los que el test hace de host. |
+| `apps/newen` | Ventana (eframe + wgpu vía `limn-egui`), marco sin borde, bucle de cuadros, `--fixture` y `--screenshot`. |
 
 ## 4. Alcance del MVP y criterios de aceptación
 
@@ -95,5 +95,5 @@ Cada criterio se verifica con un test (CLI falso o fixture) y, donde hay captura
 | Tarjeta de permiso | Inline en el transcript, como en la captura. |
 | Acento | Índigo `#3B5BDB`. |
 | Modo "Auto" (clasificador de Desktop) | Fuera del MVP; solo Manual, Accept edits y Plan. |
-| Idioma | Inglés en el MVP, textos en `quill-ui/src/text.rs`. |
+| Idioma | Inglés en el MVP, textos en `newen-ui/src/text.rs`. |
 | Proveedores | Multi-CLI por adaptadores (D11); el MVP implementa solo Claude Code. |

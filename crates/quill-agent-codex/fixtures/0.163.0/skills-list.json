@@ -1,6 +1,0 @@
-{"id":"quill-skills","result":{"data":[{"cwd":"/work","errors":[],"skills":[
-  {"name":"review","description":"Review the diff.","path":"/home/user/.agents/skills/review/SKILL.md","scope":"user","enabled":true,"pluginId":null},
-  {"name":"conventions","description":"How this repo is written.","path":"/work/.agents/skills/conventions/SKILL.md","scope":"repo","enabled":false,"pluginId":null,"interface":{"shortDescription":"Repo conventions"}},
-  {"name":"imagegen","description":"Draw pictures.","path":"/home/user/.codex/skills/.system/imagegen/SKILL.md","scope":"system","enabled":true,"pluginId":null},
-  {"name":"pdf:fill","description":"Fill a PDF form.","path":"/opt/codex/plugins/pdf/skills/fill/SKILL.md","scope":"user","enabled":true,"pluginId":"pdf@primary-runtime"}
-]}]}}

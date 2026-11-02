@@ -1,0 +1,37 @@
+[package]
+name = "newen-browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Newen's built-in browser: a Chromium it launches and drives over the DevTools protocol."
+build = "build.rs"
+publish = false
+
+[dependencies]
+newen-model = { path = "../newen-model" }
+serde_json.workspace = true
+# Calls answered on a channel, the event loop and its timers.
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+# dup2 and fcntl, to hand Chromium its pipe on fds 3 and 4.
+libc = "0.2"
+# The screencast's JPEG frames, decoded off the UI thread (already in the tree through image).
+zune-jpeg = "0.5"
+zune-core = "0.5"
+# The screencast's frames arrive base64-encoded in the JSON (already in the tree).
+base64 = "0.22"
+# Chromium in Newen's own process, its tabs painted into Newen's window (native.rs); the
+# version is nixpkgs' cef-binary's, which shell.nix links.
+cef = { version = "=147.1.0", default-features = false }
+# A native tab's pixels converted a word at a time (already in the tree).
+bytemuck = "1"
+# A native tab's GPU paints (dmabufs) copied into a texture of the window's own device, eframe's.
+wgpu = { version = "30", default-features = false, features = ["std", "vulkan"] }
+
+# macOS: teaching winit's NSApplication the protocol Chromium asks of it (native.rs; already
+# in the tree through winit and cef).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

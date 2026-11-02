@@ -1,11 +1,11 @@
 //! Records what the installed `claude` CLI says over stream-json, scenario by scenario
 //! (docs/plan.md Q1.2, docs/engine.md §11.3). Each run gets a fresh git repo and writes
 //! `captures/<scenario>-<epoch>/session.jsonl`: one `{t_ms, dir, msg}` per line, `dir` being
-//! `out` (quill → CLI), `in` (CLI → quill) or `stderr`.
+//! `out` (Newen → CLI), `in` (CLI → Newen) or `stderr`.
 //!
-//! Usage: quill-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
+//! Usage: newen-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
-//! todos, agent, think, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
+//! todos, agent, think, workflow, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
 //! it). With `--agent codex`, see codex.rs.
 
 mod codex;
@@ -123,6 +123,21 @@ fn scenario(name: &str) -> Option<Scenario> {
             )],
         ),
         "think" => (Policy::Allow, "default", vec![Prompt("Think it through, then answer in one line: is 391 prime?")]),
+        // A background workflow reports its phases and agents after the turn ends; listen until
+        // its notification and the turn that follows (`touch <capture>/stop` ends it sooner).
+        "workflow" => (
+            Policy::Allow,
+            "default",
+            vec![
+                Prompt(
+                    "Run a workflow with the Workflow tool, named file-words, in two phases: 'Read' with \
+                     two agents, one reading README.md and one listing the files with ls, each \
+                     answering in one word; then 'Sum up' with one agent joining their answers in one \
+                     sentence. Then wait for it and tell me its sentence.",
+                ),
+                Listen(600),
+            ],
+        ),
         // The suggestion comes after a turn's `result`, so each turn is listened past.
         "suggest" => (
             Policy::Allow,
@@ -286,9 +301,9 @@ fn run(
         &["add", "-A"],
         &[
             "-c",
-            "user.name=quill",
+            "user.name=newen",
             "-c",
-            "user.email=quill@localhost",
+            "user.email=newen@localhost",
             "commit",
             "-qm",
             "init",
@@ -539,7 +554,7 @@ fn reply(cli: &mut Cli, msg: &Value, policy: Policy) {
     let id = msg["request_id"].clone();
     let response = answer(&msg["request"], policy);
     let reply = if response.is_null() {
-        json!({ "subtype": "error", "request_id": id, "error": "not supported by quill-capture" })
+        json!({ "subtype": "error", "request_id": id, "error": "not supported by newen-capture" })
     } else {
         json!({ "subtype": "success", "request_id": id, "response": response })
     };
@@ -551,14 +566,14 @@ fn main() {
     if let [flag, agent, name, ..] = &args[..] {
         if flag == "--agent" && agent == "codex" {
             if let Err(error) = codex::run(name) {
-                eprintln!("quill-capture: {error}");
+                eprintln!("newen-capture: {error}");
                 std::process::exit(1);
             }
             return;
         }
     }
     let Some(name) = args.first() else {
-        eprintln!("usage: quill-capture <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]");
+        eprintln!("usage: newen-capture <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]");
         std::process::exit(2);
     };
     let flag = |f: &str| {
@@ -575,7 +590,7 @@ fn main() {
         flag("--resume"),
         args.iter().any(|a| a == "--fork"),
     ) {
-        eprintln!("quill-capture: {error}");
+        eprintln!("newen-capture: {error}");
         std::process::exit(1);
     }
 }

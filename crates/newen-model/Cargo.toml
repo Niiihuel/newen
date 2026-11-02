@@ -1,0 +1,14 @@
+[package]
+name = "newen-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "What Newen's UI and engine say to each other: intents down, events up."
+publish = false
+
+[dependencies]
+newen-agent = { path = "../newen-agent" }
+# The Files pane's entries and operations, which intents and events carry.
+newen-files = { path = "../newen-files" }
+serde.workspace = true

@@ -10,30 +10,30 @@ rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# limn by path, as surco does: quill/integration is limn's main, plus any limn PR quill
+# limn by path, as surco does: quill/integration is limn's main, plus any limn PR Newen
 # waits on (docs/LIMN_INTEGRATION.md).
 limn = { path = "../limn-quill-integration/crates/limn", default-features = false }
 limn-egui = { path = "../limn-quill-integration/crates/limn-egui", default-features = false }
 # The text buffer limn's code editor edits, for the document pane.
 limn-editor = { path = "../limn-quill-integration/crates/limn-editor" }
-# Plays the clips of What's new with Cisco's OpenH264 library, which quill downloads from Cisco
+# Plays the clips of What's new with Cisco's OpenH264 library, which Newen downloads from Cisco
 # once the person allows it and limn-video loads at run time (docs/UPDATES.md).
 limn-video = { path = "../limn-quill-integration/crates/limn-video" }
 # `clipboard`: the system's clipboard, text and pictures (off by default since eframe 0.37, which
 # left Ctrl+V with a clipboard of the window's own).
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "clipboard"] }
 serde_json = "1"
-# Events are kept as JSON in quill-store and replayed at start.
+# Events are kept as JSON in newen-store and replayed at start.
 serde = { version = "1", features = ["derive"] }
 
 [profile.dev]
 debug = "line-tables-only"
 
-# An unoptimized renderer drops frames; quill's own crates stay unoptimized for fast rebuilds.
+# An unoptimized renderer drops frames; Newen's own crates stay unoptimized for fast rebuilds.
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
 
 # Its native view converts every frame Chromium paints: unoptimized it takes ~370 ms one.
-[profile.dev.package.quill-browser]
+[profile.dev.package.newen-browser]
 opt-level = 2

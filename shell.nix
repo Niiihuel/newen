@@ -2,7 +2,7 @@
 let
   # CEF as cef-rs expects to find it (`CEF_PATH`): the Release and Resources files side by
   # side, and an archive.json naming the version. The cef crate's version follows it.
-  cef = pkgs.runCommand "quill-cef-${pkgs.cef-binary.version}" { } ''
+  cef = pkgs.runCommand "newen-cef-${pkgs.cef-binary.version}" { } ''
     mkdir $out
     ln -s ${pkgs.cef-binary}/Release/* ${pkgs.cef-binary}/Resources/* $out/
     for name in CMakeLists.txt cmake include libcef_dll CREDITS.html; do

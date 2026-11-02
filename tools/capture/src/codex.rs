@@ -1,7 +1,7 @@
-//! The Codex driver of quill-capture: `quill-capture --agent codex <scenario>` records what
+//! The Codex driver of newen-capture: `newen-capture --agent codex <scenario>` records what
 //! `codex app-server` says over stdio JSON-RPC (docs/codex.md, phase 1). Same capture format as
 //! the Claude driver: `captures/<scenario>-<epoch>/session.jsonl`, one `{t_ms, dir, msg}` per
-//! line (`out` = quill → CLI, `in` = CLI → quill, `stderr`, `exit`). Each run gets a fresh git repo.
+//! line (`out` = Newen → CLI, `in` = CLI → Newen, `stderr`, `exit`). Each run gets a fresh git repo.
 //!
 //! Always `gpt-6-luna` at effort `low`; never `danger-full-access` or approval policy `never`.
 //! Scenarios: simple, edit-bash, deny, deny-patch, always, plan, plan-mode, steer, interrupt, resume, fork,
@@ -44,7 +44,7 @@ enum Step {
     /// acts from another device meanwhile.
     Listen(u64),
     /// The collaboration mode (`plan` or `default`) of the turns that follow, each with the
-    /// policy quill gives it: Plan reads only.
+    /// policy Newen gives it: Plan reads only.
     Mode(&'static str),
 }
 
@@ -158,7 +158,7 @@ fn scenario(name: &str) -> Option<Scenario> {
             )],
         ),
         // A plan proposed in Plan mode, with the question it asks first (blocking there), then
-        // carried out in Default mode with the words quill sends.
+        // carried out in Default mode with the words Newen sends.
         "plan-mode" => (
             AUTO,
             "accept",
@@ -204,7 +204,7 @@ fn scenario(name: &str) -> Option<Scenario> {
             vec![Turn("Remember the word: lantern. Reply with exactly: ok"), Compact],
         ),
         "review" => (AUTO, "accept", vec![Review]),
-        // Remote Control on the stdio app-server, as quill's shared one (docs/remote-control.md
+        // Remote Control on the stdio app-server, as Newen's shared one (docs/remote-control.md
         // §3): every command asks, and the phone answers.
         "remote" => (
             UNTRUSTED,
@@ -448,11 +448,11 @@ impl Driver {
                     .collect();
                 json!({ "answers": answers })
             }
-            // Grant nothing: quill-capture never widens a sandbox.
+            // Grant nothing: newen-capture never widens a sandbox.
             "item/permissions/requestApproval" => json!({ "permissions": {} }),
             "mcpServer/elicitation/request" => json!({ "action": "decline" }),
             _ => {
-                return json!({ "id": id, "error": { "code": -32601, "message": "not supported by quill-capture" } })
+                return json!({ "id": id, "error": { "code": -32601, "message": "not supported by newen-capture" } })
             }
         };
         json!({ "id": id, "result": result })
@@ -474,9 +474,9 @@ impl Driver {
     }
 
     fn handshake(&mut self) -> Result<(), String> {
-        // The experimental API, as quill asks for it: Remote Control and Plan mode are in it.
+        // The experimental API, as Newen asks for it: Remote Control and Plan mode are in it.
         let params = json!({
-            "clientInfo": { "name": "quill", "title": "quill", "version": "0.0.1" },
+            "clientInfo": { "name": "newen", "title": "Newen", "version": "0.0.1" },
             "capabilities": { "experimentalApi": true },
         });
         self.call("initialize", params)?;
@@ -491,7 +491,7 @@ impl Driver {
         if let Some(summary) = self.summary {
             params["summary"] = json!(summary);
         }
-        // Its own instructions (null) and the turn's model and effort, as quill sends it.
+        // Its own instructions (null) and the turn's model and effort, as Newen sends it.
         if let Some(mode) = self.collaboration {
             let settings = json!({ "model": MODEL, "reasoning_effort": "low", "developer_instructions": null });
             params["collaborationMode"] = json!({ "mode": mode, "settings": settings });
@@ -547,9 +547,9 @@ pub fn run(name: &str) -> Result<(), String> {
         &["add", "-A"],
         &[
             "-c",
-            "user.name=quill",
+            "user.name=newen",
             "-c",
-            "user.email=quill@localhost",
+            "user.email=newen@localhost",
             "commit",
             "-qm",
             "init",

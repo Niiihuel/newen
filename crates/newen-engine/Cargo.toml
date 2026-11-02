@@ -1,0 +1,56 @@
+[package]
+name = "newen-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Newen's engine: one actor per session owning its agent's process."
+publish = false
+
+[dependencies]
+newen-model = { path = "../newen-model" }
+newen-agent = { path = "../newen-agent" }
+newen-agent-claude = { path = "../newen-agent-claude" }
+newen-agent-codex = { path = "../newen-agent-codex" }
+newen-store = { path = "../newen-store" }
+newen-git = { path = "../newen-git" }
+# The built-in browser, a Chromium driven over DevTools (docs/browser.md).
+newen-browser = { path = "../newen-browser" }
+# The Files pane's listing and file operations, run on the disk.
+newen-files = { path = "../newen-files" }
+serde_json.workspace = true
+# The derive for global.rs's extensions.json.
+serde.workspace = true
+# Processes, pipes, one actor per session, and the $BROWSER bridge's unix socket.
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time", "net"] }
+# Sizing the images a message attaches: decode, resize, and JPEG (PNG, JPEG, GIF, WebP only);
+# ICO too, for a site's favicon.ico (a logo, newen-engine's logos.rs).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "ico"] }
+# Newen's own updates: the signed manifest, the download and the installation (update.rs).
+newen-update = { path = "../newen-update" }
+# Fetching a connector's or plugin's logo over https, with a ten-second limit (logos.rs).
+ureq = "3"
+# Rasterizing an SVG logo to 64 px; no text or fonts, which a logo does not need.
+resvg = { version = "0.48.1", default-features = false }
+# Request ids, as the agent receives them for each prompt, and the names of kept pictures.
+uuid = { version = "1", features = ["v4"] }
+# The pictures a tool gives back arrive base64-encoded (images.rs `keep`; already in the tree).
+base64 = "0.22"
+# The system keychain (Secret Service on Linux) where the secrets of "All agents" servers live,
+# so they reach the agent only as environment variables (global.rs, docs/agents.md).
+keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
+# A skill uploaded or saved as a .zip / .skill of its folder (skills.rs); deflate only.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# Stopping a dev server's whole process group (kill with a negative pid).
+libc = "0.2"
+# Cisco's OpenH264 library comes bzip2-compressed (codec.rs); this one decodes in pure Rust
+# (libbz2-rs-sys), no C library to build or link, and is already in the lock.
+bzip2 = "0.6"
+# The codec's digest, matched against the release limn-video loads (already in the tree).
+sha2 = "0.10"
+
+[dev-dependencies]
+# The loopback feed (`serve`) the updates' tests check, download and stage from.
+newen-update = { path = "../newen-update", features = ["serve"] }
+# A folder of kept release notes in update.rs's tests; already in the lock.
+tempfile = "3"

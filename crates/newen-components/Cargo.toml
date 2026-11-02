@@ -1,0 +1,20 @@
+[package]
+name = "newen-components"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Newen's look, shared by its apps: tokens, icons and the system's fonts, over limn."
+publish = false
+
+[dependencies]
+# Fonts::bundled, under the system faces fontconfig finds; tree-sitter highlighting
+# (syntax), as the editor in both apps colors code.
+limn = { workspace = true, features = ["bundled-fonts", "syntax"] }
+# The editor's buffer, which the find bar searches.
+limn-editor.workspace = true
+newen-model = { path = "../newen-model" }
+# The tree's entries and file operations, which the host runs on the disk.
+newen-files = { path = "../newen-files" }
+# VS Code icon themes, which the file icons can be taken from, are JSON.
+serde_json.workspace = true

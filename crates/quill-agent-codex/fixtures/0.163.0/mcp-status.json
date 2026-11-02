@@ -1,8 +1,0 @@
-{"id":"quill-mcp-status","result":{"nextCursor":null,"data":[
-  {"name":"node_repl","runtimeStatus":"connected","pluginId":null,"authStatus":"unsupported","toolsError":null,
-   "tools":{"js":{"name":"js","description":"Run JavaScript","annotations":{}},
-            "js_reset":{"name":"js_reset","description":"Forget the state","annotations":{"readOnlyHint":true,"destructiveHint":false}}}},
-  {"name":"docs","runtimeStatus":"authenticationRequired","pluginId":null,"authStatus":"notLoggedIn","toolsError":null,"tools":{}},
-  {"name":"computer","runtimeStatus":"failed","pluginId":"computer@bundled","authStatus":"unsupported","toolsError":"MCP startup failed","tools":{}},
-  {"name":"codex_apps","runtimeStatus":null,"pluginId":null,"authStatus":"bearerToken","toolsError":null,"tools":{"search":{"name":"search"}}}
-]}}

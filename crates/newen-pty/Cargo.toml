@@ -1,0 +1,15 @@
+[package]
+name = "newen-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Newen's terminal: a shell on a PTY, its output parsed into the cells limn's TerminalView paints."
+publish = false
+
+[dependencies]
+limn.workspace = true
+# The pseudo-terminal the shell runs on.
+portable-pty = "0.9"
+# Parses the shell's VT output into a screen of cells.
+vt100 = "0.16"

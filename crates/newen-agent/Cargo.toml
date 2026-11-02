@@ -1,0 +1,12 @@
+[package]
+name = "newen-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The contract every coding-agent adapter of Newen implements (docs/agents.md)."
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+serde.workspace = true
