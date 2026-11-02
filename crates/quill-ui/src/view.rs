@@ -2708,20 +2708,11 @@ fn status_dot(session: &Session) -> Element {
 
 /// A new session's page: the greeting and the composer as one block, centered across the
 /// column with the greeting's line 42 % down it, as a chat app's new page sits, never nearer
-/// the top than 24 px. The greeting is quill's pen in the accent and words that follow the
-/// local hour and day (`greeting`), 40 px in the interface's face: limn bundles no serif.
+/// the top than 24 px. The greeting is words that follow the local hour and day
+/// (`greeting`), 40 px in the interface's face: limn bundles no serif.
 fn home(ui: &Ui, height: f32, composer: Element) -> Vec<Element> {
     let greeting = crate::greeting::now(ui.utc_offset, ui.name.as_deref());
-    let line = Element::row(vec![
-        Element::icon(icons::of(include_str!(
-            "../../../apps/quill/assets/icons/quill-mark.svg"
-        )))
-        .foreground(look::theme().accent)
-        .large_icon(44.0)
-        .centered_y(),
-        text(greeting).font_size(40.0).centered_y(),
-    ])
-    .gap(12.0);
+    let line = text(greeting).font_size(40.0);
     let top = (height * 0.42 - 48.0).max(24.0);
     vec![
         Element::spacer().size(None, Some(24.0)),

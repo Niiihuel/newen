@@ -10855,8 +10855,8 @@ fn a_new_page_centers_the_greeting_over_the_card_then_the_composer_docks() {
                 .iter()
                 .find(|s| s.0.contains(", Ana"))
                 .unwrap_or_else(|| panic!("{at}: no greeting in {spans:?}"));
-            // The line is the pen, 12 px, then the words: centered as one.
-            let line = (greeting.1 - 56.0, greeting.3);
+            // The words alone, centered.
+            let line = (greeting.1, greeting.3);
             assert!(
                 ((line.0 + line.1) / 2.0 - middle).abs() < 2.0,
                 "{at}: greeting {line:?} not centered on {middle}"

@@ -983,6 +983,53 @@ fn a_queued_message_can_be_removed_sent_now_or_taken_back() {
         .any(|e| matches!(e, Event::Queued { text, .. } if text == "c")));
 }
 
+/// A message taken back to the composer is the moment's: after a restart it is not told
+/// again, or the composer would fill with words the person deleted before closing quill.
+#[test]
+fn a_message_taken_back_is_not_told_again_after_a_restart() {
+    let database = std::env::temp_dir().join(format!("quill-test-taken-{}.db", uuid_like()));
+    let start = || {
+        let (tx, rx) = channel();
+        let programs = HashMap::from([(
+            "claude".to_string(),
+            env!("CARGO_BIN_EXE_fake-agent").to_string(),
+        )]);
+        let config = quill_engine::Config {
+            programs,
+            database: Some(database.clone()),
+            ..Default::default()
+        };
+        (
+            Engine::start_with(move |event| drop(tx.send(event)), config),
+            rx,
+        )
+    };
+    let (engine, rx) = start();
+    busy_steer_session(&engine, &rx);
+    queue_send(&engine, "deleted since");
+    let events = until(
+        &rx,
+        |e| matches!(e, Event::QueueChanged { entries, .. } if entries.len() == 1),
+    );
+    let [(id, _)] = queue_ids(&events).try_into().unwrap();
+    engine.send(Intent::QueueTake { session: 1, id });
+    until(&rx, |e| matches!(e, Event::QueueTaken { .. }));
+    engine.send(Intent::Interrupt { session: 1 });
+    quiet(&rx, 300);
+    drop(engine);
+
+    let (engine, rx) = start();
+    let replayed = until(&rx, |e| matches!(e, Event::Restored));
+    assert!(replayed
+        .iter()
+        .any(|e| matches!(e, Event::SessionCreated { session: 1, .. })));
+    assert!(!replayed
+        .iter()
+        .any(|e| matches!(e, Event::QueueTaken { .. })));
+    drop(engine);
+    let _ = std::fs::remove_file(&database);
+}
+
 #[test]
 fn a_cleared_queue_sends_nothing_at_the_turn_end() {
     let (engine, rx) = engine();
