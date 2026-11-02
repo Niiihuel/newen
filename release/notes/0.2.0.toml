@@ -1,0 +1,20 @@
+# The notes of 0.2.0 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "quill is now Newen: a new name and a new icon. Your sessions, settings and secrets move over at the first start.",
+    "A running workflow shows under the chat that started it, with its phase and progress; click it to see its agents.",
+    "A chat keeps a pulsing dot while work it started runs on after its turn.",
+]
+improved = [
+    "The window, the launcher, notifications and start at login all say Newen; quill's old launchers still open it.",
+]
+
+[announcement]
+title = "quill is now Newen"
+body = "Same app, new name: Newen means strength in Mapudungun. Your sessions, settings and secrets were carried over at this first start, and quill's launchers keep working. Background workflows now show their phases right in the sidebar."
+bullets = [
+    "Your sessions, settings and secrets moved to Newen's folders.",
+    "Old quill launchers still open Newen.",
+    "Running workflows show under their chat, with their phase.",
+    "A pulsing dot marks chats with work still running.",
+]
