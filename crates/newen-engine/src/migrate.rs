@@ -42,6 +42,14 @@ pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
             "what's new",
             rewrite_notes(&newen.join("whats-new"), &quill),
         ));
+        steps.push((
+            "launcher",
+            replace_launcher(
+                &data.join("applications"),
+                &quill.join("app"),
+                &newen.join("app/current/newen"),
+            ),
+        ));
     }
     let config_moved = newen_files::own_dir(config) == config.join("newen");
     if config_moved {
@@ -157,6 +165,28 @@ fn rewrite_notes(folder: &Path, quill: &Path) -> Result<bool, String> {
     Ok(changed)
 }
 
+/// quill's launcher in the menu (`applications/quill.desktop`, Linux), when it starts quill's
+/// installation `old`: `newen.desktop` in its place, starting `program` as Newen's window (its
+/// app id, `newen`). One that starts something else (a wrapper made by hand) is the person's,
+/// and stays.
+fn replace_launcher(applications: &Path, old: &Path, program: &Path) -> Result<bool, String> {
+    let quill = applications.join("quill.desktop");
+    let Ok(text) = std::fs::read_to_string(&quill) else {
+        return Ok(false);
+    };
+    let installed = format!("{}/", old.display());
+    if !(text.lines()).any(|line| line.starts_with("Exec=") && line.contains(&installed)) {
+        return Ok(false);
+    }
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=Newen\nComment=Agents at work on your code\nIcon=newen\nExec=\"{}\" %U\nStartupWMClass=newen\nCategories=Development;\n",
+        program.display()
+    );
+    std::fs::write(applications.join("newen.desktop"), entry).map_err(|e| e.to_string())?;
+    std::fs::remove_file(&quill).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +232,16 @@ mod tests {
         )
         .unwrap();
         std::fs::write(settings.join("settings.json"), r#"{"open_at_login": true}"#).unwrap();
+        // A launcher of quill's installation, in the menu.
+        std::fs::create_dir_all(data.join("applications")).unwrap();
+        std::fs::write(
+            data.join("applications/quill.desktop"),
+            format!(
+                "[Desktop Entry]\nName=quill\nExec=\"{}\" %U\n",
+                quill.join("app/current/quill").display()
+            ),
+        )
+        .unwrap();
     }
 
     /// Everything quill kept moves to Newen's names: the folders (links left in their place on
@@ -231,6 +271,13 @@ mod tests {
         assert!(!notes.contains(&in_json(&data.join("quill/whats-new"))));
         assert!(config.join("newen/settings.json").is_file());
         assert!(config.join("newen/skills/notes").is_dir());
+        let launcher = std::fs::read_to_string(data.join("applications/newen.desktop")).unwrap();
+        assert!(launcher.contains(&format!(
+            "Exec=\"{}\" %U",
+            newen.join("app/current/newen").display()
+        )));
+        assert!(launcher.contains("StartupWMClass=newen"));
+        assert!(!data.join("applications/quill.desktop").exists());
         assert!(!config.join("newen/injected").exists());
         #[cfg(unix)]
         for base in [&data, &config] {
@@ -301,6 +348,29 @@ mod tests {
         assert!(from_quill(&data, &config)
             .iter()
             .any(|line| line.starts_with("database: not done")));
+    }
+
+    /// A launcher that starts something else than quill's installation (a wrapper) stays.
+    #[test]
+    fn a_launcher_made_by_hand_stays() {
+        let folder = tempfile::tempdir().unwrap();
+        let quill = folder.path().join("quill.desktop");
+        std::fs::write(
+            &quill,
+            "[Desktop Entry]\nExec=\"/home/ana/.local/bin/quill\"\n",
+        )
+        .unwrap();
+        let program = Path::new("/d/newen/app/current/newen");
+        assert_eq!(
+            replace_launcher(folder.path(), Path::new("/d/quill/app"), program),
+            Ok(false)
+        );
+        assert!(quill.is_file() && !folder.path().join("newen.desktop").exists());
+        assert_eq!(
+            replace_launcher(folder.path(), Path::new("/home/ana/.local"), program),
+            Ok(true),
+            "one into the installation given"
+        );
     }
 
     /// A developer's build moves nothing unless asked; a release always may.

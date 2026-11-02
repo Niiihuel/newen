@@ -336,6 +336,16 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
     router.settings = tokio::task::spawn_blocking(move || read_settings(path.as_deref()))
         .await
         .unwrap_or_default();
+    // The entry written at login names the installed program as it is now (an older one, or
+    // quill's, may start a version an update deleted): written again at each start of the
+    // installed program, never of a build run from elsewhere.
+    if router.settings.open_at_login {
+        tokio::task::spawn_blocking(|| {
+            if installed_program().is_some() {
+                let _ = start_at_login(true);
+            }
+        });
+    }
     router.updates.auto(router.settings.auto_update);
     router.updates.whats_new(router.settings.whats_new);
     router.sync_codec(None);
@@ -4012,13 +4022,13 @@ fn awake_command() -> Option<Command> {
     }
 }
 
-/// Start quill when the person logs in, or no longer: the desktop's autostart entry
+/// Start Newen when the person logs in, or no longer: the desktop's autostart entry
 /// (freedesktop Desktop Application Autostart on Linux), a LaunchAgent on macOS, the user's
-/// `Run` key on Windows; written for this program or removed. Newen's entry goes either way: a
-/// quill gone back from Newen would otherwise keep it, and it starts quill too, beside quill's.
+/// `Run` key on Windows; written for [`login_program`] or removed. quill's own entry goes
+/// either way, so it never starts quill's program (or one an update deleted) beside it.
 #[cfg_attr(windows, allow(clippy::needless_return))]
 fn start_at_login(on: bool) -> Result<(), String> {
-    let program = std::env::current_exe().map_err(|e| e.to_string())?;
+    let program = login_program()?;
     #[cfg(windows)]
     {
         const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
@@ -4028,14 +4038,14 @@ fn start_at_login(on: bool) -> Result<(), String> {
             reg.output().map_err(|e| e.to_string())
         };
         // Removing a value that is not there fails, which is as good as removed.
-        let _ = reg(&["delete", KEY, "/v", "newen", "/f"]);
+        let _ = reg(&["delete", KEY, "/v", "quill", "/f"]);
         let value = format!("\"{}\"", program.display());
         let done = if on {
             reg(&[
-                "add", KEY, "/v", "quill", "/t", "REG_SZ", "/d", &value, "/f",
+                "add", KEY, "/v", "newen", "/t", "REG_SZ", "/d", &value, "/f",
             ])?
         } else {
-            reg(&["delete", KEY, "/v", "quill", "/f"])?
+            reg(&["delete", KEY, "/v", "newen", "/f"])?
         };
         return if done.status.success() || !on {
             Ok(())
@@ -4047,14 +4057,14 @@ fn start_at_login(on: bool) -> Result<(), String> {
     {
         // On macOS the LaunchAgents folder is the home's, not Application Support.
         #[cfg(target_os = "macos")]
-        let (folder, name, newen, text) = (
+        let (folder, name, legacy, text) = (
             newen_files::home_dir()
                 .ok_or("no home folder")?
                 .join("Library/LaunchAgents"),
-            "dev.quill.quill.plist",
             "dev.newen.newen.plist",
+            "dev.quill.quill.plist",
             format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.quill.quill</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.newen.newen</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n",
                 program.display()
             ),
         );
@@ -4063,28 +4073,28 @@ fn start_at_login(on: bool) -> Result<(), String> {
             return Ok(());
         };
         #[cfg(not(target_os = "macos"))]
-        let (name, newen, text) = (
-            "quill.desktop",
+        let (name, legacy, text) = (
             "newen.desktop",
+            "quill.desktop",
             format!(
-                "[Desktop Entry]\nType=Application\nName=quill\nIcon=quill\nExec=\"{}\"\nX-GNOME-Autostart-enabled=true\n",
+                "[Desktop Entry]\nType=Application\nName=Newen\nIcon=newen\nExec=\"{}\"\nX-GNOME-Autostart-enabled=true\n",
                 program.display()
             ),
         );
-        login_entry(on, &folder, name, newen, &text)
+        login_entry(on, &folder, name, legacy, &text)
     }
 }
 
-/// `folder/name` written with `text`, or removed; Newen's `folder/newen` removed either way.
-#[cfg(not(windows))]
+/// `folder/name` written with `text`, or removed; quill's `folder/legacy` removed either way.
+#[cfg(any(test, not(windows)))]
 fn login_entry(
     on: bool,
     folder: &std::path::Path,
     name: &str,
-    newen: &str,
+    legacy: &str,
     text: &str,
 ) -> Result<(), String> {
-    let _ = std::fs::remove_file(folder.join(newen));
+    let _ = std::fs::remove_file(folder.join(legacy));
     let entry = folder.join(name);
     if !on {
         return match std::fs::remove_file(&entry) {
@@ -4094,6 +4104,23 @@ fn login_entry(
     }
     std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     std::fs::write(&entry, text).map_err(|e| e.to_string())
+}
+
+/// What starts at login: the installed program's path that stays across updates
+/// (`current/newen`, not the version's folder an update deletes) when this copy runs from the
+/// installation ([`installed_program`]); else this program.
+fn login_program() -> Result<std::path::PathBuf, String> {
+    match installed_program() {
+        Some(program) => Ok(program),
+        None => std::env::current_exe().map_err(|e| e.to_string()),
+    }
+}
+
+/// The installation's program, when this copy runs from it.
+fn installed_program() -> Option<std::path::PathBuf> {
+    let running = std::env::current_exe().ok()?;
+    let install = newen_update::install::Install::locate()?;
+    install.runs(&running).then(|| install.program())
 }
 
 /// The bytes the files under `path` take.
@@ -5521,33 +5548,32 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    /// Turned on, quill's entry is written and Newen's goes, so login never starts both; turned
+    /// Turned on, Newen's entry is written and quill's goes, so login never starts both; turned
     /// off, both go.
     #[test]
-    fn quill_s_login_entry_clears_newen_s() {
+    fn newen_s_login_entry_replaces_quill_s() {
         let folder = tempfile::tempdir().unwrap();
         let at = |name: &str| folder.path().join(name);
-        std::fs::write(at("newen.desktop"), "Exec=/newen/current/newen").unwrap();
+        std::fs::write(at("quill.desktop"), "Exec=/old/versions/0.1.9/quill").unwrap();
         login_entry(
             true,
             folder.path(),
-            "quill.desktop",
             "newen.desktop",
-            "Exec=q",
+            "quill.desktop",
+            "Exec=new",
         )
         .unwrap();
         assert_eq!(
-            std::fs::read_to_string(at("quill.desktop")).unwrap(),
-            "Exec=q"
+            std::fs::read_to_string(at("newen.desktop")).unwrap(),
+            "Exec=new"
         );
-        assert!(!at("newen.desktop").exists());
-        std::fs::write(at("newen.desktop"), "Exec=/newen").unwrap();
-        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
-        assert!(!at("quill.desktop").exists() && !at("newen.desktop").exists());
-        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
+        assert!(!at("quill.desktop").exists());
+        std::fs::write(at("quill.desktop"), "Exec=/old").unwrap();
+        login_entry(false, folder.path(), "newen.desktop", "quill.desktop", "").unwrap();
+        assert!(!at("newen.desktop").exists() && !at("quill.desktop").exists());
+        login_entry(false, folder.path(), "newen.desktop", "quill.desktop", "").unwrap();
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_banner_goes_through_notify_send_silent_and_waits_for_its_click() {
         let (program, args, env) = notifier("Fix the bug", "Body");

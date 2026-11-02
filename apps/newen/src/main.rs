@@ -1956,8 +1956,8 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         viewport: egui::ViewportBuilder::default()
-            .with_title("quill")
-            .with_app_id("quill")
+            .with_title("Newen")
+            .with_app_id("newen")
             .with_icon(window_icon(false))
             .with_inner_size([1408.0, 844.0])
             .with_min_inner_size([720.0, 480.0])
@@ -1966,7 +1966,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     let result = eframe::run_native(
-        "quill",
+        "newen",
         options,
         Box::new(move |creation| {
             limn::set_fonts(newen_components::fonts(true, ""));

@@ -718,20 +718,20 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let title = format!(
-        "quill-ide · {}",
+        "newen-ide · {}",
         root.file_name().unwrap_or_default().to_string_lossy()
     );
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
-            .with_app_id("quill-ide")
+            .with_app_id("newen-ide")
             .with_inner_size([1408.0, 844.0])
             .with_min_inner_size([560.0, 360.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "quill-ide",
+        "newen-ide",
         options,
         Box::new(move |creation| {
             limn::set_fonts(newen_components::fonts(true, ""));
