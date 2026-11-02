@@ -181,7 +181,7 @@ fn a_check_reads_a_signed_feed_on_loopback_and_refuses_a_forged_one() {
     let release = manifest("9.0.0", Some("9.0.0"), &[]);
     let server = serve(0).unwrap();
     let agent = agent();
-    let feed = Source::Files {
+    let feed = Source {
         base: server.base(),
     };
     let public = signer.verifying_key();
@@ -218,72 +218,6 @@ fn a_check_reads_a_signed_feed_on_loopback_and_refuses_a_forged_one() {
     );
 }
 
-/// The private repository's API on loopback: its latest release lists `assets` by name, and
-/// refuses every request for a token other than `token`.
-fn api_release(server: &Server, assets: &[(&str, Vec<u8>)]) -> String {
-    let listed: Vec<String> = assets
-        .iter()
-        .enumerate()
-        .map(|(at, (name, bytes))| {
-            server.put(&format!("/assets/{at}"), bytes.clone());
-            format!(
-                r#"{{"name":"{name}","url":"{}/assets/{at}"}}"#,
-                server.base()
-            )
-        })
-        .collect();
-    server.put(
-        &format!("/repos/{REPOSITORY}/releases/latest"),
-        format!(r#"{{"assets":[{}]}}"#, listed.join(",")).into_bytes(),
-    );
-    server.base()
-}
-
-#[test]
-fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_there() {
-    let signer = key();
-    let built = program(50_000);
-    let server = serve(0).unwrap();
-    let linux = artifact(
-        "https://github.com/Niiihuel/quill/releases/download/v2.0.0/quill-x86_64-linux.tar.gz",
-        &built,
-    );
-    let body =
-        serde_json::to_vec_pretty(&manifest("2.0.0", None, &[("linux-x86_64", linux.clone())]))
-            .unwrap();
-    let signature = sign(&signer, &body);
-    let api = api_release(
-        &server,
-        &[
-            (MANIFEST, body.clone()),
-            (SIGNATURE, format!("{signature}\n").into_bytes()),
-            ("quill-x86_64-linux.tar.gz", built.clone()),
-        ],
-    );
-    let agent = agent();
-    let source = Source::Api {
-        token: "a-token".into(),
-        api,
-    };
-    let checked = check(&agent, &source, &Trust::new(vec![signer.verifying_key()])).unwrap();
-    // The manifest's address names the release on GitHub; the API reaches the same file.
-    let artifact = &checked.platforms["linux-x86_64"];
-    assert_eq!(artifact.url, format!("{}/assets/2", server.base()));
-    let folder = tempfile::tempdir().unwrap();
-    let path = download(&agent, &source, artifact, folder.path(), |_, _| true).unwrap();
-    assert_eq!(std::fs::read(path).unwrap(), built);
-    // A repository that refuses the token, or has no release at all, is about access.
-    let nothing = serve(0).unwrap();
-    let refused = Source::Api {
-        token: "a-token".into(),
-        api: nothing.base(),
-    };
-    assert_eq!(
-        check(&agent, &refused, &Trust::new(vec![signer.verifying_key()])),
-        Err(Error::Access)
-    );
-}
-
 fn program(size: usize) -> Vec<u8> {
     (0..size).map(|at| (at * 31 % 251) as u8).collect()
 }
@@ -296,13 +230,6 @@ fn artifact_server(body: &[u8]) -> (Server, Artifact) {
     (server, wanted)
 }
 
-/// Downloads from a feed need no token.
-fn files() -> Source {
-    Source::Files {
-        base: String::new(),
-    }
-}
-
 #[test]
 fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let body = program(300_000);
@@ -310,7 +237,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
     let mut seen = Vec::new();
-    let path = download(&agent, &files(), &good, folder.path(), |have, whole| {
+    let path = download(&agent, &good, folder.path(), |have, whole| {
         seen.push((have, whole));
         true
     })
@@ -321,7 +248,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     // Asked again (its installation failed): there already, not fetched.
     let before = server.requests().len();
     assert_eq!(
-        download(&agent, &files(), &good, folder.path(), |_, _| true),
+        download(&agent, &good, folder.path(), |_, _| true),
         Ok(path.clone())
     );
     assert_eq!(server.requests().len(), before);
@@ -330,7 +257,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut wrong = good.clone();
     wrong.sha256 = hex(&Sha256::digest(b"otra cosa"));
     assert_eq!(
-        download(&agent, &files(), &wrong, folder.path(), |_, _| true),
+        download(&agent, &wrong, folder.path(), |_, _| true),
         Err(Error::Digest)
     );
     // The earlier release's bundle is not kept beside it.
@@ -347,7 +274,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut short = wrong.clone();
     short.size = 1000;
     assert_eq!(
-        download(&agent, &files(), &short, folder.path(), |_, _| true),
+        download(&agent, &short, folder.path(), |_, _| true),
         Err(Error::Digest)
     );
     assert!(!folder
@@ -358,7 +285,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut long = wrong;
     long.size = body.len() as u64 + 10;
     assert_eq!(
-        download(&agent, &files(), &long, folder.path(), |_, _| true),
+        download(&agent, &long, folder.path(), |_, _| true),
         Err(Error::Incomplete)
     );
 }
@@ -370,7 +297,7 @@ fn a_cut_download_resumes_where_it_stopped() {
     server.configure(|files| files.cut = Some(("/quill.gz".into(), 150_000)));
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
-    let first = download(&agent, &files(), &wanted, folder.path(), |_, _| true);
+    let first = download(&agent, &wanted, folder.path(), |_, _| true);
     assert!(
         matches!(first, Err(Error::Network | Error::Incomplete)),
         "{first:?}"
@@ -379,7 +306,7 @@ fn a_cut_download_resumes_where_it_stopped() {
     // What arrived before the cut, as far as the client read it.
     let kept = std::fs::metadata(&part).unwrap().len();
     assert!(kept > 0 && kept <= 150_000, "{kept}");
-    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
+    let path = download(&agent, &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
     assert_eq!(
         server.requests(),
@@ -394,13 +321,11 @@ fn a_stopped_download_keeps_its_part() {
     let (_server, wanted) = artifact_server(&body);
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
-    let stopped = download(&agent, &files(), &wanted, folder.path(), |have, _| {
-        have < 100_000
-    });
+    let stopped = download(&agent, &wanted, folder.path(), |have, _| have < 100_000);
     assert_eq!(stopped, Err(Error::Interrupted));
     let part = folder.path().join(format!("quill-{}.part", wanted.sha256));
     assert!(std::fs::metadata(&part).unwrap().len() >= 100_000);
-    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
+    let path = download(&agent, &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
 }
 
@@ -414,8 +339,8 @@ fn a_server_without_ranges_sends_it_again_from_the_start() {
     });
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
-    assert!(download(&agent, &files(), &wanted, folder.path(), |_, _| true).is_err());
-    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
+    assert!(download(&agent, &wanted, folder.path(), |_, _| true).is_err());
+    let path = download(&agent, &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
 }
 
@@ -787,7 +712,7 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     );
 
     let agent = agent();
-    let source = Source::Files {
+    let source = Source {
         base: server.base(),
     };
     let manifest = check(&agent, &source, &Trust::new(vec![signer.verifying_key()])).unwrap();
@@ -797,7 +722,6 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     let install = Install::at(root.path());
     let file = download(
         &agent,
-        &source,
         offered.artifact.as_ref().unwrap(),
         &install.downloads(),
         |_, _| true,
@@ -850,7 +774,7 @@ fn a_manifest_reads_with_or_without_whats_new_and_older_copies_ignore_it() {
 
 /// A release on loopback whose what's new names `media`, each served as given: the release
 /// offered, its source and the server.
-fn whats_new_release(media: &[(whats_new::Kind, &[u8], &[u8])]) -> (Release, Source, Server) {
+fn whats_new_release(media: &[(whats_new::Kind, &[u8], &[u8])]) -> (Release, Server) {
     let server = serve(0).unwrap();
     let medium = |name: &str, bytes: &[u8], served: &[u8]| {
         server.put(&format!("/{name}"), served.to_vec());
@@ -891,9 +815,8 @@ fn whats_new_release(media: &[(whats_new::Kind, &[u8], &[u8])]) -> (Release, Sou
         artifact: None,
         whats_new: Some(entry),
         files: None,
-        assets: Default::default(),
     };
-    (release, files(), server)
+    (release, server)
 }
 
 /// Each medium is kept only when it is the size and digest the signed notes name: one that is
@@ -904,11 +827,11 @@ fn a_medium_that_does_not_match_its_digest_is_refused_and_the_words_still_come()
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
     // The first picture was changed on the server; the clip after it matches.
-    let (release, source, _server) = whats_new_release(&[
+    let (release, _server) = whats_new_release(&[
         (Kind::Image, b"the picture", b"another picture"),
         (Kind::Video, b"the clip", b"the clip"),
     ]);
-    let (notes, kept) = fetch_whats_new(&agent, &source, &release, folder.path()).unwrap();
+    let (notes, kept) = fetch_whats_new(&agent, &release, folder.path()).unwrap();
     assert_eq!(notes.notes.new, ["A browser beside the chat"]);
     let kept = kept.expect("the clip");
     assert_eq!(kept.kind, Kind::Video);
@@ -922,28 +845,28 @@ fn a_medium_that_does_not_match_its_digest_is_refused_and_the_words_still_come()
     assert_eq!(names.len(), 2, "{names:?}");
     // None matches: no medium, the words still.
     let folder = tempfile::tempdir().unwrap();
-    let (release, source, _server) =
+    let (release, _server) =
         whats_new_release(&[(Kind::Image, b"the picture", b"the picture, longer")]);
-    let (notes, kept) = fetch_whats_new(&agent, &source, &release, folder.path()).unwrap();
+    let (notes, kept) = fetch_whats_new(&agent, &release, folder.path()).unwrap();
     assert_eq!((notes.version, kept), (version("2.0.0"), None));
     // The notes themselves changed after signing: refused whole.
-    let (release, source, server) = whats_new_release(&[]);
+    let (release, server) = whats_new_release(&[]);
     server.put(
         &format!("/{}", whats_new::FILE),
         b"{\"version\":\"2.0.0\"}".to_vec(),
     );
     assert_eq!(
-        fetch_whats_new(&agent, &source, &release, folder.path()),
+        fetch_whats_new(&agent, &release, folder.path()),
         Err(Error::Digest)
     );
     // Another release's notes, signed as this one's.
-    let (release, source, _server) = whats_new_release(&[]);
+    let (release, _server) = whats_new_release(&[]);
     let release = Release {
         version: version("3.0.0"),
         ..release
     };
     assert_eq!(
-        fetch_whats_new(&agent, &source, &release, folder.path()),
+        fetch_whats_new(&agent, &release, folder.path()),
         Err(Error::Manifest)
     );
 }
@@ -1112,7 +1035,7 @@ fn a_lower_sequence_another_product_or_an_expired_manifest_is_refused() {
     let signer = key();
     let server = serve(0).unwrap();
     publish(&server, &signer, &at(4));
-    let feed = Source::Files {
+    let feed = Source {
         base: server.base(),
     };
     let trust = |sequence| Trust {
@@ -1253,17 +1176,15 @@ fn a_bundle_is_staged_from_local_files_and_only_the_changed_blobs() {
     let server = serve(0).unwrap();
     let entry = serve::publish_files(&server, &two, &version("2.0.0"), "linux-x86_64");
     let agent = agent();
-    let source = files();
-    let bundle =
-        files::fetch_bundle(&agent, &source, &entry, &version("2.0.0"), "linux-x86_64").unwrap();
+    let bundle = files::fetch_bundle(&agent, &entry, &version("2.0.0"), "linux-x86_64").unwrap();
     // Another version's list, or one for another system, is refused.
     assert_eq!(
-        files::fetch_bundle(&agent, &source, &entry, &version("2.0.1"), "linux-x86_64"),
+        files::fetch_bundle(&agent, &entry, &version("2.0.1"), "linux-x86_64"),
         Err(Error::Manifest)
     );
     let blobs = install.downloads().join("blobs");
     let mut told = Vec::new();
-    let staged = files::stage(&agent, &source, &install, &bundle, &blobs, |done, total| {
+    let staged = files::stage(&agent, &install, &bundle, &blobs, |done, total| {
         told.push((done, total));
         true
     })
@@ -1307,8 +1228,7 @@ fn a_bad_blob_stages_nothing() {
     let server = serve(0).unwrap();
     let entry = serve::publish_files(&server, &two, &version("2.0.0"), "linux-x86_64");
     let agent = agent();
-    let bundle =
-        files::fetch_bundle(&agent, &files(), &entry, &version("2.0.0"), "linux-x86_64").unwrap();
+    let bundle = files::fetch_bundle(&agent, &entry, &version("2.0.0"), "linux-x86_64").unwrap();
     let quill = bundle
         .files
         .iter()
@@ -1319,7 +1239,7 @@ fn a_bad_blob_stages_nothing() {
     server.put(&format!("/{name}"), vec![0x1f; quill.packed as usize]);
     let blobs = install.downloads().join("blobs");
     assert_eq!(
-        files::stage(&agent, &files(), &install, &bundle, &blobs, |_, _| true),
+        files::stage(&agent, &install, &bundle, &blobs, |_, _| true),
         Err(Error::Disk)
     );
     assert!(!install.root().join("versions/2.0.0").exists());
@@ -1327,7 +1247,7 @@ fn a_bad_blob_stages_nothing() {
     // A blob larger than listed is cut off and refused before it is unpacked.
     server.put(&format!("/{name}"), vec![0; quill.packed as usize + 10]);
     assert_eq!(
-        files::stage(&agent, &files(), &install, &bundle, &blobs, |_, _| true),
+        files::stage(&agent, &install, &bundle, &blobs, |_, _| true),
         Err(Error::Digest)
     );
 }

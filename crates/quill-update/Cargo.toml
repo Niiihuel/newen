@@ -13,7 +13,7 @@ default = []
 serve = []
 
 [dependencies]
-# Starts gh as every quill process starts (Windows: no console, PATHEXT).
+# Where the update log is kept (the data folder every quill crate uses).
 quill-files = { path = "../quill-files" }
 # The manifest is a small JSON document, and the GitHub API's answer too.
 serde = { workspace = true }

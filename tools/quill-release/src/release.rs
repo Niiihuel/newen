@@ -791,7 +791,7 @@ file = "browser.png"
         let work = tempfile::tempdir().unwrap();
         let key = SigningKey::from_bytes(&[9; 32]);
         let base = |version: &str| {
-            format!("https://github.com/Niiihuel/quill-releases/releases/download/v{version}")
+            format!("https://github.com/Niiihuel/quill/releases/download/v{version}")
         };
         let (one, two) = (Version::new(1, 0, 0), Version::new(2, 0, 0));
         let tree = work.path().join("tree-1");

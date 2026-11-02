@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{disk, fetch, hex, sha256, usable, via, Artifact, Error, Release, Source, Version};
+use crate::{disk, fetch, hex, sha256, usable, Artifact, Error, Release, Version};
 
 /// Its name among the release's files.
 pub const FILE: &str = "whats-new.json";
@@ -91,12 +91,11 @@ pub struct Kept {
 /// its announcement's media that matches too, kept in `folder` under its digest.
 pub fn fetch_whats_new(
     agent: &ureq::Agent,
-    source: &Source,
     release: &Release,
     folder: &Path,
 ) -> Result<(WhatsNew, Option<Kept>), Error> {
     let entry = release.whats_new.as_ref().ok_or(Error::NoArtifact)?;
-    let bytes = get(agent, source, release, entry, MAX_JSON)?;
+    let bytes = get(agent, entry, MAX_JSON)?;
     let whats_new: WhatsNew = serde_json::from_slice(&bytes).map_err(|error| {
         eprintln!("quill: update: unreadable {FILE}: {error}");
         Error::Manifest
@@ -109,11 +108,9 @@ pub fn fetch_whats_new(
     let kept = media
         .filter(|medium| medium.kind != Kind::Other)
         .find_map(|medium| {
-            let kept = keep(agent, source, release, &medium.file, folder).and_then(|file| {
+            let kept = keep(agent, &medium.file, folder).and_then(|file| {
                 let poster = match (&medium.kind, &medium.poster) {
-                    (Kind::Video, Some(poster)) => {
-                        Some(keep(agent, source, release, poster, folder)?)
-                    }
+                    (Kind::Video, Some(poster)) => Some(keep(agent, poster, folder)?),
                     // A clip shows its picture until it plays: it needs one.
                     (Kind::Video, None) => return Err(Error::Manifest),
                     _ => None,
@@ -133,18 +130,11 @@ pub fn fetch_whats_new(
 }
 
 /// The bytes of `file`, once they are its size and digest.
-fn get(
-    agent: &ureq::Agent,
-    source: &Source,
-    release: &Release,
-    file: &Artifact,
-    limit: u64,
-) -> Result<Vec<u8>, Error> {
+fn get(agent: &ureq::Agent, file: &Artifact, limit: u64) -> Result<Vec<u8>, Error> {
     if !usable(file) || file.size > limit {
         return Err(Error::TooLarge);
     }
-    let url = via(&release.assets, &file.url);
-    let bytes = fetch(agent, &url, source.grant(), file.size as usize)?;
+    let bytes = fetch(agent, &file.url, file.size as usize)?;
     if bytes.len() as u64 != file.size
         || hex(&Sha256::digest(&bytes)) != file.sha256.to_ascii_lowercase()
     {
@@ -154,19 +144,13 @@ fn get(
 }
 
 /// `file` in `folder`, named by its digest: downloaded unless an earlier try left it whole.
-fn keep(
-    agent: &ureq::Agent,
-    source: &Source,
-    release: &Release,
-    file: &Artifact,
-    folder: &Path,
-) -> Result<PathBuf, Error> {
+fn keep(agent: &ureq::Agent, file: &Artifact, folder: &Path) -> Result<PathBuf, Error> {
     let digest = file.sha256.to_ascii_lowercase();
     let path = folder.join(format!("{digest}.{}", extension(&file.url)));
     if sha256(&path).is_ok_and(|found| found == digest) {
         return Ok(path);
     }
-    let bytes = get(agent, source, release, file, MAX_MEDIUM)?;
+    let bytes = get(agent, file, MAX_MEDIUM)?;
     let part = path.with_extension("part");
     std::fs::write(&part, bytes).map_err(disk)?;
     std::fs::rename(&part, &path).map_err(disk)?;

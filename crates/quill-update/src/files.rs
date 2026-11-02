@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::install::Install;
-use crate::{disk, fetch, fetch_to, hex, sha256, Artifact, Error, Source, Version};
+use crate::{disk, fetch, fetch_to, hex, sha256, Artifact, Error, Version};
 
 /// No list of files is larger.
 pub const MAX_INDEX: u64 = 4 << 20;
@@ -69,12 +69,11 @@ pub struct Link {
 /// was signed and every path in it stays inside the bundle.
 pub fn fetch_bundle(
     agent: &ureq::Agent,
-    source: &Source,
     index: &Artifact,
     version: &Version,
     platform: &str,
 ) -> Result<Bundle, Error> {
-    let bytes = fetch(agent, &index.url, source.grant(), MAX_INDEX as usize)?;
+    let bytes = fetch(agent, &index.url, MAX_INDEX as usize)?;
     if bytes.len() as u64 != index.size
         || !hex(&Sha256::digest(&bytes)).eq_ignore_ascii_case(&index.sha256)
     {
@@ -154,7 +153,6 @@ fn under(root: &Path, path: &str) -> PathBuf {
 /// the way left.
 pub fn stage(
     agent: &ureq::Agent,
-    source: &Source,
     install: &Install,
     bundle: &Bundle,
     blobs: &Path,
@@ -195,14 +193,9 @@ pub fn stage(
         let blob = blobs.join(blob_name(&file.sha256));
         let part = blobs.join(format!("{}.part", blob_name(&file.sha256)));
         let before = done;
-        fetch_to(
-            agent,
-            source,
-            &file.url,
-            file.packed,
-            &part,
-            &mut |have, _| progress(before + have, total),
-        )?;
+        fetch_to(agent, &file.url, file.packed, &part, &mut |have, _| {
+            progress(before + have, total)
+        })?;
         fs::rename(&part, &blob).map_err(disk)?;
         done += file.packed;
     }

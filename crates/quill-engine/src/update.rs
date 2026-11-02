@@ -79,7 +79,7 @@ struct Shared {
     /// Settings' `auto_update`.
     auto: bool,
     /// The newest release found, and where it is read from.
-    found: Option<(Release, Source)>,
+    found: Option<Release>,
     /// Counts the releases found: a download of an older one stops when it moves on.
     generation: u64,
     /// A check is on its way.
@@ -357,10 +357,9 @@ impl Updates {
         }
     }
 
-    /// The latest release's manifest: from the public feed, else the code's repository with a
-    /// token. The highest sequence and the keys a rotation names are kept before it returns,
+    /// The latest release's manifest. The highest sequence and the keys a rotation names are kept before it returns,
     /// except for a test feed of `QUILL_UPDATE_FEED`, which neither reads nor changes them.
-    fn fetch(&self) -> Result<(Manifest, Source), Error> {
+    fn fetch(&self) -> Result<Manifest, Error> {
         let test_feed =
             std::env::var("QUILL_UPDATE_FEED").is_ok_and(|base| !base.trim().is_empty());
         let sequence = (self.marked(SEQUENCE))
@@ -380,17 +379,8 @@ impl Updates {
         };
         let agent = quill_update::agent();
         let source = (self.feed.as_ref()).map_or_else(Source::locate, |(source, _)| source.clone());
-        let mut checked = quill_update::check(&agent, &source, &trust).map(|found| (found, source));
-        if let Err(error) = &checked {
-            if let Some(fallback) = self.feed.is_none().then(Source::fallback).flatten() {
-                self.log(format!(
-                    "check: the feed failed ({error}); the code's repository"
-                ));
-                checked =
-                    quill_update::check(&agent, &fallback, &trust).map(|found| (found, fallback));
-            }
-        }
-        if let Some((manifest, _)) = checked.as_ref().ok().filter(|_| !test_feed) {
+        let checked = quill_update::check(&agent, &source, &trust);
+        if let Some(manifest) = checked.as_ref().ok().filter(|_| !test_feed) {
             let store = self.store.lock().unwrap();
             if sequence.is_none_or(|kept| manifest.sequence > kept) {
                 if let Err(error) = store.mark(SEQUENCE, &manifest.sequence.to_string()) {
@@ -429,7 +419,7 @@ impl Updates {
             error: checked.as_ref().err().map(|error| error.label()),
         });
         match checked {
-            Ok((manifest, source)) => self.found(manifest, source, at),
+            Ok(manifest) => self.found(manifest, at),
             Err(error) => {
                 self.log(format!("check failed: {error}"));
                 self.set_unless_busy(failure(error));
@@ -439,7 +429,7 @@ impl Updates {
 
     /// What a check found: a newer release replaces what was found before (its download
     /// stops), unless the person skipped it or it was rolled back here.
-    fn found(&self, manifest: Manifest, source: Source, at: u64) {
+    fn found(&self, manifest: Manifest, at: u64) {
         let running = running();
         let latest = manifest.version.clone();
         let Some(release) = quill_update::offer(manifest, &running, &quill_update::platform())
@@ -472,13 +462,13 @@ impl Updates {
         let (generation, fetch) = {
             let mut shared = self.shared.lock().unwrap();
             let same =
-                (shared.found.as_ref()).is_some_and(|(found, _)| found.version == release.version);
+                (shared.found.as_ref()).is_some_and(|found| found.version == release.version);
             if same && busy(&shared.state) {
                 // On its way already, or here.
                 return;
             }
             shared.generation += 1;
-            shared.found = Some((release.clone(), source));
+            shared.found = Some(release.clone());
             // A mandatory version is fetched whatever Settings say: it must be installed.
             (shared.generation, mandatory || shared.auto)
         };
@@ -504,9 +494,9 @@ impl Updates {
     }
 
     fn run_download(&self) {
-        let (release, source, generation) = {
+        let (release, generation) = {
             let shared = self.shared.lock().unwrap();
-            let Some((release, source)) = shared.found.clone() else {
+            let Some(release) = shared.found.clone() else {
                 return;
             };
             let version = release.version.to_string();
@@ -517,7 +507,7 @@ impl Updates {
             ) {
                 return;
             }
-            (release, source, shared.generation)
+            (release, shared.generation)
         };
         let version = release.version.to_string();
         let mandatory = release.mandatory;
@@ -552,24 +542,19 @@ impl Updates {
         if let Some(index) = release.files.clone() {
             let (started, mut told, mut downloaded) = (Instant::now(), 0, 0);
             let agent = quill_update::agent();
-            let staged = files::fetch_bundle(
-                &agent,
-                &source,
-                &index,
-                &release.version,
-                &quill_update::platform(),
-            )
-            .and_then(|bundle| {
-                self.log(format!(
-                    "download: {version} file by file, {} files",
-                    bundle.files.len()
-                ));
-                let blobs = install.downloads().join("blobs");
-                files::stage(&agent, &source, &install, &bundle, &blobs, |done, total| {
-                    downloaded = done;
-                    report(&mut told, done, total)
-                })
-            });
+            let staged =
+                files::fetch_bundle(&agent, &index, &release.version, &quill_update::platform())
+                    .and_then(|bundle| {
+                        self.log(format!(
+                            "download: {version} file by file, {} files",
+                            bundle.files.len()
+                        ));
+                        let blobs = install.downloads().join("blobs");
+                        files::stage(&agent, &install, &bundle, &blobs, |done, total| {
+                            downloaded = done;
+                            report(&mut told, done, total)
+                        })
+                    });
             if self.generation() != generation {
                 return self.log(format!(
                     "download: {version} stopped: a newer release replaces it"
@@ -581,14 +566,7 @@ impl Updates {
                         "download: {version} done file by file, {downloaded} bytes in {:.1} s; every digest matches",
                         started.elapsed().as_secs_f32()
                     ));
-                    return self.keep_ready(
-                        generation,
-                        &release,
-                        &source,
-                        &install,
-                        path,
-                        index.sha256,
-                    );
+                    return self.keep_ready(generation, &release, &install, path, index.sha256);
                 }
                 Err(error) => self.log(format!(
                     "download: {version} file by file failed: {error}; the full archive instead"
@@ -611,7 +589,6 @@ impl Updates {
         let mut told = 0;
         let downloaded = quill_update::download(
             &quill_update::agent(),
-            &source,
             &artifact,
             &install.downloads(),
             |done, total| report(&mut told, done, total),
@@ -638,14 +615,7 @@ impl Updates {
             Ok(path) => {
                 // A whole bundle with CEF: it is not kept once staged.
                 let _ = std::fs::remove_file(&file);
-                self.keep_ready(
-                    generation,
-                    &release,
-                    &source,
-                    &install,
-                    path,
-                    artifact.sha256,
-                );
+                self.keep_ready(generation, &release, &install, path, artifact.sha256);
             }
             Err(error) => {
                 self.log(format!("stage: {version} failed: {error}"));
@@ -660,7 +630,6 @@ impl Updates {
         &self,
         generation: u64,
         release: &Release,
-        source: &Source,
         install: &Install,
         path: PathBuf,
         sha256: String,
@@ -682,7 +651,7 @@ impl Updates {
         }
         self.log(format!("stage: {version} at {}", staged.path.display()));
         // Before the strip shows: its announcement is there when it is clicked.
-        self.keep_whats_new(release, source);
+        self.keep_whats_new(release);
         self.ready(generation, release, staged.since);
     }
 
@@ -815,21 +784,20 @@ impl Updates {
 
     /// Downloads `release`'s notes and media into its folder; a failure leaves the update as
     /// it is, without them.
-    fn keep_whats_new(&self, release: &Release, source: &Source) {
+    fn keep_whats_new(&self, release: &Release) {
         let Some(folder) = (self.notes.as_ref()).filter(|_| release.whats_new.is_some()) else {
             return;
         };
         let folder = folder.join(release.version.to_string());
         let agent = quill_update::agent();
-        let kept =
-            wire::fetch_whats_new(&agent, source, release, &folder).and_then(|(notes, media)| {
-                let json = serde_json::to_vec_pretty(&release_notes(notes, media))
-                    .map_err(|_| Error::Manifest)?;
-                std::fs::write(folder.join(NOTES), json).map_err(|error| {
-                    eprintln!("quill: what's new: {error}");
-                    Error::Disk
-                })
-            });
+        let kept = wire::fetch_whats_new(&agent, release, &folder).and_then(|(notes, media)| {
+            let json = serde_json::to_vec_pretty(&release_notes(notes, media))
+                .map_err(|_| Error::Manifest)?;
+            std::fs::write(folder.join(NOTES), json).map_err(|error| {
+                eprintln!("quill: what's new: {error}");
+                Error::Disk
+            })
+        });
         match kept {
             Ok(()) => self.tell_whats_new(false),
             Err(error) => eprintln!("quill: what's new: not kept: {error}"),
@@ -957,13 +925,10 @@ fn unmanaged() -> Option<UpdateState> {
     Some(UpdateState::NotInstalled)
 }
 
-/// The state an error leaves: without access to the private repository, that is said as such.
+/// The state an error leaves.
 fn failure(error: Error) -> UpdateState {
-    match error {
-        Error::Access => UpdateState::NeedsAccess,
-        other => UpdateState::Failed {
-            reason: other.label(),
-        },
+    UpdateState::Failed {
+        reason: error.label(),
     }
 }
 
@@ -1051,7 +1016,7 @@ mod tests {
             log: Some(log),
             notify,
             feed: Some((
-                Source::Files {
+                Source {
                     base: server.base(),
                 },
                 key,
@@ -1460,21 +1425,19 @@ mod tests {
     }
 
     /// The window coming back checks when the last check is stale, once the start's wait is
-    /// over; a check's end is kept before it is told, and the log never holds the token or an
-    /// address.
+    /// over; a check's end is kept before it is told, and the log never holds an address.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_focus_after_a_stale_check_checks_and_the_log_holds_no_secret() {
+    async fn a_focus_after_a_stale_check_checks_and_the_log_holds_no_address() {
         let folder = tempfile::tempdir().unwrap();
         let server = quill_update::serve::serve(0).unwrap();
         let key = release(&server, &next(1), false, None);
         let kept_when_told: Arc<Mutex<Vec<bool>>> = Arc::default();
         let log = folder.path().join("updates.log");
         let (mut updates, told) = managed(&server, key, None, false, log.clone(), |_| {});
-        // The private repository's API, which refuses the token.
+        // A feed with no release at all.
         updates.feed = Some((
-            Source::Api {
-                token: "ghp_SECRET".into(),
-                api: server.base(),
+            Source {
+                base: format!("{}/nothing", server.base()),
             },
             key,
         ));
@@ -1508,12 +1471,12 @@ mod tests {
         }
         assert_eq!(*kept_when_told.lock().unwrap(), [true]);
         for _ in 0..200 {
-            if updates.state() == UpdateState::NeedsAccess {
+            if updates.state() == failure(Error::Status(404)) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert_eq!(updates.state(), UpdateState::NeedsAccess);
+        assert_eq!(updates.state(), failure(Error::Status(404)));
         // Just checked: coming back again checks nothing.
         let checks = told.events.lock().unwrap().len();
         updates.focused(false);
@@ -1521,7 +1484,7 @@ mod tests {
         assert_eq!(told.events.lock().unwrap().len(), checks);
         let text = std::fs::read_to_string(&log).unwrap();
         assert!(text.contains("check failed"), "{text}");
-        assert!(!text.contains("SECRET") && !text.contains("http"), "{text}");
+        assert!(!text.contains("http"), "{text}");
     }
 
     /// This version came by an update whose notes have an announcement: it is announced at
@@ -1623,17 +1586,6 @@ mod tests {
         assert_eq!(
             *told.lock().unwrap(),
             [Event::WhatsNew(WhatsNew::default())]
-        );
-    }
-
-    #[test]
-    fn a_refused_token_is_about_access_and_other_failures_say_why() {
-        assert_eq!(failure(Error::Access), UpdateState::NeedsAccess);
-        assert_eq!(
-            failure(Error::Digest),
-            UpdateState::Failed {
-                reason: Error::Digest.label()
-            }
         );
     }
 }

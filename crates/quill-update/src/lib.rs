@@ -9,10 +9,9 @@
 //! A manifest also names its product and channel, a `sequence` that only grows (a copy refuses
 //! one lower than the highest it saw) and maybe when it expires ([`admit`]).
 //!
-//! A check reads the public feed ([`FEED`]) at its latest release's addresses, with no token;
-//! when that fails, the latest release of the repository the code lives in ([`REPOSITORY`])
-//! through the GitHub API with a token ([`token`]), as copies up to 0.1.8 read it. A feed at a
-//! base address (`QUILL_UPDATE_FEED`, for the tests) needs no token. The signature is verified
+//! A check reads the latest release of [`REPOSITORY`], which is public, at its download
+//! addresses (not GitHub's API, so no token and no API rate limit); a feed at a base address
+//! (`QUILL_UPDATE_FEED`, for the tests) the same way. The signature is verified
 //! before the JSON is read, and an artifact is installed only once its size and digest match
 //! what was signed ([`install`]). Network, disk and every wait run on the caller's thread:
 //! never the interface's.
@@ -28,8 +27,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine as _;
 use ed25519_dalek::Signature;
@@ -41,12 +39,8 @@ pub use semver::Version;
 
 /// This program's version: the workspace's, which a release's tag matches.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The repository of quill's code, whose releases copies up to 0.1.8 read through the API
-/// with a token: the fallback of [`FEED`].
+/// The repository the releases are published in; public, so read with no token.
 pub const REPOSITORY: &str = "Niiihuel/quill";
-/// The public repository every release is published in too: read at its addresses, no token.
-pub const FEED: &str = "Niiihuel/quill-releases";
-const API: &str = "https://api.github.com";
 pub const MANIFEST: &str = "quill-update.json";
 pub const SIGNATURE: &str = "quill-update.json.sig";
 /// More signatures of the manifest, one a line: a rotation's new keys sign here. Copies up to
@@ -61,7 +55,6 @@ pub const MANDATORY_WORD: &str = "mandatory";
 const MAX_MANIFEST: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 1024;
 const MAX_SIGNATURES: usize = 8 * 1024;
-const MAX_RELEASE: usize = 1024 * 1024;
 /// No artifact is larger: a manifest that says so is refused.
 pub const MAX_ARTIFACT: u64 = 1 << 30;
 
@@ -112,10 +105,6 @@ pub struct Manifest {
     /// signature covers it, and the manifest stays small for the copies that never read it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub files: BTreeMap<String, Artifact>,
-    /// The release's files by name, with their addresses in the private repository's API, which
-    /// the media of `whats_new` are fetched from. Never signed: the check fills it.
-    #[serde(skip)]
-    pub assets: BTreeMap<String, String>,
     /// The keys `next_keys` names when this manifest rotated them: to keep and trust from now
     /// on. Never signed: the check fills it.
     #[serde(skip)]
@@ -138,7 +127,6 @@ impl Default for Manifest {
             expires: None,
             next_keys: Vec::new(),
             files: BTreeMap::new(),
-            assets: BTreeMap::new(),
             rotated: None,
         }
     }
@@ -167,8 +155,6 @@ pub struct Release {
     pub whats_new: Option<Artifact>,
     /// The list of its files for this platform ([`files`]), when it has a usable one.
     pub files: Option<Artifact>,
-    /// See [`Manifest::assets`].
-    pub assets: BTreeMap<String, String>,
 }
 
 /// Why a check, a download or an installation did not go through. Each leaves quill as it was.
@@ -176,8 +162,6 @@ pub struct Release {
 pub enum Error {
     /// This build has no release key: nothing can be trusted.
     NoKey,
-    /// The private repository refused the token, or there is none.
-    Access,
     Network,
     Status(u16),
     TooLarge,
@@ -204,7 +188,6 @@ impl Error {
     pub fn label(self) -> String {
         match self {
             Self::NoKey => "This build has no update key: no update can be trusted.".into(),
-            Self::Access => "Updates need access to the private repository (set QUILL_UPDATE_TOKEN or sign in with gh).".into(),
             Self::Network => "Could not reach the update server.".into(),
             Self::Status(status) => format!("The update server answered {status}."),
             Self::TooLarge => "The update server's answer is too large.".into(),
@@ -444,7 +427,6 @@ pub fn offer(manifest: Manifest, installed: &Version, platform: &str) -> Option<
         artifact,
         whats_new,
         files,
-        assets: manifest.assets,
     })
 }
 
@@ -482,87 +464,26 @@ pub fn minimum_version<'a>(
         .max()
 }
 
-/// Where a release's files are read from. Not `Debug`: it holds the token.
-#[derive(Clone)]
-pub enum Source {
-    /// Files at a base address: the test feed (`QUILL_UPDATE_FEED`), or a public repository's
-    /// releases.
-    Files { base: String },
-    /// A private repository's latest release, through its API with a token. `api` is the API's
-    /// base address (`https://api.github.com`, or a test server's).
-    Api { token: String, api: String },
+/// Where a release's files are read from: the files of one release at a base address.
+#[derive(Clone, Debug)]
+pub struct Source {
+    pub base: String,
 }
 
 impl Source {
-    /// Where this copy looks: `QUILL_UPDATE_FEED` when set, else the public feed's latest
-    /// release.
+    /// Where this copy looks: `QUILL_UPDATE_FEED` when set (a test feed), else the latest
+    /// release of [`REPOSITORY`], at its public addresses, with no token.
     pub fn locate() -> Self {
         if let Some(base) = std::env::var("QUILL_UPDATE_FEED")
             .ok()
             .filter(|base| !base.trim().is_empty())
         {
-            return Self::Files {
+            return Self {
                 base: base.trim_end_matches('/').to_owned(),
             };
         }
-        Self::Files {
-            base: format!("https://github.com/{FEED}/releases/latest/download"),
-        }
-    }
-
-    /// Where a check looks when [`Self::locate`]'s fails: the code's repository through its
-    /// API, with a token. `None` without a token, or with a feed of `QUILL_UPDATE_FEED`.
-    pub fn fallback() -> Option<Self> {
-        if std::env::var("QUILL_UPDATE_FEED").is_ok_and(|base| !base.trim().is_empty()) {
-            return None;
-        }
-        Some(Self::Api {
-            token: token()?,
-            api: API.to_owned(),
-        })
-    }
-
-    /// The token and the API base a request to the API carries, if any.
-    pub(crate) fn grant(&self) -> Option<(&str, &str)> {
-        match self {
-            Self::Api { token, api } => Some((token, api)),
-            Self::Files { .. } => None,
-        }
-    }
-}
-
-/// The token that reads the private repository: `QUILL_UPDATE_TOKEN`, else the output of
-/// `gh auth token`, waited for five seconds at most. It is never logged.
-pub fn token() -> Option<String> {
-    if let Some(token) = std::env::var("QUILL_UPDATE_TOKEN")
-        .ok()
-        .map(|token| token.trim().to_owned())
-        .filter(|token| !token.is_empty())
-    {
-        return Some(token);
-    }
-    let mut child = quill_files::command("gh")
-        .args(["auth", "token"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait().ok()? {
-            Some(status) => {
-                let mut out = String::new();
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
-                let token = out.trim().to_owned();
-                return (status.success() && !token.is_empty()).then_some(token);
-            }
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            None => std::thread::sleep(Duration::from_millis(50)),
+        Self {
+            base: format!("https://github.com/{REPOSITORY}/releases/latest/download"),
         }
     }
 }
@@ -588,39 +509,14 @@ pub fn check(agent: &ureq::Agent, source: &Source, trust: &Trust) -> Result<Mani
     if trust.keys.is_empty() {
         return Err(Error::NoKey);
     }
-    let manifest = match source {
-        Source::Files { base } => {
-            let manifest = fetch(agent, &format!("{base}/{MANIFEST}"), None, MAX_MANIFEST)?;
-            let signature = fetch(agent, &format!("{base}/{SIGNATURE}"), None, MAX_SIGNATURE)?;
-            let more = match fetch(agent, &format!("{base}/{SIGNATURES}"), None, MAX_SIGNATURES) {
-                Err(Error::Status(404)) => Vec::new(),
-                more => more?,
-            };
-            verify_signed(&manifest, &signatures(&signature, &more)?, &trust.keys)?
-        }
-        Source::Api { token, api } => {
-            let assets = latest(agent, token, api)?;
-            let asset = |name: &str| assets.get(name).ok_or(Error::Manifest);
-            let grant = Some((token.as_str(), api.as_str()));
-            let manifest = fetch(agent, asset(MANIFEST)?, grant, MAX_MANIFEST)?;
-            let signature = fetch(agent, asset(SIGNATURE)?, grant, MAX_SIGNATURE)?;
-            let more = match assets.get(SIGNATURES) {
-                Some(url) => fetch(agent, url, grant, MAX_SIGNATURES)?,
-                None => Vec::new(),
-            };
-            let mut manifest =
-                verify_signed(&manifest, &signatures(&signature, &more)?, &trust.keys)?;
-            // The signed addresses name the release's files; the API reaches the same files.
-            let files = (manifest.platforms.values_mut())
-                .chain(manifest.files.values_mut())
-                .chain(manifest.whats_new.as_mut());
-            for artifact in files {
-                artifact.url = via(&assets, &artifact.url);
-            }
-            manifest.assets = assets;
-            manifest
-        }
+    let base = &source.base;
+    let manifest = fetch(agent, &format!("{base}/{MANIFEST}"), MAX_MANIFEST)?;
+    let signature = fetch(agent, &format!("{base}/{SIGNATURE}"), MAX_SIGNATURE)?;
+    let more = match fetch(agent, &format!("{base}/{SIGNATURES}"), MAX_SIGNATURES) {
+        Err(Error::Status(404)) => Vec::new(),
+        more => more?,
     };
+    let manifest = verify_signed(&manifest, &signatures(&signature, &more)?, &trust.keys)?;
     admit(&manifest, trust.sequence, now())?;
     Ok(manifest)
 }
@@ -638,70 +534,20 @@ fn now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// Where the API serves the release file `url` names (by its last part), else `url` itself.
-pub(crate) fn via(assets: &BTreeMap<String, String>, url: &str) -> String {
-    let name = url.rsplit('/').next().unwrap_or_default();
-    assets.get(name).cloned().unwrap_or_else(|| url.to_owned())
-}
-
 fn text(bytes: &[u8]) -> Result<&str, Error> {
     std::str::from_utf8(bytes).map_err(|_| Error::Signature)
 }
 
-#[derive(Deserialize)]
-struct Latest {
-    assets: Vec<Asset>,
-}
-
-#[derive(Deserialize)]
-struct Asset {
-    name: String,
-    /// The asset's address in the API, which a download of it follows.
-    url: String,
-}
-
-/// The latest release's assets by name, each with its address in the API.
-fn latest(agent: &ureq::Agent, token: &str, api: &str) -> Result<BTreeMap<String, String>, Error> {
-    let response = agent
-        .get(&format!("{api}/repos/{REPOSITORY}/releases/latest"))
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .call()
-        .map_err(network)?;
-    let status = response.status().as_u16();
-    if !response.status().is_success() {
-        return Err(status_error(status, true));
-    }
-    let body = read_limited(&mut response.into_body().into_reader(), MAX_RELEASE)?;
-    let latest: Latest = serde_json::from_slice(&body).map_err(|_| Error::Manifest)?;
-    Ok(latest
-        .assets
-        .into_iter()
-        .map(|asset| (asset.name, asset.url))
-        .collect())
-}
-
-/// A GET of `url`, from byte `offset` on when given. The token goes to the API only, and
-/// redirects are followed here, without it: the API sends a download on to a storage host that
-/// must not see it.
+/// A GET of `url`, from byte `offset` on when given. Redirects are followed here, five at
+/// most: GitHub sends a release's file on to its storage host.
 fn request(
     agent: &ureq::Agent,
     url: &str,
-    grant: Option<(&str, &str)>,
     offset: Option<u64>,
 ) -> Result<ureq::http::Response<ureq::Body>, Error> {
     let mut url = url.to_owned();
-    let mut grant = grant;
     for _ in 0..5 {
         let mut request = agent.get(&url);
-        if let Some((token, api)) = grant {
-            if url.starts_with(api) {
-                request = request
-                    .header("Authorization", format!("Bearer {token}"))
-                    .header("Accept", "application/octet-stream");
-            }
-        }
         if let Some(offset) = offset {
             request = request.header("Range", format!("bytes={offset}-"));
         }
@@ -715,32 +561,18 @@ fn request(
             .and_then(|location| location.to_str().ok())
             .ok_or(Error::Network)?
             .to_owned();
-        grant = None;
     }
     Err(Error::Network)
 }
 
 /// The body of `url` when it answers 2xx, read up to `limit` bytes.
-pub(crate) fn fetch(
-    agent: &ureq::Agent,
-    url: &str,
-    grant: Option<(&str, &str)>,
-    limit: usize,
-) -> Result<Vec<u8>, Error> {
-    let response = request(agent, url, grant, None)?;
+pub(crate) fn fetch(agent: &ureq::Agent, url: &str, limit: usize) -> Result<Vec<u8>, Error> {
+    let response = request(agent, url, None)?;
     let status = response.status().as_u16();
     if !response.status().is_success() {
-        return Err(status_error(status, grant.is_some()));
+        return Err(Error::Status(status));
     }
     read_limited(&mut response.into_body().into_reader(), limit)
-}
-
-/// What a refused answer means: with a token, a 401, 403 or 404 is about access.
-fn status_error(status: u16, with_token: bool) -> Error {
-    match status {
-        401 | 403 | 404 if with_token => Error::Access,
-        _ => Error::Status(status),
-    }
 }
 
 /// Everything `reader` gives, unless it is more than `limit` bytes.
@@ -776,7 +608,6 @@ pub(crate) fn disk(error: io::Error) -> Error {
 /// not match is deleted.
 pub fn download(
     agent: &ureq::Agent,
-    source: &Source,
     artifact: &Artifact,
     folder: &Path,
     mut progress: impl FnMut(u64, u64) -> bool,
@@ -797,14 +628,7 @@ pub fn download(
     if sha256(&done).is_ok_and(|found| found == digest) {
         return Ok(done);
     }
-    fetch_to(
-        agent,
-        source,
-        &artifact.url,
-        artifact.size,
-        &part,
-        &mut progress,
-    )?;
+    fetch_to(agent, &artifact.url, artifact.size, &part, &mut progress)?;
     if sha256(&part).map_err(disk)? != digest {
         let _ = std::fs::remove_file(&part);
         return Err(Error::Digest);
@@ -818,7 +642,6 @@ pub fn download(
 /// stops it by answering false ([`Error::Interrupted`]), its part kept.
 pub(crate) fn fetch_to(
     agent: &ureq::Agent,
-    source: &Source,
     url: &str,
     size: u64,
     part: &Path,
@@ -830,7 +653,7 @@ pub(crate) fn fetch_to(
     }
     if have < size {
         let offset = (have > 0).then_some(have);
-        let response = request(agent, url, source.grant(), offset)?;
+        let response = request(agent, url, offset)?;
         let status = response.status();
         let resumed = status == ureq::http::StatusCode::PARTIAL_CONTENT
             && have > 0
@@ -841,7 +664,7 @@ pub(crate) fn fetch_to(
                 .is_some_and(|range| range.starts_with(&format!("bytes {have}-")));
         if !resumed {
             if !status.is_success() {
-                return Err(status_error(status.as_u16(), source.grant().is_some()));
+                return Err(Error::Status(status.as_u16()));
             }
             // The server sends it whole: start over.
             have = 0;

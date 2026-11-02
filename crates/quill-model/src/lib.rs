@@ -1216,8 +1216,6 @@ pub enum UpdateState {
     FromSource,
     /// A binary that `quill --install` never placed: nothing to update in place.
     NotInstalled,
-    /// The repository is private and no token was found (`QUILL_UPDATE_TOKEN`, or `gh`).
-    NeedsAccess,
 }
 
 /// The release notes quill keeps (docs/UPDATES.md): each downloaded with its update, the
