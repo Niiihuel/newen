@@ -4,8 +4,8 @@
 #   scripts/install-desktop.sh [path/to/newen]
 # Without a path: the installed program ($XDG_DATA_HOME/newen/app/current/newen, or where
 # quill 0.1.9 placed it before Newen's first start moved the data), else this checkout's build.
-# A launcher of quill's made by hand (a wrapper, say) keeps what it started, and so does one of
-# quill's installation while it has no Newen. quill's launcher and icons go.
+# A launcher made by hand (a wrapper, say; Newen's, else quill's) keeps what it started, and so
+# does one of quill's installation while it has no Newen. quill's launcher and icons go.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -18,15 +18,20 @@ if [ -z "$bin" ]; then
   done
 fi
 exec_line="Exec=\"$bin\" %U"
-if [ -z "${1:-}" ] && [ -f "$apps/quill.desktop" ]; then
-  old=$(grep -m1 '^Exec=' "$apps/quill.desktop" || true)
-  case $old in
-    "" | *"$root/target/"*) ;;
-    *"$data/quill/app/"*)
-      case $bin in "${installed[0]}" | "${installed[1]}") ;; *) exec_line=$old ;; esac ;;
-    *) exec_line=$old ;;
-  esac
+old=
+if [ -z "${1:-}" ]; then
+  # Newen's launcher first: a hand-made Exec carried over from quill's on an earlier run is there.
+  for launcher in "$apps/newen.desktop" "$apps/quill.desktop"; do
+    if [ -f "$launcher" ]; then old=$(grep -m1 '^Exec=' "$launcher" || true); fi
+    if [ -n "$old" ]; then break; fi
+  done
 fi
+case $old in
+  "" | *"$root/target/"* | *"$data/newen/app/"*) ;;
+  *"$data/quill/app/"*)
+    case $bin in "${installed[0]}" | "${installed[1]}") ;; *) exec_line=$old ;; esac ;;
+  *) exec_line=$old ;;
+esac
 if [ "$exec_line" = "Exec=\"$bin\" %U" ] && [ ! -x "$bin" ]; then
   echo "No Newen to start${bin:+ at $bin}: build it, install it, or give its path" >&2
   exit 1
