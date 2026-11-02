@@ -502,7 +502,10 @@ sigue este orden:
   imágenes pegadas, el perfil de Chromium, el registro de actualizaciones).
 - **Llavero**: lee el servicio `quill` y, si no tiene el secreto, `newen`
   (donde Newen guarda los suyos); escribe sólo en `quill`, y borrar borra de los
-  dos, para que un secreto borrado no vuelva desde el de Newen.
+  dos, para que un secreto borrado no vuelva desde el de Newen. Escribir también
+  borra la copia de `newen`: Newen lee primero la suya, y una copia vieja (de
+  una prueba de Newen que volvió a 0.1.9) taparía el valor que la persona
+  cambió acá; sin ella, Newen lee el de `quill` y lo copia.
 - **Reinicio**: pone `QUILL_RESTART_AFTER` y `NEWEN_RESTART_AFTER`, y espera
   al proceso que nombre cualquiera de las dos.
 

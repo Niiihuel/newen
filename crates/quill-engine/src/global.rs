@@ -78,8 +78,10 @@ impl Secrets for Service {
     }
 }
 
-/// Secrets written to the first; read from the second when the first has none. A delete
-/// removes both, or the second would give back a secret deleted here.
+/// Secrets written to the first; read from the second when the first has none. A write
+/// removes the second's: Newen reads its own first, and an older copy it made would hide the
+/// value written here. A delete removes both, or the second would give back a secret deleted
+/// here.
 #[derive(Debug)]
 struct Carried<A, B>(A, B);
 
@@ -91,7 +93,9 @@ impl<A: Secrets, B: Secrets> Secrets for Carried<A, B> {
         }
     }
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
-        self.0.set(account, value)
+        self.0.set(account, value)?;
+        self.1.delete(account);
+        Ok(())
     }
     fn delete(&self, account: &str) {
         self.0.delete(account);
@@ -748,8 +752,9 @@ mod tests {
     use quill_model::GlobalVar;
 
     /// What the keychain does with its two services, quill's and Newen's: a secret is written
-    /// to quill's, read from it first and from Newen's when quill's has none, and deleted from
-    /// both, so a deleted one never comes back from Newen's.
+    /// to quill's, read from it first and from Newen's when quill's has none. A write removes
+    /// Newen's copy, so Newen, which reads its own first, finds the new value in quill's; a
+    /// delete removes both, so a deleted one never comes back from Newen's.
     #[test]
     fn a_secret_is_read_from_newen_s_service_when_quill_s_has_none() {
         let both = Carried(MemorySecrets::default(), MemorySecrets::default());
@@ -758,10 +763,10 @@ mod tests {
         // Written by Newen: found.
         both.1.set(account, "from newen").unwrap();
         assert_eq!(both.get(account), Ok(Some("from newen".into())));
-        // Written here: quill's, which comes first; Newen's is left alone.
+        // Written here: quill's, which comes first; Newen's older copy goes.
         both.set(account, "from quill").unwrap();
         assert_eq!(both.0.get(account), Ok(Some("from quill".into())));
-        assert_eq!(both.1.get(account), Ok(Some("from newen".into())));
+        assert_eq!(both.1.get(account), Ok(None));
         assert_eq!(both.get(account), Ok(Some("from quill".into())));
         both.delete(account);
         assert_eq!(both.get(account), Ok(None));
