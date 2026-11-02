@@ -1,7 +1,9 @@
 # Actualizaciones
 
 quill se actualiza solo desde las releases de `Niiihuel/quill`, un repositorio
-**privado**. Cada tag `v*` publica una release con un manifiesto firmado; una
+**público** desde el 27-10-2026: se leen sin token (ver [Dónde se
+lee](#dónde-se-lee)). Cada tag `v*` publica una release con un manifiesto
+firmado; una
 versión es **obligatoria** si el mensaje de su tag anotado tiene la palabra
 «mandatory», y entonces quill se actualiza antes de seguir. Si no, la
 actualización es **opcional**: se descarga sola (si Ajustes lo permite), queda
@@ -22,10 +24,31 @@ Cada release publica, además de sus artefactos:
 
 - `quill-update.json`: versión, fecha, notas (el mensaje del tag),
   `minimum_version` y, por plataforma (`linux-x86_64`, `windows-x86_64`,
-  `macos-aarch64`), la URL, el tamaño y el SHA-256 del artefacto.
+  `macos-aarch64`), la URL, el tamaño y el SHA-256 del artefacto. Desde 0.1.9
+  (manifiesto v2) también:
+  - `product` (`"quill"`) y `channel` (`"stable"`): uno de otro producto o
+    canal se rechaza;
+  - `sequence`: un número que sólo crece (ver [Seguridad](#seguridad));
+  - `expires` (opcional, RFC 3339): pasada esa fecha el manifiesto se rechaza;
+  - `next_keys` (opcional): el conjunto completo de claves en que confiar desde
+    ahora, para rotar la clave (ver [La clave](#la-clave));
+  - `files`: por plataforma, URL, tamaño y SHA-256 de `files-<plataforma>.json`,
+    la lista de archivos del bundle (ver [Archivo por
+    archivo](#archivo-por-archivo)).
 - `quill-update.json.sig`: la firma Ed25519 de esos bytes exactos, en base64.
+- `quill-update.json.sigs` (opcional): más firmas, una por línea; sólo en una
+  rotación de clave. `.sig` sigue teniendo una sola línea porque 0.1.8 y
+  anteriores leen sólo ese archivo.
 - `whats-new.json` y sus medios, si la release trae novedades (ver
   [Novedades](#novedades-whats-new)); el manifiesto los nombra y la misma firma los cubre.
+- `files-<plataforma>.json` y los blobs `f-<sha256>.gz` (ver [Archivo por
+  archivo](#archivo-por-archivo)).
+
+Las copias hasta 0.1.8 leen un manifiesto v2 sin problema: serde ignora los
+campos que no conoce (ninguna estructura del manifiesto tiene
+`deny_unknown_fields`, ni en 0.1.8), y el manifiesto sigue pesando unos pocos KB
+(0.1.8 rechaza uno de más de 64 KiB): por eso las listas de archivos van aparte,
+nombradas por digest, y no dentro del manifiesto.
 
 `minimum_version` es la versión obligatoria más nueva que sea menor o igual a
 la publicada: el CI la calcula leyendo los mensajes de **todos** los tags
@@ -36,10 +59,15 @@ una opcional.
 
 ### Una búsqueda
 
-1. Se busca la última release (ver [Token](#token-y-el-repositorio-privado)) y
-   se bajan `quill-update.json` y su firma, con tope de tamaño.
-2. **La firma se verifica antes de leer el JSON**, con `verify_strict` y la
-   clave compilada. Una firma que no verifica no instala nada.
+1. Se busca la última release (ver [Dónde se lee](#dónde-se-lee)) y
+   se bajan `quill-update.json`, su firma y `.sigs` si existe, con tope de
+   tamaño.
+2. **La firma se verifica antes de leer el JSON**, con `verify_strict` y las
+   claves en que se confía (las compiladas, o las que dejó una rotación). Una
+   firma que no verifica no instala nada. Después se rechaza un manifiesto de
+   otro producto o canal, vencido, o con `sequence` menor que la más alta vista;
+   la más alta (`update_sequence`) y las claves de una rotación (`update_keys`)
+   se guardan en `quill-store` antes de que la interfaz se entere.
 3. Se comparan versiones con SemVer. Si hay una más nueva, el estado pasa a
    «versión disponible» con sus notas; si es obligatoria, o si Ajustes tiene
    **Actualizar solo** encendido, se descarga sin preguntar. Una versión que la
@@ -73,7 +101,6 @@ Los estados que ve la persona (`quill_model::UpdateState`):
 | Error | el motivo, en una línea discreta, con **Reintentar** |
 | Compilado desde el código | «Compilado desde el código: actualiza con git pull» |
 | Sin instalar | «Ejecuta quill --install para mantenerlo actualizado» |
-| Sin acceso | «Las actualizaciones necesitan acceso al repositorio privado…» |
 
 En Ajustes la línea dice además cuándo terminó la última búsqueda («… ·
 Checked 3 minutes ago»), así que **Buscar actualizaciones** siempre responde:
@@ -139,6 +166,44 @@ descargada que nunca pasó por `quill --install` tampoco se toca.
 - Los datos de la persona (sesiones, ajustes, `~/.config/quill`) no los toca la
   actualización.
 
+### Archivo por archivo
+
+Entre 0.1.7 y 0.1.8 cambió un solo archivo, el programa (75,5 MB sin
+comprimir, 26,8 MB en gzip), pero el bundle son 233 archivos y 638,8 MB, y el
+`.tar.gz` entero 198 MB. Por eso, si la release trae la lista de archivos de la
+plataforma, se intenta primero archivo por archivo:
+
+- `files-<plataforma>.json` (que el manifiesto nombra por tamaño y SHA-256, así
+  que la firma la cubre): `{version, platform, files: [{path, size, sha256,
+  mode, url, packed}], links: [{path, target}]}`. `path` es relativo, con `/`,
+  tal como lo tiene el archivo de la release (macOS: `quill.app/…`); `url` es el
+  blob del archivo, `f-<sha256 del archivo>.gz`, en gzip, y `packed` su tamaño;
+  `links` son los enlaces simbólicos (los del framework de macOS). Se rechaza la
+  lista entera si un camino sale del bundle (`..`, absoluto, `\`, `:`), se
+  repite, o un enlace apunta afuera.
+- Un blob que ya publicó una release anterior se nombra con la URL de esa
+  release: cada release sube sólo los archivos que cambiaron. Por eso **las
+  releases viejas de `Niiihuel/quill` no se borran** (ni sus assets `f-*.gz`):
+  una release posterior puede seguir nombrándolos.
+- La copia arma la carpeta de la versión nueva con los archivos de la versión
+  que corre (Linux `current/`, Windows `quill.exe` y `versions\<la que corre>\`,
+  macOS `quill.app/`) cuyo SHA-256 coincide (en Linux un enlace duro si el modo
+  es el mismo; si no, una copia; en macOS la copia de APFS es un clon), y baja
+  sólo los blobs que faltan a `downloads/blobs/` (reanudables con `Range`, con
+  tope en `packed`), los descomprime comprobando tamaño y SHA-256, pone los
+  modos y crea los enlaces. El `.zip` de macOS se arma con `ditto --sequesterRsrc`, así
+  los atributos van en `__MACOSX/`, que la lista deja afuera. En macOS además `codesign --verify --deep --strict`
+  sobre el `quill.app` armado: tiene que ser exactamente el bundle firmado. Lo
+  arma `Install::stage_with`, así que la verificación de que es un programa de
+  este sistema, el `sync` y el renombre son los mismos que con el archivo
+  entero.
+- El progreso cuenta los bytes que de verdad se bajan. Con sólo el programa
+  cambiado, una actualización baja unos 27 MB en vez de 198 MB (más la lista,
+  unos 50 KB).
+- **Cualquier falla** (lista o blob que no coincide, red, disco, firma de macOS)
+  deja lo que se bajó para reintentar, lo anota en el registro («file by file
+  failed … the full archive instead») y sigue con el archivo entero, como antes.
+
 ### Volver atrás
 
 Antes de activar, quill escribe en la instalación (no en `quill.db`)
@@ -181,7 +246,7 @@ anterior tiene que poder abrirla.
 También: `check: up to date`, `check failed: <motivo>`, `download: … failed`,
 `stage: … failed`, `skip: …`, `rollback: …`, `schedule: the computer woke`. Una
 línea nombra versiones, tamaños, tiempos y el motivo de un fallo; **nunca una
-dirección ni el token**.
+dirección**.
 
 ## Novedades («What's new»)
 
@@ -349,7 +414,9 @@ file = "browser.png"
 El workflow **Release**, si existe `release/notes/<versión>.toml`, corre
 `quill-release whats-new <tag> <base> dist`: arma `dist/whats-new.json`, copia cada medio como
 `dist/whats-new-<archivo>` (los assets de una release no tienen carpetas) con su digest, y
-rechaza textos o medios que se pasan de los límites. `quill-release manifest … --whats-new
+rechaza textos o medios que se pasan de los límites: **cada línea de `new`, `improved` y
+`fixed`, y cada punto, 160 caracteres como mucho** (el título 60, el cuerpo 280, cinco
+puntos); una línea más larga corta la release en ese paso. `quill-release manifest … --whats-new
 dist/whats-new.json` nombra ese archivo en el manifiesto antes de firmarlo, y `quill-release
 verify` comprueba, además de la firma, que `whats-new.json` y cada medio en `dist/` sean lo que
 el manifiesto nombra. Después se suben con el resto. Sin el archivo de notas, la release sale
@@ -357,28 +424,26 @@ como antes, sin novedades. Para probarlo a mano:
 `cargo run -p quill-release -- whats-new v0.2.0 https://example.org /tmp/wn` (con el tag
 anotado creado).
 
-## Token y el repositorio privado
+## Dónde se lee
 
-Una búsqueda usa la API de GitHub (`releases/latest`) y baja los archivos por
-su API, con `Authorization: Bearer`. El token sale, en orden, de:
+Una búsqueda lee la última release de `Niiihuel/quill` (`REPOSITORY` en
+`crates/quill-update/src/lib.rs`) en sus direcciones públicas,
+`https://github.com/Niiihuel/quill/releases/latest/download/<archivo>`, y baja
+los artefactos, las listas y los blobs de las direcciones que nombra el
+manifiesto firmado. No usa la API de GitHub, así que no necesita token ni cuenta
+contra su límite de 60 pedidos por hora sin autenticar: hasta 0.1.8 el
+repositorio era privado y quill pedía un token (`QUILL_UPDATE_TOKEN` o `gh auth
+token`); desde 0.1.9 ese camino ya no existe, tampoco el estado «Sin acceso».
+Las redirecciones de GitHub (al servidor donde guarda los archivos) se siguen a
+mano, cinco como mucho, y cada respuesta tiene tope de tamaño.
 
-1. la variable `QUILL_UPDATE_TOKEN`;
-2. la salida de `gh auth token`, si `gh` está en el `PATH` (espera cinco
-   segundos como mucho, fuera del hilo de la interfaz).
+Las copias hasta 0.1.8 siguen leyendo el mismo repositorio por la API con su
+token: encuentran cada archivo de la release por su nombre, así que no hace
+falta publicar en otro lado.
 
-Sin token, o si la API responde 401, 403 o 404 con el token, el estado es
-**Sin acceso** y el mensaje lo dice. Un repositorio público se leería sin
-token: `PRIVATE = false` en `crates/quill-update/src/lib.rs` cambia la búsqueda
-a `releases/latest/download` (sin API).
-
-El token **no se escribe en logs ni en el estado** (`Source` no implementa
-`Debug`), y solo viaja a `api.github.com`: las redirecciones se siguen a mano y
-sin el token, porque la API manda la descarga a otro servidor. El token no se
-guarda en disco.
-
-Lo que no cubre: quien tenga el token puede leer el repositorio privado; quien
-controle la red puede ocultar una versión nueva (la copia sigue como está, y una
-obligatoria se descubre al volver la red).
+Lo que no cubre: quien controle la red puede ocultar una versión nueva (la
+copia sigue como está, y una obligatoria se descubre al volver la red), salvo
+que el manifiesto tenga `expires`.
 
 ## Publicar una release
 
@@ -406,14 +471,28 @@ obligatoria se descubre al volver la red).
      sistema abajo);
    - arma las novedades si hay `release/notes/<versión>.toml` (`quill-release
      whats-new`, ver [Novedades](#novedades-whats-new));
-   - arma el manifiesto (`quill-release manifest`, con `minimum_version` y las
-     novedades), lo
+   - baja la última release publicada (`quill-update.json`, sus firmas y
+     `files-*.json`; el borrador de ésta no cuenta); `quill-release` la
+     verifica con las claves compiladas;
+   - desempaqueta cada artefacto y arma su lista (`quill-release files … --previous
+     previous`): un archivo cuyo blob ya publicó una release anterior (o otra
+     plataforma de ésta) se nombra con esa URL; para los demás escribe
+     `f-<sha256>.gz`, lo único que se sube de blobs;
+   - arma el manifiesto (`quill-release manifest`, con `minimum_version`, las
+     novedades, las listas y la `sequence`: la de la release anterior más uno,
+     la misma si es la misma versión, y error si la anterior es más nueva), lo
      firma con el secreto (`quill-release sign`, con el programa ya compilado
-     para que ningún build script vea el secreto), lo **verifica con la clave
-     compilada en quill** (`quill-release verify`: un secreto que no coincide
-     con `release-key.pub` corta acá), y recién entonces sube los artefactos,
-     `quill-update.json` y `quill-update.json.sig` y publica la release. El
+     para que ningún build script vea el secreto), lo **verifica con las claves
+     compiladas en quill** (`quill-release verify`: un secreto que no coincide
+     con `release-key.pub` o `backup-key.pub` corta acá, y también una lista o
+     un blob nuevo que no sea lo que nombra), y recién entonces sube los
+     artefactos, las novedades, las listas y los blobs nuevos (de a 50), y al
+     final `quill-update.json` y sus firmas, y publica la release. El
      manifiesto se arma sobre los mismos archivos que se suben.
+
+   El job que firma y publica corre en el entorno `release` de GitHub: sólo un
+   tag `v*` llega a sus secretos y el dueño tiene que aprobar cada corrida
+   (*Review deployments* en la corrida).
 
 **Package** también corre solo, en un PR que toca el empaquetado o a mano
 (*Run workflow*): deja los tres bundles como artefactos del run para
@@ -448,7 +527,13 @@ obligatoria por error, publicar otra versión.
   token de grano fino con solo lectura de ese repositorio). Sin él, el checkout
   usa el `GITHUB_TOKEN` del repositorio de quill, que no alcanza a leer otro
   repositorio privado.
-- **Secreto `QUILL_UPDATE_SIGNING_KEY`**: la clave privada (ver [La clave](#la-clave)).
+- **Entorno `release`** (*Settings › Environments*): limitado a tags `v*`, con
+  el dueño como revisor obligatorio. Su secreto
+  **`QUILL_UPDATE_SIGNING_KEY`** es la clave privada (ver [La clave](#la-clave)).
+  Ya está cargado en el entorno; el secreto del mismo nombre a nivel de
+  repositorio sobra y conviene borrarlo, porque lo ve cualquier workflow de
+  cualquier rama: `gh secret delete QUILL_UPDATE_SIGNING_KEY --repo
+  Niiihuel/quill`.
 - **Variables `QUILL_WINDOWS_RELEASES` y `QUILL_MACOS_RELEASES`**: en `true`
   para que una release incluya Windows o macOS; apagada, la release sale sin
   ese sistema (Linux siempre va).
@@ -492,11 +577,48 @@ carga desde ese archivo, sin imprimirlo:
 gh secret set QUILL_UPDATE_SIGNING_KEY --repo Niiihuel/quill < ~/.config/quill-release/release-key
 ```
 
-**Guardar una copia de la privada** fuera de la máquina. Las copias instaladas
-sólo confían en la clave con la que se compilaron: perderla obliga a reinstalar a
-mano con una clave nueva. Para cambiarla a propósito: vaciar `release-key.pub`,
-generar otra, commitear y publicar; las copias viejas no aceptarán esa release y
-hay que reinstalarlas.
+**Guardar una copia de la privada** fuera de la máquina.
+
+### La clave de respaldo
+
+Desde 0.1.9 quill compila también una segunda clave pública,
+`crates/quill-update/backup-key.pub`, y acepta un manifiesto firmado por
+cualquiera de las dos. Su privada se generó con `quill-release keygen
+~/.config/quill-release/backup-signing-key` (carpeta 0700, archivo 0600) y
+**no debe quedar en la máquina**: el dueño la copia a un medio sin red (un
+pendrive cifrado, papel) y la borra del disco:
+
+```sh
+cp ~/.config/quill-release/backup-signing-key /media/<medio>/   # o imprimirla
+shred -u ~/.config/quill-release/backup-signing-key
+```
+
+Sirve si la clave de release se pierde o se filtra: con ella se firma una
+release que rota las claves (abajo), sin reinstalar nada.
+
+### Rotar las claves
+
+`next_keys` en el manifiesto es el conjunto **completo** de claves en que
+confiar desde ahora (incluir la de respaldo si debe seguir). Una copia lo
+acepta sólo si el manifiesto lo firmó una clave en la que ya confía **y** cada
+clave nueva de `next_keys`; entonces guarda ese conjunto (`update_keys` en
+`quill-store`) y desde ahí confía sólo en él: una clave que quedó afuera ya no
+firma nada para esa copia. Pasos:
+
+1. `quill-release keygen <archivo nuevo>`; la nueva va a `release-key.pub` en una
+   release posterior (las copias nuevas la traen compilada).
+2. En la release que rota: agregar `next_keys` al manifiesto antes de firmar
+   (hoy a mano: `quill-release manifest` no tiene opción para eso), firmar
+   `.sig` con una clave en la que confían (la de release, o la de respaldo si
+   la de release se perdió) y `quill-release cosign quill-update.json <clave
+   nueva>` para cada clave nueva (agrega una línea a `.sigs`).
+3. Mientras haya copias que no vieron esa release, las siguientes repiten
+   `next_keys` y la firma con la clave vieja en `.sigs`: una copia que se saltó
+   la rotación la hace con cualquiera de ellas.
+
+Lo que no cubre: quien tenga una clave en la que se confía puede rotar a una
+suya; sin umbral de firmas, la clave de release es tan poderosa como la de
+respaldo.
 
 ## Probar con el feed local
 
@@ -505,10 +627,9 @@ otro lado con variables de entorno:
 
 | Variable | Qué hace | Dónde vale |
 | --- | --- | --- |
-| `QUILL_UPDATE_FEED` | URL base con `quill-update.json` y `.sig` (en vez de la API del repositorio); también hace que una copia sin instalar busque | siempre (igual se verifica con la clave compilada) |
+| `QUILL_UPDATE_FEED` | URL base con `quill-update.json` y `.sig` (en vez de las releases del repositorio); también hace que una copia sin instalar busque | siempre (igual se verifica con la clave compilada) |
 | `QUILL_UPDATE_KEY` | clave pública en base64 en lugar de la compilada | sólo compilaciones de depuración |
 | `QUILL_UPDATE_ROOT` | carpeta de la instalación en vez de `~/.local/share/quill/app` | siempre |
-| `QUILL_UPDATE_TOKEN` | token de la API (ver [Token](#token-y-el-repositorio-privado)) | siempre |
 | `QUILL_NO_UPDATE` | esta copia nunca busca ni se instala sola | siempre |
 
 El feed de prueba firma una release inventada con una clave descartable y la
@@ -525,11 +646,14 @@ Opciones: `--version 9.9.9`, `--mandatory`, `--slow` (descarga lenta, para ver e
 progreso), `--corrupt` (SHA-256 que no coincide), `--port`, `--artifact <archivo>`
 (lo que se instala, armado como lo arma el CI: el `.tar.gz` o el `.zip` de una
 compilación con esa versión; sin él es un relleno que no es un archivo
-comprimido y la instalación lo rechaza), `--platform windows-x86_64`.
+comprimido y la instalación lo rechaza), `--platform windows-x86_64`, `--tree
+<carpeta>` (sirve además el bundle desempaquetado en esa carpeta archivo por
+archivo, con su lista y sus blobs, como lo publica el CI; macOS: la carpeta que
+tiene `quill.app`; una copia lo prueba antes que el artefacto).
 
 `cargo test -p quill-update` cubre lo mismo sin ventana ni red: firmas,
 manifiestos alterados, obligatoria contra opcional, descargas que no coinciden,
-reanudación y corte, la búsqueda por la API con un token que no alcanza,
+reanudación y corte,
 instalación atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y
 `locales/`), preparar sin cambiar lo que arranca, activar en el próximo
 arranque, y volver atrás tras dos arranques fallidos; el registro y su
@@ -539,9 +663,10 @@ la ruta del bundle sí se prueban en cualquier sistema).
 
 `cargo test -p quill-engine update::` prueba el motor contra el feed de
 `serve`: lo preparado se guarda antes de avisar «lista» y una versión más nueva
-lo reemplaza; saltar una versión; los avisos del sistema (sin foco, a las 24 h,
+lo reemplaza; una release con lista de archivos se prepara bajando sólo el blob
+que cambió, y con un blob malo vuelve al archivo entero; saltar una versión; los avisos del sistema (sin foco, a las 24 h,
 nunca dos veces); el calendario con su azar y la búsqueda al volver el foco o
-despertar; y que el registro no tenga el token ni direcciones.
+despertar; y que el registro no tenga direcciones.
 
 ## Linux
 
@@ -737,10 +862,22 @@ auxiliares, quill), se notariza con `notarytool` y se engrapa el ticket.
   coinciden con lo firmado. Un artefacto sin HTTPS (salvo `http://127.0.0.1` de
   los feeds de prueba), sin digest válido o de más de 1 GiB no se ofrece.
 - Nunca baja de versión: una release se ofrece sólo si es más nueva que la
-  instalada, así que repetir un manifiesto viejo firmado no sirve.
+  instalada. Además cada copia guarda la `sequence` más alta que vio y rechaza
+  una menor, así que repetir un manifiesto viejo firmado no sirve ni para
+  ofrecer una versión vieja pero más nueva que la instalada. La `sequence` la
+  pone el CI: la del manifiesto publicado anterior más uno.
+- Se rechaza un manifiesto de otro `product` o `channel`, o pasado su `expires`
+  (si no se puede leer la fecha, también). El CI hoy no pone `expires`:
+  `quill-release manifest --expires <RFC 3339>` lo agrega; si se usa, cada
+  release tiene que salir antes de que venza la anterior, o las copias dejan de
+  encontrar actualizaciones hasta la próxima.
+- Dos claves compiladas (release y respaldo) y rotación con `next_keys` (ver
+  [La clave](#la-clave)).
+- La lista de archivos y cada blob se verifican contra lo firmado antes de
+  usarse; los caminos no pueden salir del bundle.
 - Lo que no cubre: quien tenga la clave privada puede publicar una versión (por
-  eso nunca entra al repositorio ni a un log, y el CI la usa sólo en el paso de
-  firma).
+  eso nunca entra al repositorio ni a un log, el CI la usa sólo en el paso de
+  firma, y sólo dentro del entorno `release`, con aprobación).
 - `QUILL_UPDATE_KEY` sólo existe en compilaciones de depuración.
 
 ## Pendiente antes de la primera release

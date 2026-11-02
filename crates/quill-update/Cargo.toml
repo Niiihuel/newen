@@ -13,7 +13,7 @@ default = []
 serve = []
 
 [dependencies]
-# Starts gh as every quill process starts (Windows: no console, PATHEXT).
+# Where the update log is kept (the data folder every quill crate uses).
 quill-files = { path = "../quill-files" }
 # The manifest is a small JSON document, and the GitHub API's answer too.
 serde = { workspace = true }
@@ -28,6 +28,8 @@ sha2 = "0.10"
 base64 = "0.22"
 # HTTPS requests, on the update thread: the engine's own client (quill-engine's logos use it too).
 ureq = "3"
+# Each file of a bundle is published gzipped (files.rs); already compiled into quill (png, ureq).
+flate2 = "1.1"
 
 [dev-dependencies]
 # A throwaway signing key per test, and temporary installations.

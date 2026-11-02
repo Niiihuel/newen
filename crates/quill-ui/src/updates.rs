@@ -302,10 +302,6 @@ fn state_line(state: &UpdateState) -> String {
         UpdateState::Failed { reason } => reason.clone(),
         UpdateState::FromSource => "Built from source \u{2014} update with git pull".into(),
         UpdateState::NotInstalled => "Run quill --install to keep it up to date".into(),
-        UpdateState::NeedsAccess => {
-            "Updates need access to the private repository (set QUILL_UPDATE_TOKEN or sign in with gh)"
-                .into()
-        }
     }
 }
 

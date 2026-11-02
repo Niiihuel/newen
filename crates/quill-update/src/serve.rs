@@ -79,6 +79,46 @@ pub fn publish(server: &Server, manifest: &crate::Manifest) -> ed25519_dalek::Ve
     key.verifying_key()
 }
 
+/// Serve the bundle unpacked in the folder `tree` file by file, as `version` on `platform`
+/// publishes it: its blobs and its list ([`crate::files`]). Returns the list's entry for the
+/// manifest's `files`.
+pub fn publish_files(
+    server: &Server,
+    tree: &std::path::Path,
+    version: &crate::Version,
+    platform: &str,
+) -> crate::Artifact {
+    use sha2::Digest as _;
+    let out = std::env::temp_dir().join(format!(
+        "quill-feed-{}-{}",
+        std::process::id(),
+        server.address.port()
+    ));
+    let (bundle, blobs) = crate::files::pack(
+        tree,
+        version,
+        platform,
+        &server.base(),
+        &Default::default(),
+        &out,
+    )
+    .expect("the bundle's folder");
+    for blob in blobs {
+        let name = blob.file_name().unwrap().to_string_lossy();
+        server.put(&format!("/{name}"), std::fs::read(&blob).unwrap());
+    }
+    let _ = std::fs::remove_dir_all(&out);
+    let bytes = serde_json::to_vec(&bundle).unwrap();
+    let name = crate::files::index_name(platform);
+    let entry = crate::Artifact {
+        url: format!("{}/{name}", server.base()),
+        size: bytes.len() as u64,
+        sha256: crate::hex(&sha2::Sha256::digest(&bytes)),
+    };
+    server.put(&format!("/{name}"), bytes);
+    entry
+}
+
 /// Serve on `127.0.0.1:{port}` (0: any free port), with nothing yet.
 pub fn serve(port: u16) -> std::io::Result<Server> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;

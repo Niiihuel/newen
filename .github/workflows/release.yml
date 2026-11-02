@@ -1,9 +1,10 @@
 # A release for every tag v* pushed (docs/UPDATES.md): the tag must be annotated and name the
 # workspace's version; a draft release is made; package.yml builds each platform's bundle
-# (macOS signed and notarized); the manifest is written over them (and over the release's
-# notes and media, release/notes/<version>.toml), signed with the
-# QUILL_UPDATE_SIGNING_KEY secret, checked against the key compiled into quill, and only then
-# are the bundles uploaded and the release published. Until that last step no quill can see it.
+# (macOS signed and notarized); each bundle is listed file by file, with a blob for each file no
+# earlier release published; the manifest is written over them (and over the release's notes
+# and media, release/notes/<version>.toml), signed with the QUILL_UPDATE_SIGNING_KEY secret of
+# the `release` environment, checked against the keys compiled into quill, and only then is
+# everything uploaded and the release published. Until then no quill can see it.
 name: Release
 
 on:
@@ -79,7 +80,10 @@ jobs:
     name: signed manifest and publication
     needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
+    # Its secret, the signing key, is the release environment's: only a v* tag reaches it,
+    # once the owner approves the run (docs/UPDATES.md).
+    environment: release
     permissions:
       contents: write
     env:
@@ -111,13 +115,34 @@ jobs:
           pattern: quill-*
           merge-multiple: true
           path: dist
-      - name: manifest
+      # The latest release published (its manifest, signatures and lists of files): this one's
+      # sequence follows it, and its blobs are named instead of uploaded again. Verified with the
+      # keys compiled in.
+      - name: the release before
+        run: |
+          gh release download -D previous -p quill-update.json -p 'quill-update.json.sig*' \
+            -p 'files-*.json'
+          ls -l previous
+      # Each bundle unpacked as its archive holds it, to list it file by file.
+      - name: bundles unpacked
         run: |
           test -f dist/quill-x86_64-linux.tar.gz
+          mkdir -p tree/linux-x86_64
+          tar -xzf dist/quill-x86_64-linux.tar.gz -C tree/linux-x86_64
+          if [ -f dist/quill-x86_64-windows.zip ]; then
+            mkdir -p tree/windows-x86_64
+            unzip -q dist/quill-x86_64-windows.zip -d tree/windows-x86_64
+          fi
+          if [ -f dist/quill-aarch64-macos.zip ]; then
+            mkdir -p tree/macos-aarch64
+            unzip -q dist/quill-aarch64-macos.zip -d tree/macos-aarch64
+          fi
+      - name: manifest
+        run: |
           artifacts=("linux-x86_64=dist/quill-x86_64-linux.tar.gz")
           [ -f dist/quill-x86_64-windows.zip ] && artifacts+=("windows-x86_64=dist/quill-x86_64-windows.zip")
           [ -f dist/quill-aarch64-macos.zip ] && artifacts+=("macos-aarch64=dist/quill-aarch64-macos.zip")
-          # What the upload step sends: exactly the files the manifest names.
+          # What the upload step sends: exactly the files the manifest names, and the new blobs.
           printf '%s\n' "${artifacts[@]#*=}" > dist/files.txt
           base="https://github.com/$GH_REPO/releases/download/$TAG"
           # The release's notes and media (release/notes/<version>.toml), when written: the
@@ -127,21 +152,34 @@ jobs:
             target/debug/quill-release whats-new "$TAG" "$base" dist >> dist/files.txt
             whats_new=(--whats-new dist/whats-new.json)
           fi
-          target/debug/quill-release manifest "$TAG" "$base" "${whats_new[@]}" "${artifacts[@]}" \
-            > dist/quill-update.json
+          trees=()
+          for tree in tree/*; do trees+=("$(basename "$tree")=$tree"); done
+          target/debug/quill-release files "$TAG" "$base" dist --previous previous "${trees[@]}" \
+            >> dist/files.txt
+          lists=()
+          for tree in tree/*; do
+            platform=$(basename "$tree")
+            lists+=(--files "$platform=dist/files-$platform.json")
+          done
+          target/debug/quill-release manifest "$TAG" "$base" --previous previous "${whats_new[@]}" \
+            "${lists[@]}" "${artifacts[@]}" > dist/quill-update.json
           cat dist/quill-update.json
       - name: sign
         env:
           QUILL_UPDATE_SIGNING_KEY: ${{ secrets.QUILL_UPDATE_SIGNING_KEY }}
         run: target/debug/quill-release sign dist/quill-update.json
-      # With the key compiled into quill: a secret that does not match
-      # crates/quill-update/release-key.pub stops the release here, and so does a whats-new.json
-      # or medium in dist/ that is not what the manifest names.
+      # With the keys compiled into quill: a secret that does not match
+      # crates/quill-update/release-key.pub (or backup-key.pub) stops the release here, and so
+      # does a whats-new.json, medium, list or new blob in dist/ that is not what the manifest
+      # names.
       - name: verify
         run: target/debug/quill-release verify dist/quill-update.json
+      # The blobs in batches: the first release sends every file of every bundle.
       - name: upload and publish
         run: |
           mapfile -t files < dist/files.txt
-          gh release upload "$TAG" "${files[@]}" \
-            dist/quill-update.json dist/quill-update.json.sig --clobber
+          printf '%s\n' "${files[@]}" | xargs -n 50 gh release upload "$TAG" --clobber
+          signatures=(dist/quill-update.json.sig)
+          [ -f dist/quill-update.json.sigs ] && signatures+=(dist/quill-update.json.sigs)
+          gh release upload "$TAG" dist/quill-update.json "${signatures[@]}" --clobber
           gh release edit "$TAG" --draft=false

@@ -4,7 +4,7 @@
 //! ```text
 //! cargo run -p quill-release --bin quill-test-feed -- \
 //!     [--version 9.9.9] [--mandatory] [--slow] [--corrupt] [--port 8765] [--artifact <file>]
-//!     [--platform windows-x86_64]
+//!     [--platform windows-x86_64] [--tree <folder>]
 //! ```
 //!
 //! It prints the `QUILL_UPDATE_FEED` and `QUILL_UPDATE_KEY` a debug build of
@@ -15,7 +15,9 @@
 //! not an archive, which installing refuses. `--slow` paces the download,
 //! `--corrupt` signs a digest the artifact does not have. `--platform` serves
 //! another system than this one (a quill under Wine updating from a feed on
-//! Linux).
+//! Linux). `--tree` serves the bundle unpacked in that folder file by file
+//! too (as the release's archive holds it; macOS: the folder holding
+//! `quill.app`), which a copy tries before the artifact.
 
 use std::time::Duration;
 
@@ -29,6 +31,7 @@ fn main() {
     let (mut version, mut mandatory, mut slow, mut corrupt) =
         ("9.9.9".to_owned(), false, false, false);
     let (mut port, mut artifact, mut platform) = (8765, None, quill_update::platform());
+    let mut tree = None;
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--version" => version = arguments.next().expect("--version <x.y.z>"),
@@ -43,6 +46,7 @@ fn main() {
             }
             "--artifact" => artifact = Some(arguments.next().expect("--artifact <file>")),
             "--platform" => platform = arguments.next().expect("--platform <os-arch>"),
+            "--tree" => tree = Some(arguments.next().expect("--tree <folder>")),
             other => panic!("unknown argument {other}"),
         }
     }
@@ -77,8 +81,17 @@ fn main() {
     if corrupt {
         sha256 = quill_update::hex(&Sha256::digest(b"something else"));
     }
+    let files = match tree {
+        Some(tree) => [(
+            platform.clone(),
+            quill_update::serve::publish_files(&server, tree.as_ref(), &version, &platform),
+        )]
+        .into(),
+        None => Default::default(),
+    };
     let manifest = Manifest {
         minimum_version: mandatory.then(|| version.clone()),
+        files,
         version,
         date: "2026-10-19T12:00:00-03:00".into(),
         notes: "A test release of the local feed.\n\n- Fixes the start from the cache.\n- The member list opens faster.".into(),
@@ -91,8 +104,7 @@ fn main() {
             },
         )]
         .into(),
-        whats_new: None,
-        assets: Default::default(),
+        ..Default::default()
     };
     let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
     let signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
