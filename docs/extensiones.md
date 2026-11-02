@@ -426,3 +426,80 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
 - **Verificaciones.** V1: sí (también en línea, no solo con archivo). V2: sí. V3: en Claude gana el de `--mcp-config` (por eso filtra quill). V4: `quill:<nombre>`, y `--add-dir` sí carga `.claude/skills`. V7: sí. V5 y V6 sin verificar (no bloquean). Detalle en `docs/agents.md`.
 - **Sin verificar:** el llavero real (Secret Service); una sesión real de cada CLI con un servidor y un skill globales de punta a punta (se probó cada pieza contra el CLI real, y el motor con el agente falso).
 - **Pendiente:** fase 4 (copiar entre capas, "Make global", marketplaces para varios agentes) y fase 5 (Gemini, OpenCode); recargar una sesión en curso al cambiar Global; el chip de agente y la vista efectiva (§3.1, §3.4).
+
+## 12. Customize como página propia (2026-11-02, rama `feat/customize-page`)
+
+Customize deja de ser una columna de Ajustes. Lo que sigue es lo que la persona ve.
+
+### 12.1 Cómo se llega y qué hay arriba
+
+- **Entrada:** el «Customize» de la barra lateral abre la página en el lugar de la conversación; la barra lateral queda. Elegir una sesión o «New» la cierra. Ajustes › General conserva «Customize…». El «+» del composer («Browse connectors», «Manage plugins», «Browse plugins») y `/skills` y `/plugin` también abren la página.
+- **Encabezado:** «Customize» en negrita de 22, el chip de la capa y, al final, el engranaje que abre Ajustes.
+- **Pestañas:** Skills, Connectors y Plugins. Una pestaña en la que ningún agente mostrado participa se ve atenuada, no responde y dice por qué en su tooltip («Codex has no plugins quill can manage.»). El motivo sale de lo que declara cada adaptador (`AgentInfo.customize`: si tiene `plugins_query` y `servers_query`), no del nombre del agente.
+- **Migas:** dentro de un elemento, `Customize › Connectors › Your connectors › github`. Cada parte vuelve atrás. Son el `Breadcrumb` de limn.
+- **Barra de cada pestaña:** búsqueda; en Skills y Plugins, el chip de carpeta; «Discover»; y «+ Add ▾». El botón relleno es el que más sirve: Discover mientras la lista está vacía y Add después. En una ventana angosta la barra baja de línea.
+
+### 12.2 Las capas («All agents» y cada agente)
+
+El chip del encabezado elige qué se ve:
+
+- **All agents** (por defecto): primero la sección «All agents», que es la capa propia de quill (§4, se agrega a cada sesión), y después una sección por agente, como antes. Las marcas por agente de cada fila global siguen igual (§3.2).
+- **Un agente:** solo la sección de ese agente. La capa global no se muestra como sección; en el detalle de un skill global aparece un interruptor para ese agente.
+
+Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
+
+### 12.3 Connectors
+
+- Pestañas internas «Your connectors» y «Discover», y un filtro All / Connected / Not connected.
+- **Lista:** Connector (logo de 24 o el ícono del enchufe, y el nombre, que abre el detalle), Type («Local» o «Remote») y Status de 160 («Connected», «On», «Needs sign-in», «Pending approval», «Not connected», «Failed to connect»), y el «⋯» con Remove para los propios. Por debajo de 560 de ancho la columna Type no se muestra.
+- **Franja:** si algún conector necesita a la persona (sesión vencida o falla), «N of your connectors need attention» con «Reconnect all». Reconectar todo pide `McpReconnect` en cada sesión que cargó ese servidor y vuelve a listar los de cada agente. «Hide for N days» no está.
+- **Vacía:** «Add your first connectors», en tarjeta y sin ilustración, con «Discover connectors». **Sin resultados:** la lupa de 32, «No connectors match your search» y «Try a different term, or browse Discover.».
+- **Discover:** el registro público de MCP en tarjetas de dos o tres por fila (mínimo 280). Cada tarjeta: radio `tile` 16 (token nuevo de limn), recuadro de 40, nombre de hasta dos líneas, «autor • Remote • v1.0.0», descripción de dos líneas y un botón fantasma «+». El directorio de plugins usa la misma tarjeta: «marketplace • 12k installs», un punto si la versión instalada no es la que se ofrece, y un engranaje que abre la página del plugin si ya está instalado.
+
+### 12.4 El detalle de un conector
+
+- Encabezado: logo de 36, nombre en 18 negrita, estado, un interruptor y «⋯» (Read its tools again, Remove). El interruptor está apagado con su motivo: un CLI prende y apaga un servidor solo dentro de la sesión (`/mcp`), y la capa global se prende por agente desde su fila.
+- Datos con recuadro de 20: tipo, el comando o la dirección, «Added by» (You, for all your projects / This project's settings / Your organization / A plugin / Your account / quill, for all agents) y «Used by».
+- **What it can do:** «Can run code without asking» (un comando: corre un programa en esta computadora al empezar la sesión), «Can send data to other services» (una dirección), y según lo que dicen sus herramientas de sí mismas, «Only reads» o «Can change or delete things». Es **inferido**: la (i) lo dice, porque un servidor puede hacer más de lo que declara.
+- **Tool permissions:** grupos Read-only, Write/delete y Other (por `read_only` y `destructive` del servidor), cada uno con su contador y un menú que fija todo el grupo (Always allow, Needs approval, Blocked, «As the agent decides»). Cada herramienta es una fila de 56 con sangría de 24 y tres íconos con tooltip: círculo con tilde, mano y prohibido. Una bloqueada se ve atenuada. Sin elegir, decide el agente con su propia configuración. Los grupos no se pliegan y no hay «Custom».
+- **De dónde salen las herramientas:** de la última sesión del agente que cargó el servidor; si ninguna lo hizo, el motor arranca el programa del agente sin sesión y le pide el estado de sus servidores (`Intent::ServerTools`), repitiendo cada segundo mientras alguno conecta, 30 s como máximo.
+
+### 12.5 Cómo se guardan y cómo llegan a cada agente los permisos
+
+- La UI junta los cambios y los manda 500 ms después del último clic (`GlobalOp::Tools`). El motor los escribe en `extensions.json` (`tools`) **antes** de avisar con `Event::Global`.
+- Se guardan por agente y servidor (`agent` vacío para un servidor de «All agents»). Quitar un servidor de un agente borra sus elecciones.
+- Al lanzar una sesión, el motor le da al adaptador las elecciones de ese agente y las de los servidores globales que esa sesión recibe (`SessionSpec.tool_rules`), solo con las políticas que el adaptador declara (`AgentAdapter::tool_policies`). Se aplican a sesiones nuevas.
+- **Claude Code:** reglas de permiso en el `--settings` de la sesión: Always allow → `permissions.allow`, Needs approval → `ask`, Blocked → `deny`, con el nombre `mcp__<servidor>__<herramienta>` (lo que no es letra, dígito, `_` o `-` en el nombre del servidor pasa a `_`). Se suman a las de la persona; en el CLI un `deny` gana a un `ask` y un `ask` a un `allow`, así que una regla propia más estricta de la persona sigue mandando.
+- **Codex:** en el `config` del `thread/start`, que Codex pone sobre la configuración de la persona solo para ese hilo: Always allow → `mcp_servers.<servidor>.tools.<herramienta>.approval_mode = "approve"`, Needs approval → `"prompt"`, Blocked → la herramienta en `disabled_tools` del servidor. **Inferido:** salió de los tipos de configuración de `openai/codex@main`, más nuevos que la 0.163.0 probada; que la capa del hilo se mezcle con el servidor de `config.toml` sin redefinirlo no se verificó con el CLI.
+- Un adaptador que no declara una política deja ese ícono atenuado con «{agente} can't say this for one tool»; sin ninguna, la sección dice que el agente decide solo.
+
+### 12.6 Skills
+
+- Cada fila tiene un interruptor (el primer estado del agente o el último; para Claude Code, «on» u «off») además del «⋯» con todos los estados. Bloqueado o sin carpeta de proyecto cuando el agente lo pide, el interruptor está apagado.
+- «Sort» ordena por origen (con secciones) o por nombre (una lista) y filtra por origen. «Last edited» no está: los CLIs no dicen la fecha.
+- «+ Add ▾»: **Create with an agent** (cierra la página y deja en el composer de una sesión nueva un pedido para escribir un skill), **Write instructions…** (nombre, descripción e instrucciones; crea el skill global), **Upload a file…** (`.md`, `.zip` o `.skill`, con el diálogo del sistema) e **Import a folder…**.
+- **Subir:** un `.md` es el `SKILL.md` (si no trae frontmatter, se le agrega con el nombre del archivo); un `.zip` o `.skill` se abre en una carpeta aparte y se toma la carpeta que tiene el `SKILL.md` más arriba. Se saltean las entradas que salen de la carpeta, y el total no pasa de 32 MB. Dependencia nueva: `zip` (solo deflate).
+- **Detalle:** nombre, interruptor, descripción, de dónde viene y «Only adds instructions» (un skill son palabras que el agente lee; sus scripts corren solo si el agente los corre, con sus permisos). Para un skill global, el «⋯» tiene Download (guarda un `.zip`), Replace… y Delete en rojo. Un skill de un agente vive en la carpeta de ese CLI: se descarga, reemplaza o borra allí, y la página lo dice.
+
+### 12.7 Plugins
+
+- La lista de antes, con una flecha que abre el detalle: descripción del marketplace, «From the {marketplace} marketplace», qué puede hacer y «Connectors & tools» (los servidores de origen plugin con su nombre y los skills `plugin:…`).
+- Las líneas de confianza se deducen de lo que quill ve que trae: solo skills → «Only adds instructions»; un comando → «Can run code without asking»; una dirección → «Can send data to other services». Es **inferido**: hooks y commands no se listan, así que puede hacer más.
+
+### 12.8 Add custom connector
+
+- «Name» («Shown in the connectors list.») y «MCP server URL, or command», con el texto de ayuda de la URL.
+- Avisos, en ámbar, debajo del campo: caracteres ocultos (de ancho cero, de dirección o de control), un usuario o contraseña antes del host, letras fuera de ASCII en el host, y un host que no contiene ninguna palabra del nombre («evil.example doesn't look like github's site»). No bloquean.
+- `http://` solo para esta computadora (`localhost`, `127.0.0.1`, `[::1]`); cualquier otro pide `https://` y «Add» queda apagado.
+- **Advanced settings:** OAuth Client ID y Client Secret. Claude Code los toma (`mcp add --client-id` y `--client-secret`; el secreto va por stdin, nunca como argumento: **inferido** que el CLI lee ahí su pregunta, sin verificar). Codex no tiene cliente propio: con Codex elegido, o con «All agents», los campos no se muestran y se dice por qué.
+- No hay «Step 1 of 2»: es un solo paso.
+
+### 12.9 Íconos
+
+Se quedan los de quill, sin biblioteca de terceros. El trazo baja de 1,7 a **1,25** sobre la grilla de 20 (`icons::STROKE`), y una prueba lo controla en todos. Íconos nuevos, en el mismo estilo y descritos por lo que muestran: `SKILL` (un libro abierto), `PLUGIN` (una pieza de rompecabezas), `TOOL` (una llave), `LOCK`, `BLOCKED` (un aro con una barra), `UPLOAD`, `DOWNLOAD`, `INFO`, `DISCOVER` (una brújula), `STOREFRONT` (una tienda con toldo) y `SORT`.
+
+### 12.10 Sin verificar
+
+- La página no se abrió en la app real (solo pruebas de layout sin superposición a 700, 1000, 1600 y 2400 de ancho).
+- `Intent::ServerTools` con los CLIs reales: que Claude Code conteste `mcp_status` sin un mensaje enviado y que Codex lo haga sin hilo.
+- El mapeo de Codex en la 0.163.0 y la lectura del secreto OAuth por stdin en Claude Code.

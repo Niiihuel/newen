@@ -12,7 +12,7 @@ quill follows it on the same versions.
 
 | PR | Branch | What quill uses it for | State |
 |---|---|---|---|
-| — | — | nothing waiting | — |
+| — | `feat/large-radius` | `Radius::tile` (16), the corner of Customize's Discover cards | merged locally into `quill/integration`, not pushed |
 
 Keeping it so:
 
