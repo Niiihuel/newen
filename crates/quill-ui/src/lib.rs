@@ -658,6 +658,7 @@ impl Store {
             | Event::Extensions { .. }
             | Event::Servers { .. }
             | Event::Global(_)
+            | Event::ServerTools { .. }
             | Event::ServersFound { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
@@ -4624,6 +4625,8 @@ impl AddServer {
                 },
                 remote,
                 scope: None,
+                client_id: None,
+                client_secret: None,
                 env: lines(&self.env, '='),
                 headers: if remote {
                     lines(&self.headers, ':')
@@ -5043,6 +5046,7 @@ fn global_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             SkillDialog::New { name, description } => GlobalOp::NewSkill {
                 name: name.trim().to_owned(),
                 description: description.trim().to_owned(),
+                instructions: String::new(),
             },
             SkillDialog::Import { path } => GlobalOp::ImportSkill(path.trim().into()),
         },

@@ -1225,6 +1225,7 @@ fn a_plan_that_ends_the_turn_is_carried_out_by_a_turn_of_its_own() {
             word("plan", "Plan", ModeTone::Plan),
         ],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     store.apply(Event::SessionCreated {
         session: 1,
@@ -1761,6 +1762,7 @@ fn an_adapters_switch_flips_and_its_list_chooses() {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     }];
     click(&store, &mut ui, view::SETTINGS_OPEN);
     let saved = |intents: Vec<Intent>| match intents.as_slice() {
@@ -2481,6 +2483,7 @@ fn the_sidebars_customize_and_the_persons_menu_open_settings() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     ui.cwd = "/work".into();
@@ -2521,6 +2524,7 @@ fn customize_lists_and_changes_an_agents_plugins_marketplaces_and_skills() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     // A project folder: plugins install for it, and skills' states are kept there.
@@ -3244,6 +3248,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
                 sign_in_code: true,
                 modes: claude_modes(),
                 default_mode: "default".into(),
+                customize: Default::default(),
             }],
         });
     };
@@ -5647,6 +5652,7 @@ fn the_logos_of_connectors_and_plugins_are_asked_once_and_only_while_shown() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     ui.applied(&Event::Servers {
@@ -5797,6 +5803,7 @@ fn the_welcome_shows_once_the_settings_are_known_until_get_started() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     assert!(crate::welcoming(&ui));
@@ -5899,6 +5906,7 @@ fn an_agent_known() -> Vec<quill_model::AgentInfo> {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     }]
 }
 
@@ -6825,6 +6833,7 @@ fn a_new_codex_session_never_takes_a_claude_model() {
         sign_in_code: true,
         modes: vec![],
         default_mode: mode.into(),
+        customize: Default::default(),
     };
     ui.agents = vec![info("claude", "default"), info("codex", "auto")];
     ui.settings.agents.insert(
@@ -6874,6 +6883,7 @@ fn full_access_is_offered_once_allowed_even_before_any_codex_session() {
             word("full-access", quill_model::ModeTone::Unsafe),
         ],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     ui.agent = "codex".into();
     assert!(!view::menu_modes(&store, None, &ui).contains(&"full-access".to_owned()));
@@ -7445,6 +7455,7 @@ fn two_agents_on(page: &str) -> (Store, Ui) {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     };
     ui.applied(&Event::Settings {
         settings: Default::default(),
@@ -7767,7 +7778,8 @@ fn a_global_skill_is_made_or_imported_from_its_dialog() {
         click(&store, &mut ui, "glob:skill-save"),
         vec![Intent::Global(GlobalOp::NewSkill {
             name: "my-skill".into(),
-            description: "Does it".into()
+            description: "Does it".into(),
+            instructions: String::new(),
         })]
     );
     click(&store, &mut ui, "glob:skill-import");
@@ -9128,6 +9140,7 @@ fn waiting_store() -> (Store, Ui) {
         sign_in_code: false,
         modes: vec![],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     settle(&store, &mut ui);
     (store, ui)

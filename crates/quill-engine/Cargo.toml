@@ -39,5 +39,7 @@ base64 = "0.22"
 # The system keychain (Secret Service on Linux) where the secrets of "All agents" servers live,
 # so they reach the agent only as environment variables (global.rs, docs/agents.md).
 keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
+# A skill uploaded or saved as a .zip / .skill of its folder (skills.rs); deflate only.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # Stopping a dev server's whole process group (kill with a negative pid).
 libc = "0.2"

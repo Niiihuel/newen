@@ -23,6 +23,7 @@ mod logos;
 mod registry;
 mod servers;
 mod shared;
+mod skills;
 mod update;
 
 pub use quill_browser::{native, Frame, Frames, Native, Pixels, Present};
@@ -604,6 +605,12 @@ impl Router {
                 sign_in_code: a.login_takes_code(),
                 modes: a.modes(),
                 default_mode: a.default_mode().to_owned(),
+                customize: quill_model::CustomizeSupport {
+                    plugins: a.plugins_query().is_some(),
+                    connectors: a.servers_query().is_some(),
+                    tool_policies: a.tool_policies(),
+                    oauth_client: a.server_oauth_client(),
+                },
             })
             .collect();
         (self.ui)(Event::Settings {
@@ -788,6 +795,10 @@ impl Router {
                     },
                     None => error = Some(cannot(adapter.name(), op)),
                 }
+                // Its tools' permissions go with it.
+                if let (quill_model::ExtensionOp::RemoveServer(name), None) = (op, &error) {
+                    layer.forget_tools(adapter.id(), name);
+                }
             }
             let mut servers = vec![];
             if let Some(args) = adapter.servers_query() {
@@ -913,6 +924,13 @@ impl Router {
             .cloned()
             .unwrap_or_default();
         let plan = tokio::task::block_in_place(|| self.global.plan(&agent, &own, true));
+        // The tool permissions the person chose, those the agent can say.
+        let policies = actor.adapter.tool_policies();
+        actor.spec.tool_rules =
+            tokio::task::block_in_place(|| self.global.tool_rules(&id, &plan.names))
+                .into_iter()
+                .filter(|r| policies.contains(&r.policy))
+                .collect();
         actor.spec.servers = plan.servers;
         actor.spec.skill_roots = plan.skill_roots;
         actor.env.extend(plan.env);
@@ -1650,6 +1668,36 @@ impl Router {
             }
             Intent::Servers { agent, folder } => {
                 self.servers(agent, folder);
+                return;
+            }
+            Intent::ServerTools { agent, folder } => {
+                let Some(adapter) = adapter(&agent) else {
+                    return;
+                };
+                let program = (self.program(&agent))
+                    .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+                let ui = self.ui.clone();
+                tokio::spawn(async move {
+                    let folder = if folder.is_dir() {
+                        folder
+                    } else {
+                        quill_files::home_dir().unwrap_or_else(|| ".".into())
+                    };
+                    let (servers, error) = match tools_of(adapter, &program, &folder).await {
+                        Some(servers) => (servers, None),
+                        None => (
+                            vec![],
+                            Some(
+                                "It didn\u{2019}t say which tools its connectors have.".to_owned(),
+                            ),
+                        ),
+                    };
+                    ui(Event::ServerTools {
+                        agent,
+                        servers,
+                        error,
+                    });
+                });
                 return;
             }
             Intent::CheckSignIn { agent } => {
@@ -2908,6 +2956,7 @@ impl Actor {
             servers: Vec::new(),
             skill_roots: Vec::new(),
             env: Vec::new(),
+            tool_rules: Vec::new(),
         };
         Self {
             id,
@@ -4139,6 +4188,69 @@ async fn skills_of(
         .unwrap_or_default();
     let _ = child.kill().await;
     skills
+}
+
+/// The MCP servers an agent loads in `cwd` with their tools, asked of a short-lived start of
+/// its program as [`skills_of`] asks for skills: asked again each second while one is still
+/// connecting, for at most 30 s. `None` when it never answers.
+async fn tools_of(
+    mut adapter: Box<dyn AgentAdapter>,
+    program: &str,
+    cwd: &std::path::Path,
+) -> Option<Vec<quill_model::McpServer>> {
+    let plan = adapter.launch(&SessionSpec {
+        cwd: cwd.to_owned(),
+        ..Default::default()
+    });
+    let mut command = Command::from(quill_files::command(program));
+    command
+        .args(&plan.args)
+        .current_dir(&plan.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for (key, value) in &plan.env {
+        command.env(key, value);
+    }
+    for key in &plan.env_remove {
+        command.env_remove(key);
+    }
+    let mut child = command.spawn().ok()?;
+    let (mut stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    let start = adapter.encode(AgentCommand::Start);
+    let ask = adapter.encode(AgentCommand::McpStatus);
+    for line in start.iter().chain(&ask) {
+        stdin.write_all(format!("{line}\n").as_bytes()).await.ok()?;
+    }
+    let read = async {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut last = None;
+        while let Ok(Some(line)) = lines.next_line().await {
+            for event in adapter.decode(&line).events {
+                let AgentEvent::McpServers(servers) = event else {
+                    continue;
+                };
+                let waiting = (servers.iter()).any(|s| s.status == quill_model::McpStatus::Pending);
+                last = Some(servers);
+                if !waiting {
+                    return last;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                for line in adapter.encode(AgentCommand::McpStatus) {
+                    let _ = stdin.write_all(format!("{line}\n").as_bytes()).await;
+                }
+            }
+        }
+        last
+    };
+    // shortcut: a server still connecting at 30 s is shown without tools; the page asks again.
+    let servers = tokio::time::timeout(std::time::Duration::from_secs(30), read)
+        .await
+        .ok()
+        .flatten();
+    let _ = child.kill().await;
+    servers
 }
 
 /// Tell the UI the "All agents" layer and how each agent treats it; whatever changed is

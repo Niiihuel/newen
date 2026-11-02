@@ -42,7 +42,8 @@ const MODE_ID: &str = "quill-mode";
 /// Per-thread config (not `~/.codex/config.toml`): `update_plan` is off by default
 /// (plan.jsonl, two attempts without it) and `request_user_input` only exists in Plan mode
 /// unless this feature is on (ask.jsonl:9).
-fn thread_config(servers: &[quill_agent::InjectedServer], env: &[(String, String)]) -> Value {
+fn thread_config(spec: &SessionSpec) -> Value {
+    let (servers, env) = (&spec.servers, &spec.env);
     let mut config = json!({
         "tools": { "update_plan": { "enabled": true } },
         "features": { "default_mode_request_user_input": true },
@@ -57,6 +58,7 @@ fn thread_config(servers: &[quill_agent::InjectedServer], env: &[(String, String
     if !servers.is_empty() {
         config["mcp_servers"] = extensions::mcp_servers_config(servers);
     }
+    extensions::tool_rules_config(&mut config, &spec.tool_rules);
     config
 }
 
@@ -216,7 +218,7 @@ impl Codex {
         let (approval, sandbox, _) = preset(&self.mode);
         let mut params = json!({
             "cwd": spec.cwd.to_string_lossy(), "approvalPolicy": approval, "sandbox": sandbox,
-            "config": thread_config(&spec.servers, &spec.env),
+            "config": thread_config(&spec),
             // Added to Codex's own instructions, as a developer message.
             "developerInstructions": quill_agent::WORK_GUIDE,
         });
@@ -1197,6 +1199,13 @@ impl AgentAdapter for Codex {
     fn tested(&self) -> &'static [&'static str] {
         // The version the fixtures were captured from.
         &["0.163.0"]
+    }
+
+    /// A server's tool takes an approval mode, and a server a list of tools it hides
+    /// (`mcp_servers.<server>.tools.<tool>.approval_mode`, `disabled_tools`; inferred from
+    /// Codex's config types, newer than the version quill was tested with).
+    fn tool_policies(&self) -> Vec<quill_agent::ToolPolicy> {
+        quill_agent::ToolPolicy::ALL.to_vec()
     }
 
     fn session_extras(&self) -> quill_agent::SessionExtras {

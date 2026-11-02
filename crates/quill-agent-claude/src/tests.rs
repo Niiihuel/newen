@@ -1476,3 +1476,63 @@ fn a_session_is_told_how_to_work_with_the_user_first() {
     let prompt = asked["request"]["appendSystemPrompt"].as_str().unwrap();
     assert!(prompt.starts_with(quill_agent::WORK_GUIDE));
 }
+
+/// The person's tool permissions become Claude Code's own rules for the session, in
+/// `--settings`: allow, ask and deny by the tool's `mcp__<server>__<tool>` name.
+#[test]
+fn tool_permissions_are_the_sessions_allow_ask_and_deny_rules() {
+    use quill_agent::{ToolPolicy, ToolRule};
+    let claude = Claude::new();
+    assert_eq!(claude.tool_policies(), ToolPolicy::ALL.to_vec());
+    let rule = |server: &str, tool: &str, policy| ToolRule {
+        server: server.into(),
+        tool: tool.into(),
+        policy,
+    };
+    let spec = SessionSpec {
+        tool_rules: vec![
+            rule("github", "list_issues", ToolPolicy::Allow),
+            rule("github", "create_issue", ToolPolicy::Ask),
+            rule("my.server", "delete_repo", ToolPolicy::Block),
+        ],
+        ..SessionSpec::default()
+    };
+    let args = claude.launch(&spec).args;
+    let at = args.iter().position(|a| a == "--settings").unwrap();
+    let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
+    assert_eq!(
+        settings["permissions"],
+        json!({
+            "allow": ["mcp__github__list_issues"],
+            "ask": ["mcp__github__create_issue"],
+            "deny": ["mcp__my_server__delete_repo"],
+        })
+    );
+    // None chosen, no permissions of quill's.
+    let plain = claude.launch(&SessionSpec::default()).args;
+    assert!(!plain.iter().any(|a| a.contains("permissions")));
+}
+
+/// An OAuth client of the person's own: its id an argument, its secret typed where the CLI
+/// asks for it, never an argument.
+#[test]
+fn a_servers_oauth_client_secret_goes_to_stdin_not_the_arguments() {
+    let claude = Claude::new();
+    assert!(claude.server_oauth_client());
+    let run = claude
+        .extension_op(&ExtensionOp::AddServer(quill_agent::NewServer {
+            name: "notion".into(),
+            target: "https://mcp.notion.com/mcp".into(),
+            remote: true,
+            client_id: Some("abc".into()),
+            client_secret: Some("s3cret".into()),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert_eq!(
+        run.args.join(" "),
+        "mcp add --transport http --client-id abc --client-secret notion https://mcp.notion.com/mcp"
+    );
+    assert_eq!(run.stdin.as_deref(), Some("s3cret\n"));
+    assert!(!run.args.iter().any(|a| a.contains("s3cret")));
+}
