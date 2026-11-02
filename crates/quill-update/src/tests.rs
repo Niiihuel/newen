@@ -38,8 +38,7 @@ fn manifest(at: &str, minimum: Option<&str>, platforms: &[(&str, Artifact)]) -> 
             .iter()
             .map(|(name, artifact)| ((*name).to_owned(), artifact.clone()))
             .collect(),
-        whats_new: None,
-        assets: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -187,13 +186,19 @@ fn a_check_reads_a_signed_feed_on_loopback_and_refuses_a_forged_one() {
     };
     let public = signer.verifying_key();
     // Nothing there yet.
-    assert_eq!(check(&agent, &feed, Some(&public)), Err(Error::Status(404)));
+    assert_eq!(
+        check(&agent, &feed, &Trust::new(vec![public])),
+        Err(Error::Status(404))
+    );
     publish(&server, &signer, &release);
-    assert_eq!(check(&agent, &feed, Some(&public)), Ok(release.clone()));
-    assert_eq!(check(&agent, &feed, None), Err(Error::NoKey));
+    assert_eq!(
+        check(&agent, &feed, &Trust::new(vec![public])),
+        Ok(release.clone())
+    );
+    assert_eq!(check(&agent, &feed, &Trust::default()), Err(Error::NoKey));
     // The same feed, verified with another key.
     assert_eq!(
-        check(&agent, &feed, Some(&key().verifying_key())),
+        check(&agent, &feed, &Trust::new(vec![key().verifying_key()])),
         Err(Error::Signature)
     );
     // A manifest changed after signing.
@@ -201,10 +206,16 @@ fn a_check_reads_a_signed_feed_on_loopback_and_refuses_a_forged_one() {
         &format!("/{MANIFEST}"),
         serde_json::to_vec_pretty(&manifest("9.0.1", None, &[])).unwrap(),
     );
-    assert_eq!(check(&agent, &feed, Some(&public)), Err(Error::Signature));
+    assert_eq!(
+        check(&agent, &feed, &Trust::new(vec![public])),
+        Err(Error::Signature)
+    );
     // A manifest larger than any real one.
     server.put(&format!("/{MANIFEST}"), vec![b' '; MAX_MANIFEST + 1]);
-    assert_eq!(check(&agent, &feed, Some(&public)), Err(Error::TooLarge));
+    assert_eq!(
+        check(&agent, &feed, &Trust::new(vec![public])),
+        Err(Error::TooLarge)
+    );
 }
 
 /// The private repository's API on loopback: its latest release lists `assets` by name, and
@@ -254,7 +265,7 @@ fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_th
         token: "a-token".into(),
         api,
     };
-    let checked = check(&agent, &source, Some(&signer.verifying_key())).unwrap();
+    let checked = check(&agent, &source, &Trust::new(vec![signer.verifying_key()])).unwrap();
     // The manifest's address names the release on GitHub; the API reaches the same file.
     let artifact = &checked.platforms["linux-x86_64"];
     assert_eq!(artifact.url, format!("{}/assets/2", server.base()));
@@ -268,7 +279,7 @@ fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_th
         api: nothing.base(),
     };
     assert_eq!(
-        check(&agent, &refused, Some(&signer.verifying_key())),
+        check(&agent, &refused, &Trust::new(vec![signer.verifying_key()])),
         Err(Error::Access)
     );
 }
@@ -779,7 +790,7 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     let source = Source::Files {
         base: server.base(),
     };
-    let manifest = check(&agent, &source, Some(&signer.verifying_key())).unwrap();
+    let manifest = check(&agent, &source, &Trust::new(vec![signer.verifying_key()])).unwrap();
     let offered = offer(manifest, &version("1.0.0"), &platform()).unwrap();
     assert!(offered.mandatory);
     let root = tempfile::tempdir().unwrap();
@@ -879,6 +890,7 @@ fn whats_new_release(media: &[(whats_new::Kind, &[u8], &[u8])]) -> (Release, Sou
         mandatory: false,
         artifact: None,
         whats_new: Some(entry),
+        files: None,
         assets: Default::default(),
     };
     (release, files(), server)
@@ -933,5 +945,389 @@ fn a_medium_that_does_not_match_its_digest_is_refused_and_the_words_still_come()
     assert_eq!(
         fetch_whats_new(&agent, &source, &release, folder.path()),
         Err(Error::Manifest)
+    );
+}
+
+/// A manifest with every field a copy up to 0.1.8 does not know is read by that copy's own
+/// structs (no unknown field refused), and stays far below its 64 KiB limit: the lists of files
+/// are named, not inlined.
+#[test]
+fn a_v2_manifest_is_read_by_a_copy_from_before_it() {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct OldArtifact {
+        url: String,
+        size: u64,
+        sha256: String,
+    }
+    /// `Manifest` as 0.1.8 has it.
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct Old {
+        version: Version,
+        date: String,
+        #[serde(default)]
+        notes: String,
+        #[serde(default)]
+        minimum_version: Option<Version>,
+        platforms: BTreeMap<String, OldArtifact>,
+        #[serde(default)]
+        whats_new: Option<OldArtifact>,
+    }
+    let archive = artifact("https://example.org/quill-x86_64-linux.tar.gz", b"quill");
+    let list = artifact("https://example.org/files-linux-x86_64.json", b"{}");
+    let platforms = ["linux-x86_64", "windows-x86_64", "macos-aarch64"];
+    let manifest = Manifest {
+        sequence: 12,
+        expires: Some("2030-01-01T00:00:00Z".into()),
+        next_keys: vec![write_keys(&[key().verifying_key()])],
+        files: platforms
+            .iter()
+            .map(|p| (p.to_string(), list.clone()))
+            .collect(),
+        ..manifest(
+            "1.2.0",
+            Some("1.1.0"),
+            &platforms.map(|p| (p, archive.clone())),
+        )
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+    assert!(bytes.len() < 8 * 1024, "{}", bytes.len());
+    let old: Old = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(old.version, version("1.2.0"));
+    assert_eq!(old.platforms["linux-x86_64"].url, archive.url);
+    // And this copy reads back what it wrote.
+    let read: Manifest = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(read, manifest);
+}
+
+/// The backup key is compiled in beside the release key, and a manifest signed by either key
+/// trusted verifies; one signed by neither does not.
+#[test]
+fn a_manifest_signed_by_the_backup_key_is_accepted() {
+    let compiled = compiled_keys();
+    assert_eq!(compiled.len(), 2, "release-key.pub and backup-key.pub");
+    assert_eq!(compiled[1], parse_key(BACKUP_KEY).unwrap());
+    assert_eq!(trusted_keys(&[]), compiled);
+    let (release, backup) = (key(), key());
+    let trusted = [release.verifying_key(), backup.verifying_key()];
+    let bytes = serde_json::to_vec(&manifest("1.2.0", None, &[])).unwrap();
+    let by_backup = sign(&backup, &bytes);
+    assert!(verify_signed(&bytes, &[&by_backup], &trusted).is_ok());
+    // The backup's signature among others that verify with nothing.
+    let other = sign(&key(), &bytes);
+    assert!(verify_signed(&bytes, &[&other, "garbage", &by_backup], &trusted).is_ok());
+    assert_eq!(
+        verify_signed(&bytes, &[&other], &trusted),
+        Err(Error::Signature)
+    );
+}
+
+/// A rotation (`next_keys`) is accepted only when a key trusted now and every new key signed
+/// the manifest; the new set is then what is trusted, and the old key alone is refused.
+#[test]
+fn a_rotation_needs_the_old_and_the_new_keys_signatures() {
+    let (old, new, backup) = (key(), key(), key());
+    let trusted = [old.verifying_key(), backup.verifying_key()];
+    let next = [new.verifying_key(), backup.verifying_key()];
+    let rotating = Manifest {
+        next_keys: next.iter().map(|k| write_keys(&[*k])).collect(),
+        ..manifest("1.2.0", None, &[])
+    };
+    let bytes = serde_json::to_vec(&rotating).unwrap();
+    let (by_old, by_new) = (sign(&old, &bytes), sign(&new, &bytes));
+    // The old key alone: the new one never proved itself.
+    assert_eq!(
+        verify_signed(&bytes, &[&by_old], &trusted),
+        Err(Error::Signature)
+    );
+    // The new key alone: nothing trusted signed it.
+    assert_eq!(
+        verify_signed(&bytes, &[&by_new], &trusted),
+        Err(Error::Signature)
+    );
+    let read = verify_signed(&bytes, &[&by_old, &by_new], &trusted).unwrap();
+    assert_eq!(read.rotated, Some(next.to_vec()));
+    // Kept as text and read back: the keys trusted from now on.
+    let kept = read_keys(&write_keys(&next)).unwrap();
+    assert_eq!(trusted_keys(&kept), next);
+    // The same manifest seen again by a copy that rotated: nothing new.
+    assert_eq!(
+        verify_signed(&bytes, &[&by_old, &by_new], &next)
+            .unwrap()
+            .rotated,
+        None
+    );
+    // After it, the old key no longer signs anything this copy trusts.
+    let later = serde_json::to_vec(&manifest("1.3.0", None, &[])).unwrap();
+    assert_eq!(
+        verify_signed(&later, &[&sign(&old, &later)], &next),
+        Err(Error::Signature)
+    );
+    assert!(verify_signed(&later, &[&sign(&new, &later)], &next).is_ok());
+    assert_eq!(read_keys("not-a-key"), None);
+}
+
+/// A manifest lower than the highest sequence seen, of another product or channel, from before
+/// those fields, or expired, is refused; one at the same sequence is not.
+#[test]
+fn a_lower_sequence_another_product_or_an_expired_manifest_is_refused() {
+    let now = 1_793_631_600; // 2026-11-02T15:00:00Z
+    let at = |sequence| Manifest {
+        sequence,
+        ..manifest("1.2.0", None, &[])
+    };
+    assert_eq!(admit(&at(5), 5, now), Ok(()));
+    assert_eq!(admit(&at(6), 5, now), Ok(()));
+    assert_eq!(admit(&at(4), 5, now), Err(Error::Replayed));
+    let foreign = |product: &str, channel: &str| Manifest {
+        product: product.into(),
+        channel: channel.into(),
+        ..at(5)
+    };
+    assert_eq!(
+        admit(&foreign("other", CHANNEL), 0, now),
+        Err(Error::Foreign)
+    );
+    assert_eq!(
+        admit(&foreign(PRODUCT, "beta"), 0, now),
+        Err(Error::Foreign)
+    );
+    // A manifest from before the fields.
+    let old: Manifest =
+        serde_json::from_str(r#"{"version":"1.2.0","date":"","platforms":{}}"#).unwrap();
+    assert_eq!(admit(&old, 0, now), Err(Error::Foreign));
+    let expiring = |expires: &str| Manifest {
+        expires: Some(expires.into()),
+        ..at(5)
+    };
+    assert_eq!(admit(&expiring("2026-11-02T15:00:01Z"), 0, now), Ok(()));
+    assert_eq!(
+        admit(&expiring("2026-11-02T12:00:00-03:00"), 0, now),
+        Err(Error::Expired)
+    );
+    assert_eq!(admit(&expiring("tomorrow"), 0, now), Err(Error::Expired));
+
+    // Through a check: the copy's highest sequence is part of what it trusts.
+    let signer = key();
+    let server = serve(0).unwrap();
+    publish(&server, &signer, &at(4));
+    let feed = Source::Files {
+        base: server.base(),
+    };
+    let trust = |sequence| Trust {
+        keys: vec![signer.verifying_key()],
+        sequence,
+    };
+    assert_eq!(check(&agent(), &feed, &trust(5)), Err(Error::Replayed));
+    assert_eq!(check(&agent(), &feed, &trust(4)).unwrap().sequence, 4);
+    publish(&server, &signer, &expiring("2020-01-01T00:00:00Z"));
+    assert_eq!(check(&agent(), &feed, &trust(0)), Err(Error::Expired));
+}
+
+#[test]
+fn rfc3339_dates_are_read_as_seconds_since_1970() {
+    assert_eq!(rfc3339("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(rfc3339("2026-11-02T12:00:00-03:00"), Some(1_793_631_600));
+    assert_eq!(rfc3339("2026-11-02T15:00:00.250Z"), Some(1_793_631_600));
+    assert_eq!(rfc3339("2026-11-02T16:30:00+01:30"), Some(1_793_631_600));
+    assert_eq!(rfc3339("2000-02-29T00:00:00Z"), Some(951_782_400));
+    for wrong in [
+        "",
+        "2026-11-02",
+        "2026-13-02T12:00:00Z",
+        "2026-11-02T12:00:00",
+        "2026-11-02 12:00:00Z",
+        "+026-11-02T12:00:00Z",
+    ] {
+        assert_eq!(rfc3339(wrong), None, "{wrong}");
+    }
+}
+
+/// A list whose paths leave the bundle, repeat, or whose links point out of it, is refused.
+#[test]
+fn a_list_of_files_with_a_path_out_of_the_bundle_is_refused() {
+    use files::{valid, Bundle, File, Link};
+    let file = |path: &str| File {
+        path: path.into(),
+        size: 1,
+        sha256: "a".repeat(64),
+        mode: 0o644,
+        url: "https://example.org/f.gz".into(),
+        packed: 1,
+    };
+    let bundle = |files: Vec<File>, links: Vec<(&str, &str)>| Bundle {
+        version: version("1.0.0"),
+        platform: "linux-x86_64".into(),
+        files,
+        links: (links.into_iter())
+            .map(|(path, target)| Link {
+                path: path.into(),
+                target: target.into(),
+            })
+            .collect(),
+    };
+    let fine = bundle(
+        vec![file("quill"), file("quill.app/Contents/MacOS/quill")],
+        vec![("a/b/Current", "../x"), ("lib", "quill")],
+    );
+    assert!(valid(&fine));
+    for path in [
+        "../quill",
+        "/etc/passwd",
+        "a//b",
+        "a/./b",
+        "C:x",
+        "a\\b",
+        "",
+    ] {
+        assert!(!valid(&bundle(vec![file(path)], vec![])), "{path}");
+    }
+    assert!(!valid(&bundle(vec![file("quill"), file("quill")], vec![])));
+    for target in ["../x", "/abs", "a/../../x"] {
+        assert!(!valid(&bundle(vec![], vec![("link", target)])), "{target}");
+    }
+    let mut http = file("quill");
+    http.url = "http://example.org/f.gz".into();
+    assert!(!valid(&bundle(vec![http], vec![])));
+}
+
+/// Every entry under `dir`: a file's bytes and mode, or a link's target.
+#[cfg(target_os = "linux")]
+fn tree(dir: &std::path::Path) -> BTreeMap<String, (Vec<u8>, u32)> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut found = BTreeMap::new();
+    let mut pending = vec![(dir.to_path_buf(), String::new())];
+    while let Some((folder, prefix)) = pending.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+            let path = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            let kind = entry.file_type().unwrap();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(entry.path()).unwrap();
+                found.insert(path, (target.to_string_lossy().as_bytes().to_vec(), 0));
+            } else if kind.is_dir() {
+                pending.push((entry.path(), format!("{path}/")));
+            } else {
+                let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+                found.insert(path, (std::fs::read(entry.path()).unwrap(), mode));
+            }
+        }
+    }
+    found
+}
+
+/// Version 1.0.0 installed from one bundle, and the bundle of 2.0.0 in another folder: its
+/// program changed, CEF's files did not, a file with its own mode and two links are new.
+#[cfg(target_os = "linux")]
+fn installed_and_next(folder: &std::path::Path) -> (Install, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let one = folder.join("one");
+    bundle(&one, &elf("1.0.0"), "same");
+    let install = Install::at(folder.join("app"));
+    install
+        .adopt(&one.join("quill"), &version("1.0.0"))
+        .unwrap();
+    let two = folder.join("two");
+    bundle(&two, &elf("2.0.0"), "same");
+    std::fs::create_dir_all(two.join("extra")).unwrap();
+    std::fs::write(two.join("extra/data.bin"), program(70_000)).unwrap();
+    std::fs::set_permissions(
+        two.join("extra/data.bin"),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("libcef.so", two.join("libcef-link.so")).unwrap();
+    std::os::unix::fs::symlink("../locales", two.join("extra/locales")).unwrap();
+    (install, two)
+}
+
+/// The next version is staged file by file: the files the running version has are taken from
+/// it (a hard link when the mode matches), only the changed ones are downloaded, and the folder
+/// staged is exactly the release's bundle, modes and links included.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_bundle_is_staged_from_local_files_and_only_the_changed_blobs() {
+    use std::os::unix::fs::MetadataExt;
+    let folder = tempfile::tempdir().unwrap();
+    let (install, two) = installed_and_next(folder.path());
+    let server = serve(0).unwrap();
+    let entry = serve::publish_files(&server, &two, &version("2.0.0"), "linux-x86_64");
+    let agent = agent();
+    let source = files();
+    let bundle =
+        files::fetch_bundle(&agent, &source, &entry, &version("2.0.0"), "linux-x86_64").unwrap();
+    // Another version's list, or one for another system, is refused.
+    assert_eq!(
+        files::fetch_bundle(&agent, &source, &entry, &version("2.0.1"), "linux-x86_64"),
+        Err(Error::Manifest)
+    );
+    let blobs = install.downloads().join("blobs");
+    let mut told = Vec::new();
+    let staged = files::stage(&agent, &source, &install, &bundle, &blobs, |done, total| {
+        told.push((done, total));
+        true
+    })
+    .unwrap();
+    assert_eq!(staged, install.root().join("versions/2.0.0"));
+    assert_eq!(tree(&staged), tree(&two));
+    // The program and the new file came; CEF's files and the locale did not.
+    let fetched: Vec<String> = (server.requests().into_iter())
+        .map(|(path, _)| path)
+        .filter(|path| path.starts_with("/f-"))
+        .collect();
+    let blob_of = |path: &str| {
+        let file = bundle.files.iter().find(|file| file.path == path).unwrap();
+        (format!("/{}", files::blob_name(&file.sha256)), file.packed)
+    };
+    let (quill, data) = (blob_of("quill"), blob_of("extra/data.bin"));
+    let mut expected = vec![quill.0.clone(), data.0.clone()];
+    expected.sort();
+    let mut fetched_sorted = fetched.clone();
+    fetched_sorted.sort();
+    assert_eq!(fetched_sorted, expected);
+    // Progress counts the bytes downloaded, not the bundle.
+    assert_eq!(told.last(), Some(&(quill.1 + data.1, quill.1 + data.1)));
+    let inode = |path: std::path::PathBuf| std::fs::metadata(path).unwrap().ino();
+    assert_eq!(
+        inode(install.root().join("current/libcef.so")),
+        inode(staged.join("libcef.so"))
+    );
+    assert!(!blobs.exists(), "the blobs go once staged");
+    // Still staged only: 1.0.0 starts.
+    assert_eq!(install.current().as_deref(), Some("1.0.0"));
+}
+
+/// A blob that is not its file stops the staging: nothing is staged, the blob goes, and the
+/// caller falls back on the full archive.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_bad_blob_stages_nothing() {
+    let folder = tempfile::tempdir().unwrap();
+    let (install, two) = installed_and_next(folder.path());
+    let server = serve(0).unwrap();
+    let entry = serve::publish_files(&server, &two, &version("2.0.0"), "linux-x86_64");
+    let agent = agent();
+    let bundle =
+        files::fetch_bundle(&agent, &files(), &entry, &version("2.0.0"), "linux-x86_64").unwrap();
+    let quill = bundle
+        .files
+        .iter()
+        .find(|file| file.path == "quill")
+        .unwrap();
+    let name = files::blob_name(&quill.sha256);
+    // The same size, other bytes: a valid gzip of something else would do the same.
+    server.put(&format!("/{name}"), vec![0x1f; quill.packed as usize]);
+    let blobs = install.downloads().join("blobs");
+    assert_eq!(
+        files::stage(&agent, &files(), &install, &bundle, &blobs, |_, _| true),
+        Err(Error::Disk)
+    );
+    assert!(!install.root().join("versions/2.0.0").exists());
+    assert!(!blobs.join(&name).exists());
+    // A blob larger than listed is cut off and refused before it is unpacked.
+    server.put(&format!("/{name}"), vec![0; quill.packed as usize + 10]);
+    assert_eq!(
+        files::stage(&agent, &files(), &install, &bundle, &blobs, |_, _| true),
+        Err(Error::Digest)
     );
 }

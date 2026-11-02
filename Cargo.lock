@@ -3945,6 +3945,7 @@ version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.3.4",
  "quill-update",
  "serde",
@@ -3985,6 +3986,7 @@ version = "0.1.8"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.3.4",
  "quill-files",
  "semver",

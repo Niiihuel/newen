@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use quill_model::{Event, ReleaseNotes, UpdateState, WhatsNew};
+use quill_update::files;
 use quill_update::install::{Install, Staged};
 use quill_update::whats_new::{self as wire, Kept, Kind};
-use quill_update::{Error, Manifest, Release, Source, VerifyingKey, Version};
+use quill_update::{Error, Manifest, Release, Source, Trust, VerifyingKey, Version};
 
 use crate::Sink;
 
@@ -42,6 +43,10 @@ const OPENED: &str = "whats_new_opened";
 const LAST_CHECK: &str = "update_last_check";
 const SKIPPED: &str = "update_skipped";
 const NOTIFIED: &str = "update_notified";
+/// The highest sequence a verified manifest had: a lower one is an old release served again.
+const SEQUENCE: &str = "update_sequence";
+/// The keys a rotation left, which replace the ones compiled in.
+const KEYS: &str = "update_keys";
 /// How many installed versions' notes are kept.
 const KEPT_NOTES: usize = 10;
 
@@ -352,14 +357,58 @@ impl Updates {
         }
     }
 
+    /// The latest release's manifest: from the public feed, else the code's repository with a
+    /// token. The highest sequence and the keys a rotation names are kept before it returns,
+    /// except for a test feed of `QUILL_UPDATE_FEED`, which neither reads nor changes them.
     fn fetch(&self) -> Result<(Manifest, Source), Error> {
-        let (source, key) = match &self.feed {
-            Some((source, key)) => (Some(source.clone()), Some(*key)),
-            None => (Source::locate(), quill_update::public_key()),
+        let test_feed =
+            std::env::var("QUILL_UPDATE_FEED").is_ok_and(|base| !base.trim().is_empty());
+        let sequence = (self.marked(SEQUENCE))
+            .filter(|_| !test_feed)
+            .and_then(|kept| kept.parse().ok());
+        let trust = Trust {
+            keys: match &self.feed {
+                Some((_, key)) => vec![*key],
+                None => {
+                    let stored = self
+                        .marked(KEYS)
+                        .and_then(|kept| quill_update::read_keys(&kept));
+                    quill_update::trusted_keys(&stored.unwrap_or_default())
+                }
+            },
+            sequence: sequence.unwrap_or(0),
         };
-        let source = source.ok_or(Error::Access)?;
-        quill_update::check(&quill_update::agent(), &source, key.as_ref())
-            .map(|manifest| (manifest, source))
+        let agent = quill_update::agent();
+        let source = (self.feed.as_ref()).map_or_else(Source::locate, |(source, _)| source.clone());
+        let mut checked = quill_update::check(&agent, &source, &trust).map(|found| (found, source));
+        if let Err(error) = &checked {
+            if let Some(fallback) = self.feed.is_none().then(Source::fallback).flatten() {
+                self.log(format!(
+                    "check: the feed failed ({error}); the code's repository"
+                ));
+                checked =
+                    quill_update::check(&agent, &fallback, &trust).map(|found| (found, fallback));
+            }
+        }
+        if let Some((manifest, _)) = checked.as_ref().ok().filter(|_| !test_feed) {
+            let store = self.store.lock().unwrap();
+            if sequence.is_none_or(|kept| manifest.sequence > kept) {
+                if let Err(error) = store.mark(SEQUENCE, &manifest.sequence.to_string()) {
+                    eprintln!("quill: update: {error}");
+                }
+            }
+            if let Some(keys) = &manifest.rotated {
+                let kept = store.mark(KEYS, &quill_update::write_keys(keys));
+                drop(store);
+                match kept {
+                    Ok(()) => {
+                        self.log(format!("keys: rotated, {} trusted from now on", keys.len()))
+                    }
+                    Err(error) => self.log(format!("keys: rotation not kept: {error}")),
+                }
+            }
+        }
+        checked
     }
 
     fn run_check(&self) {
@@ -472,11 +521,11 @@ impl Updates {
         };
         let version = release.version.to_string();
         let mandatory = release.mandatory;
-        let Some(artifact) = release.artifact.clone() else {
+        if release.artifact.is_none() && release.files.is_none() {
             self.log(format!("download: {version} has nothing for this system"));
             self.set_current(generation, failure(Error::NoArtifact));
             return;
-        };
+        }
         let Some(install) = self.install.clone() else {
             self.set_current(generation, failure(Error::NotInstalled));
             return;
@@ -486,6 +535,70 @@ impl Updates {
             done,
             total,
             mandatory,
+        };
+        // Told every STEP bytes and at the end, while this release is the one found.
+        let report = |told: &mut u64, done: u64, total: u64| {
+            if done == total || done.saturating_sub(*told) >= STEP {
+                *told = done;
+                return self.set_current(generation, downloading(done, total));
+            }
+            self.generation() == generation
+        };
+        let size = (release.artifact.as_ref()).map_or(0, |artifact| artifact.size);
+        if !self.set_current(generation, downloading(0, size)) {
+            return;
+        }
+        // File by file first: only what changed comes; the full archive when that fails.
+        if let Some(index) = release.files.clone() {
+            let (started, mut told, mut downloaded) = (Instant::now(), 0, 0);
+            let agent = quill_update::agent();
+            let staged = files::fetch_bundle(
+                &agent,
+                &source,
+                &index,
+                &release.version,
+                &quill_update::platform(),
+            )
+            .and_then(|bundle| {
+                self.log(format!(
+                    "download: {version} file by file, {} files",
+                    bundle.files.len()
+                ));
+                let blobs = install.downloads().join("blobs");
+                files::stage(&agent, &source, &install, &bundle, &blobs, |done, total| {
+                    downloaded = done;
+                    report(&mut told, done, total)
+                })
+            });
+            if self.generation() != generation {
+                return self.log(format!(
+                    "download: {version} stopped: a newer release replaces it"
+                ));
+            }
+            match staged {
+                Ok(path) => {
+                    self.log(format!(
+                        "download: {version} done file by file, {downloaded} bytes in {:.1} s; every digest matches",
+                        started.elapsed().as_secs_f32()
+                    ));
+                    return self.keep_ready(
+                        generation,
+                        &release,
+                        &source,
+                        &install,
+                        path,
+                        index.sha256,
+                    );
+                }
+                Err(error) => self.log(format!(
+                    "download: {version} file by file failed: {error}; the full archive instead"
+                )),
+            }
+        }
+        let Some(artifact) = release.artifact.clone() else {
+            self.log(format!("download: {version} has nothing for this system"));
+            self.set_current(generation, failure(Error::NoArtifact));
+            return;
         };
         if !self.set_current(generation, downloading(0, artifact.size)) {
             return;
@@ -501,13 +614,7 @@ impl Updates {
             &source,
             &artifact,
             &install.downloads(),
-            |done, total| {
-                if done == total || done - told >= STEP {
-                    told = done;
-                    return self.set_current(generation, downloading(done, total));
-                }
-                self.generation() == generation
-            },
+            |done, total| report(&mut told, done, total),
         );
         if self.generation() != generation {
             return self.log(format!(
@@ -527,34 +634,56 @@ impl Updates {
             artifact.size,
             started.elapsed().as_secs_f32()
         ));
-        let staged = install.stage(&file, &release.version).and_then(|path| {
-            let staged = Staged {
-                version: release.version.clone(),
-                sha256: artifact.sha256.clone(),
-                path,
-                since: now(),
-            };
-            if self.generation() != generation {
-                return Ok(None);
-            }
-            // Kept before the interface hears it is ready, so the next start activates it.
-            install.keep_staged(&staged).map(|()| Some(staged))
-        });
-        match staged {
-            Ok(Some(staged)) => {
+        match install.stage(&file, &release.version) {
+            Ok(path) => {
                 // A whole bundle with CEF: it is not kept once staged.
                 let _ = std::fs::remove_file(&file);
-                self.log(format!("stage: {version} at {}", staged.path.display()));
-                // Before the strip shows: its announcement is there when it is clicked.
-                self.keep_whats_new(&release, &source);
-                self.ready(generation, &release, staged.since);
+                self.keep_ready(
+                    generation,
+                    &release,
+                    &source,
+                    &install,
+                    path,
+                    artifact.sha256,
+                );
             }
-            Ok(None) => {}
             Err(error) => {
                 self.log(format!("stage: {version} failed: {error}"));
                 self.set_current(generation, failure(Error::Disk));
             }
         }
+    }
+
+    /// `release`, staged at `path` from what has `sha256`, is kept for the next start to
+    /// activate, before the interface hears it is ready.
+    fn keep_ready(
+        &self,
+        generation: u64,
+        release: &Release,
+        source: &Source,
+        install: &Install,
+        path: PathBuf,
+        sha256: String,
+    ) {
+        let version = release.version.to_string();
+        if self.generation() != generation {
+            return;
+        }
+        let staged = Staged {
+            version: release.version.clone(),
+            sha256,
+            path,
+            since: now(),
+        };
+        if let Err(error) = install.keep_staged(&staged) {
+            self.log(format!("stage: {version} failed: {error}"));
+            self.set_current(generation, failure(Error::Disk));
+            return;
+        }
+        self.log(format!("stage: {version} at {}", staged.path.display()));
+        // Before the strip shows: its announcement is there when it is clicked.
+        self.keep_whats_new(release, source);
+        self.ready(generation, release, staged.since);
     }
 
     /// `release`, staged at `since`, is ready: the interface hears it, and the system too when
@@ -966,8 +1095,7 @@ mod tests {
                 notes: String::new(),
                 minimum_version: mandatory.then(|| version.clone()),
                 platforms,
-                whats_new: None,
-                assets: Default::default(),
+                ..Default::default()
             },
         )
     }
@@ -1098,6 +1226,129 @@ mod tests {
         assert!(
             told.notices.lock().unwrap().is_empty(),
             "the window has the focus"
+        );
+    }
+
+    /// Publish `version` on `server` with its archive and its list of files, as a release does;
+    /// with `corrupt`, the program's blob is not the program.
+    #[cfg(target_os = "linux")]
+    fn release_with_files(
+        server: &quill_update::serve::Server,
+        folder: &std::path::Path,
+        version: &Version,
+        corrupt: bool,
+    ) -> VerifyingKey {
+        use sha2::Digest as _;
+        let archive = bundle(folder, version);
+        let name = format!("quill-{version}.tar.gz");
+        server.put(&format!("/{name}"), archive.clone());
+        let tree = folder.join(format!("bundle-{version}"));
+        let platform = quill_update::platform();
+        let list = quill_update::serve::publish_files(server, &tree, version, &platform);
+        if corrupt {
+            let program = std::fs::read(tree.join("quill")).unwrap();
+            let blob = files::blob_name(&quill_update::hex(&sha2::Sha256::digest(&program)));
+            // The same size, every byte flipped: it no longer unpacks to the program.
+            server.configure(|files| {
+                let packed = files.files.get_mut(&format!("/{blob}")).unwrap();
+                *packed = Arc::new(packed.iter().map(|byte| !byte).collect());
+            });
+        }
+        let archive = quill_update::Artifact {
+            url: format!("{}/{name}", server.base()),
+            size: archive.len() as u64,
+            sha256: quill_update::hex(&sha2::Sha256::digest(&archive)),
+        };
+        quill_update::serve::publish(
+            server,
+            &Manifest {
+                version: version.clone(),
+                date: "2026-11-02T12:00:00Z".into(),
+                platforms: [(platform.clone(), archive)].into(),
+                files: [(platform, list)].into(),
+                sequence: version.patch,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// A release with a list of files is staged file by file: only the program, which changed,
+    /// is downloaded; CEF's library comes from the version that runs. A release whose blob is
+    /// bad falls back on its full archive and is staged all the same.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_release_is_staged_file_by_file_and_falls_back_on_its_archive() {
+        let folder = tempfile::tempdir().unwrap();
+        let install = Install::at(folder.path().join("app"));
+        let running = running();
+        bundle(folder.path(), &running);
+        let built = folder.path().join(format!("bundle-{running}"));
+        install.adopt(&built.join("quill"), &running).unwrap();
+        let server = quill_update::serve::serve(0).unwrap();
+        let (one, two) = (next(1), next(2));
+        let key = release_with_files(&server, folder.path(), &one, false);
+        let log = folder.path().join("updates.log");
+        let (updates, _told) = managed(
+            &server,
+            key,
+            Some(install.clone()),
+            true,
+            log.clone(),
+            |_| {},
+        );
+        updates.run_check();
+        let ready = |version: &Version| UpdateState::Ready {
+            version: version.to_string(),
+            mandatory: false,
+        };
+        assert_eq!(updates.state(), ready(&one));
+        let staged = install.root().join(format!("versions/{one}"));
+        assert_eq!(
+            std::fs::read(staged.join("quill")).unwrap(),
+            std::fs::read(folder.path().join(format!("bundle-{one}/quill"))).unwrap()
+        );
+        assert_eq!(std::fs::read(staged.join("libcef.so")).unwrap(), b"cef");
+        let fetched: Vec<String> = (server.requests().into_iter())
+            .map(|(path, _)| path)
+            .filter(|path| path.starts_with("/f-") || path.ends_with(".tar.gz"))
+            .collect();
+        assert_eq!(fetched.len(), 1, "the program's blob only: {fetched:?}");
+        // The sequence seen is kept.
+        assert_eq!(updates.marked(SEQUENCE), Some(one.patch.to_string()));
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains(&format!("download: {one} done file by file")),
+            "{text}"
+        );
+        assert!(
+            !text.contains(&format!("download: {one} started")),
+            "{text}"
+        );
+
+        release_with_files(&server, folder.path(), &two, true);
+        updates.run_check();
+        assert_eq!(updates.state(), ready(&two));
+        assert_eq!(
+            install.staged().map(|staged| staged.version),
+            Some(two.clone())
+        );
+        let text = std::fs::read_to_string(&log).unwrap();
+        for step in [
+            format!("download: {two} file by file failed"),
+            format!("download: {two} done,"),
+            format!("stage: {two} at"),
+        ] {
+            assert!(text.contains(&step), "{step} in {text}");
+        }
+        // A newer version with a lower sequence: an old manifest served again, refused.
+        release(&server, &next(3), false, None);
+        updates.run_check();
+        assert_eq!(updates.state(), ready(&two));
+        assert_eq!(updates.marked(SEQUENCE), Some(two.patch.to_string()));
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains(&format!("check failed: {}", Error::Replayed)),
+            "{text}"
         );
     }
 

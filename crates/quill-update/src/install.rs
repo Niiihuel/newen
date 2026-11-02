@@ -128,6 +128,23 @@ impl Install {
         }
     }
 
+    /// Where this installation holds the file a release's bundle names `path` (`/` between
+    /// folders), in the version that runs: Linux's `current/`; Windows' program beside the
+    /// versions and the rest in `versions\{this version}\`; macOS' `quill.app/…` where it is.
+    pub fn installed(&self, path: &str) -> PathBuf {
+        let base = if cfg!(windows) {
+            if path == PROGRAM {
+                return self.root.join(PROGRAM);
+            }
+            self.root.join("versions").join(crate::VERSION)
+        } else if cfg!(target_os = "macos") {
+            self.root.clone()
+        } else {
+            self.root.join("current")
+        };
+        path.split('/').fold(base, |at, part| at.join(part))
+    }
+
     /// The version `current` names, if any.
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn current(&self) -> Option<String> {
@@ -546,7 +563,7 @@ pub fn staged_path(os: &str, root: &Path, version: &Version) -> PathBuf {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Staged {
     pub version: Version,
-    /// The SHA-256 of the artifact it came from.
+    /// The SHA-256 of the artifact, or of the list of files, it came from.
     pub sha256: String,
     /// [`staged_path`].
     pub path: PathBuf,
@@ -772,7 +789,7 @@ fn native(path: &Path, refused: &str) -> io::Result<()> {
 }
 
 /// Run a system tool to its end; what it wrote to stderr is the error.
-fn run(command: &mut Command) -> io::Result<()> {
+pub(crate) fn run(command: &mut Command) -> io::Result<()> {
     let output = command.stdin(Stdio::null()).output()?;
     if output.status.success() {
         return Ok(());
