@@ -1,7 +1,7 @@
-//! The update log, `<data dir>/quill/updates.log` (`newen/` once Newen moved the folder;
-//! docs/UPDATES.md): one line per check,
-//! download, stage, activation, rollback and error, the newest [`LINES`] kept. A line names
-//! versions, sizes, times and the reason a step failed; never an address or a token.
+//! The update log, `<data dir>/newen/updates.log` (quill's folder while it was not moved,
+//! [`newen_files::own_dir`]; docs/UPDATES.md): one line per check, download, stage,
+//! activation, rollback and error, the newest [`LINES`] kept. A line names versions, sizes,
+//! times and the reason a step failed; never an address or a token.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

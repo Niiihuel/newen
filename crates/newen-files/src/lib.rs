@@ -370,16 +370,22 @@ pub fn config_dir() -> Option<PathBuf> {
     app_dir("XDG_CONFIG_HOME", ".config", "APPDATA")
 }
 
-/// quill's own folder in `base`, its [`data_dir`] or [`config_dir`]: `newen/` when it is there,
-/// else `quill/`. Newen, quill's next name, moves the folders there; a quill started after
-/// going back from Newen finds its sessions and settings in them (docs/UPDATES.md, «El paso a
-/// Newen»).
+/// Newen's own folder in `base`, its [`data_dir`] or [`config_dir`]: `newen/`, or `quill/`,
+/// the name it had, while that is there and `newen/` is not ([`named_dir`]).
 pub fn own_dir(base: &Path) -> PathBuf {
-    let newen = base.join("newen");
-    if newen.is_dir() {
-        newen
+    named_dir(base, "newen", "quill")
+}
+
+/// `base/name`; `base/legacy`, the folder's name before Newen, while that is a folder and
+/// `base/name` is not there. A first start moves it (docs/UPDATES.md, «Venir de quill»); until
+/// then, or when it could not, the data stays where it is read, and nothing starts empty
+/// beside it.
+pub fn named_dir(base: &Path, name: &str, legacy: &str) -> PathBuf {
+    let (dir, old) = (base.join(name), base.join(legacy));
+    if fs::symlink_metadata(&dir).is_err() && old.is_dir() {
+        old
     } else {
-        base.join("quill")
+        dir
     }
 }
 
@@ -467,6 +473,33 @@ fn find_program(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder is Newen's own once it is there; before, quill's while quill's is there: never
+    /// an empty one beside the person's data. A link left in quill's place changes nothing.
+    #[test]
+    fn newen_s_folder_is_used_and_quill_s_only_while_it_was_not_moved() {
+        let base = std::env::temp_dir().join(format!("newen-own-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        assert_eq!(own_dir(&base), base.join("newen"), "a first install");
+        fs::write(base.join("quill"), "a file, not a folder").unwrap();
+        assert_eq!(own_dir(&base), base.join("newen"));
+        fs::remove_file(base.join("quill")).unwrap();
+        fs::create_dir(base.join("quill")).unwrap();
+        assert_eq!(own_dir(&base), base.join("quill"), "not moved yet");
+        fs::create_dir(base.join("newen")).unwrap();
+        assert_eq!(own_dir(&base), base.join("newen"), "both: Newen's");
+        fs::remove_dir(base.join("newen")).unwrap();
+        fs::rename(base.join("quill"), base.join("newen")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("newen", base.join("quill")).unwrap();
+        assert_eq!(own_dir(&base), base.join("newen"), "moved");
+        assert_eq!(
+            named_dir(&base, "newen-ide", "quill-ide"),
+            base.join("newen-ide")
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn a_bare_program_name_is_found_through_path_and_pathext() {

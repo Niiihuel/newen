@@ -17,7 +17,7 @@ pub struct Session {
 
 fn path() -> PathBuf {
     let data = newen_files::data_dir().unwrap_or_else(|| ".".into());
-    data.join("quill-ide/sessions.json")
+    newen_files::named_dir(&data, "newen-ide", "quill-ide").join("sessions.json")
 }
 
 fn all() -> BTreeMap<PathBuf, Session> {

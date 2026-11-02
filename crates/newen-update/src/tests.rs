@@ -867,20 +867,16 @@ fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
     );
 }
 
-/// On Linux the installation is `quill/app` in the data folder, and `newen/app` once Newen
-/// moved it there, with or without `quill/` left as a link to it.
+/// On Linux the installation is `newen/app` in the data folder; `quill/app` while quill's data
+/// was not moved, and `newen/app` once it was, with or without `quill/` left as a link to it.
 #[test]
-fn the_installation_is_found_where_newen_moved_it() {
+fn the_installation_is_newen_s_or_quill_s_until_moved() {
     use crate::install::app_root;
-    let data = tempfile::tempdir().unwrap();
-    let data = data.path();
-    assert_eq!(app_root(data), data.join("quill/app"));
+    let folder = tempfile::tempdir().unwrap();
+    let data = folder.path();
+    assert_eq!(app_root(data), data.join("newen/app"), "a first install");
     std::fs::create_dir_all(data.join("quill/app/versions")).unwrap();
     assert_eq!(app_root(data), data.join("quill/app"));
-    // Newen's folder without an installation in it is not one.
-    std::fs::create_dir_all(data.join("newen")).unwrap();
-    assert_eq!(app_root(data), data.join("quill/app"));
-    std::fs::remove_dir(data.join("newen")).unwrap();
     std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
     assert_eq!(app_root(data), data.join("newen/app"));
     #[cfg(unix)]

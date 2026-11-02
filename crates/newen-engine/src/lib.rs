@@ -129,7 +129,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Sessions kept in `$XDG_DATA_HOME/quill/quill.db` (`~/.local/share/quill` without it).
+    /// Sessions kept in `$XDG_DATA_HOME/newen/newen.db` (`~/.local/share/newen` without it).
     pub fn default_database() -> Self {
         Self::under(
             &newen_files::data_dir().unwrap_or_else(|| ".".into()),
@@ -138,13 +138,13 @@ impl Config {
     }
 
     /// [`Self::default_database`] with the data folder `data` and the settings folder
-    /// `config`: quill's own folder in each ([`newen_files::own_dir`], Newen's once Newen moved
-    /// it), and in it Newen's `newen.db` when it renamed the database, else `quill.db`.
+    /// `config`: Newen's own folder in each ([`newen_files::own_dir`]), and in it `newen.db`;
+    /// `quill.db`, the name it had, while that is there and `newen.db` is not (not renamed yet).
     pub fn under(data: &Path, config: &Path) -> Self {
         let (data, config) = (newen_files::own_dir(data), newen_files::own_dir(config));
-        let database = Some(data.join("newen.db"))
-            .filter(|newen| newen.is_file())
-            .unwrap_or_else(|| data.join("quill.db"));
+        let database = Some(data.join("quill.db"))
+            .filter(|quill| quill.is_file() && !data.join("newen.db").exists())
+            .unwrap_or_else(|| data.join("newen.db"));
         Self {
             database: Some(database),
             snapshots: Some(data.join("snapshots")),
@@ -4712,18 +4712,28 @@ fn waives_server_consent(agent: Option<&str>, mode: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
-    /// A quill started after going back from Newen finds what Newen moved: `newen/` in the data
-    /// and settings folders, with `quill/` left as a link to it or not at all, and the database
-    /// renamed `newen.db` or not; before Newen, `quill/` and `quill.db`.
+    /// Newen keeps its sessions in `newen/newen.db` and its settings in `newen/`; on a computer
+    /// whose quill data was not moved yet, in quill's `quill/quill.db` and `quill/`, so nothing
+    /// starts empty beside them; once moved (with `quill/` left as a link or not at all), and
+    /// once the database is renamed, in Newen's.
     #[test]
-    fn the_folders_and_the_database_newen_moved_are_found() {
+    fn the_folders_and_the_database_are_newen_s_or_quill_s_until_moved() {
         let base = tempfile::tempdir().unwrap();
         let (data, config) = (base.path().join("data"), base.path().join("config"));
         let under = || Config::under(&data, &config);
         let paths = |config: &Config| (config.database.clone(), config.settings.clone());
-        // Before Newen, or never moved.
+        let renamed = (
+            Some(data.join("newen/newen.db")),
+            Some(config.join("newen/settings.json")),
+        );
+        // A first install.
+        assert_eq!(paths(&under()), renamed);
+        // quill's, not moved yet.
         std::fs::create_dir_all(data.join("quill")).unwrap();
         std::fs::create_dir_all(config.join("quill")).unwrap();
+        let store = newen_store::Store::open(&data.join("quill/quill.db")).unwrap();
+        store.mark("written", "by quill").unwrap();
+        drop(store);
         assert_eq!(
             paths(&under()),
             (
@@ -4732,23 +4742,18 @@ mod tests {
             )
         );
         assert_eq!(under().update_log, Some(data.join("quill/updates.log")));
-        // Moved by Newen, the database not renamed (yet), and no links left.
+        // Moved, the database not renamed (yet), and no links left.
         std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
         std::fs::rename(config.join("quill"), config.join("newen")).unwrap();
-        let store = newen_store::Store::open(&data.join("newen/quill.db")).unwrap();
-        store.mark("written", "by quill").unwrap();
-        drop(store);
-        let moved = (
-            Some(data.join("newen/quill.db")),
-            Some(config.join("newen/settings.json")),
+        assert_eq!(
+            paths(&under()),
+            (
+                Some(data.join("newen/quill.db")),
+                Some(config.join("newen/settings.json")),
+            )
         );
-        assert_eq!(paths(&under()), moved);
         // Renamed `newen.db`: that is the one opened, with what was kept in it.
         std::fs::rename(data.join("newen/quill.db"), data.join("newen/newen.db")).unwrap();
-        let renamed = (
-            Some(data.join("newen/newen.db")),
-            Some(config.join("newen/settings.json")),
-        );
         assert_eq!(paths(&under()), renamed);
         let store = newen_store::Store::open(under().database.as_deref().unwrap()).unwrap();
         assert_eq!(

@@ -53,7 +53,7 @@ impl Default for Prefs {
 /// Where they are kept.
 pub fn path() -> PathBuf {
     let config = newen_files::config_dir().unwrap_or_else(|| ".".into());
-    config.join("quill-ide/settings.json")
+    newen_files::named_dir(&config, "newen-ide", "quill-ide").join("settings.json")
 }
 
 /// The ones kept, or the defaults when there are none or they can't be read.

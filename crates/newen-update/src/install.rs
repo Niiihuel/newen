@@ -52,17 +52,11 @@ const BUNDLE: &str = "quill.app";
 #[cfg(target_os = "macos")]
 const NEWEN_BUNDLE: &str = "Newen.app";
 
-/// Linux: the installation in the data folder `data`, `quill/app`; `newen/app` when Newen,
-/// quill's next name, moved it there, so a quill started after going back from Newen updates
-/// where it runs.
+/// Linux: the installation in the data folder `data`, `app/` in Newen's own folder
+/// ([`newen_files::own_dir`]): `newen/app`, or quill's `quill/app` while its data was not moved.
 #[cfg(any(test, not(any(windows, target_os = "macos"))))]
 pub(crate) fn app_root(data: &Path) -> PathBuf {
-    let newen = data.join("newen/app");
-    if newen.is_dir() {
-        newen
-    } else {
-        data.join("quill/app")
-    }
+    newen_files::own_dir(data).join("app")
 }
 
 /// The program in `dir`, a bundle's folder: Newen's when it is there, else quill's.
