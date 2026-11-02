@@ -55,10 +55,60 @@ pub fn thumbnail(path: &Path) -> Option<RasterImage> {
     scaled(path, 256)
 }
 
-/// The picture the viewer shows: 2048 px at most on its long side. PNG, or JPEG at quality 90
-/// when the PNG would pass limn's 8 MiB cap.
+/// What limn decodes of a picture: 4096 px a side, 12 MP and 8 MiB of bytes at most.
+const LIMN_SIDE: u32 = 4096;
+const LIMN_PIXELS: u64 = 12 * 1024 * 1024;
+const LIMN_CAP: usize = 8 * 1024 * 1024;
+
+/// The picture the viewer shows, at its own size: a PNG or JPEG file within limn's limits as it
+/// is, any other one decoded and, past those limits, made smaller with a Lanczos filter. Then
+/// PNG, or JPEG at quality 90 when the PNG would pass the 8 MiB cap.
 pub fn full(path: &Path) -> Option<RasterImage> {
-    scaled(path, 2048)
+    let bytes = std::fs::read(path).ok()?;
+    let reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .ok()?;
+    let format = match reader.format()? {
+        image::ImageFormat::Png => RasterImageFormat::Png,
+        image::ImageFormat::Jpeg => RasterImageFormat::Jpeg,
+        _ => return large(path),
+    };
+    let (width, height) = reader.into_dimensions().ok()?;
+    if within_limn(width, height) && bytes.len() <= LIMN_CAP {
+        let alt = path.file_name()?.to_string_lossy().into_owned();
+        return raster(format, &bytes, alt);
+    }
+    large(path)
+}
+
+fn within_limn(width: u32, height: u32) -> bool {
+    width.max(height) <= LIMN_SIDE && u64::from(width) * u64::from(height) <= LIMN_PIXELS
+}
+
+/// A picture that does not go to limn as it is: decoded, made smaller to limn's limits with a
+/// Lanczos filter (a screenshot's text stays legible), and encoded again.
+fn large(path: &Path) -> Option<RasterImage> {
+    let decoded = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    let (width, height) = (decoded.width(), decoded.height());
+    let decoded = if within_limn(width, height) {
+        decoded
+    } else {
+        let by_side = LIMN_SIDE as f64 / f64::from(width.max(height));
+        let by_pixels = (LIMN_PIXELS as f64 / (f64::from(width) * f64::from(height))).sqrt();
+        let scale = by_side.min(by_pixels);
+        let fit = |side: u32| ((f64::from(side) * scale).floor() as u32).max(1);
+        decoded.resize_exact(
+            fit(width),
+            fit(height),
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
+    encoded(decoded, path)
 }
 
 /// An image's size in pixels, from its header; the viewer fits it and the editor lays it out.
@@ -118,7 +168,6 @@ pub fn annotated_png(
 
 /// The image at most `side` px on each side, as limn takes it.
 fn scaled(path: &Path, side: u32) -> Option<RasterImage> {
-    const LIMN_CAP: usize = 8 * 1024 * 1024;
     let decoded = image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
@@ -126,6 +175,11 @@ fn scaled(path: &Path, side: u32) -> Option<RasterImage> {
         .decode()
         .ok()?
         .thumbnail(side, side);
+    encoded(decoded, path)
+}
+
+/// `decoded` as limn takes it: PNG, or JPEG at quality 90 past the 8 MiB cap.
+fn encoded(decoded: image::DynamicImage, path: &Path) -> Option<RasterImage> {
     let mut png = Vec::new();
     decoded
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -239,6 +293,41 @@ mod tests {
             free_name(&dir, "a-annotated"),
             dir.join("a-annotated-3.png")
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The pixels of what limn would be handed.
+    fn pixels(picture: &RasterImage) -> (u32, u32) {
+        use base64::Engine;
+        use image::GenericImageView;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(picture.data_base64())
+            .unwrap();
+        image::load_from_memory(&bytes).unwrap().dimensions()
+    }
+
+    #[test]
+    fn the_viewer_gets_a_screenshot_at_its_own_size_and_a_huge_one_within_limn() {
+        let dir = std::env::temp_dir().join(format!("quill-full-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A 2880 by 1800 screenshot goes as its own file, not its 256 px thumbnail.
+        let shot = dir.join("shot.png");
+        image::RgbImage::from_fn(2880, 1800, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 0])
+        })
+        .save(&shot)
+        .unwrap();
+        let whole = full(&shot).unwrap();
+        assert_eq!(
+            whole.size_bytes() as u64,
+            std::fs::metadata(&shot).unwrap().len()
+        );
+        assert_eq!(pixels(&whole), (2880, 1800));
+        assert_eq!(pixels(&thumbnail(&shot).unwrap()), (256, 160));
+        // Past 4096 px a side it is made smaller to fit, keeping its shape.
+        let huge = dir.join("huge.png");
+        image::GrayImage::new(6000, 1000).save(&huge).unwrap();
+        assert_eq!(pixels(&full(&huge).unwrap()), (4096, 682));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

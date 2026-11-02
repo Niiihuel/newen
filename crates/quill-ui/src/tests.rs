@@ -6915,28 +6915,188 @@ fn a_run_s_pictures_sit_at_its_line_s_end_and_the_viewer_steps_through_them() {
     let named = |path: &str| (PathBuf::from(path), "Captured page".to_owned());
     assert_eq!(viewer.gallery, [named("/work/a.png"), named("/work/b.png")]);
     let frame = still(&store, &ui);
-    assert!(painted(&frame, "2 of 2").is_some() && painted(&frame, "Captured page").is_some());
+    assert!(painted(&frame, "Captured page").is_some());
     assert!(region(&frame, view::IMAGE_PREVIOUS).is_some());
-    // Its arrows step through them and stop at either end.
+    // The run's thumbnails under it say where it is among them.
+    assert!(region(&frame, "image:at:0").is_some() && region(&frame, "image:at:1").is_some());
+    // Its arrows step through them and wrap around the ends, as limn's lightbox does.
     click(&store, &mut ui, view::IMAGE_NEXT);
-    assert_eq!(ui.viewer.as_ref().unwrap().index, 1);
-    click(&store, &mut ui, view::IMAGE_PREVIOUS);
     let viewer = ui.viewer.as_ref().unwrap();
     assert_eq!(
         (viewer.index, viewer.path.clone()),
         (0, PathBuf::from("/work/a.png"))
     );
-    let frame = still(&store, &ui);
-    assert!(painted(&frame, "1 of 2").is_some());
-    assert!(region(&frame, view::IMAGE_NEXT).is_some());
     click(&store, &mut ui, view::IMAGE_PREVIOUS);
+    assert_eq!(ui.viewer.as_ref().unwrap().index, 1);
+    click(&store, &mut ui, "image:at:0");
     assert_eq!(ui.viewer.as_ref().unwrap().index, 0);
-    // A picture alone in its run has no count and no arrows.
+    let frame = still(&store, &ui);
+    assert!(region(&frame, view::IMAGE_NEXT).is_some());
+    // A picture alone in its run has no arrows and no thumbnails.
     click(&store, &mut ui, view::IMAGE_CLOSE);
     click(&store, &mut ui, "image:step:c5:0");
     assert_eq!(ui.viewer.as_ref().unwrap().gallery.len(), 1);
     let frame = still(&store, &ui);
-    assert!(region(&frame, view::IMAGE_NEXT).is_none() && painted(&frame, "1 of 1").is_none());
+    assert!(region(&frame, view::IMAGE_NEXT).is_none() && region(&frame, "image:at:0").is_none());
+}
+
+/// A stand-in picture whose digest is made of `mark`.
+fn picture(mark: char) -> limn::RasterImage {
+    let digest = mark.to_string().repeat(64);
+    limn::RasterImage::new(
+        digest,
+        limn::RasterImageFormat::Png,
+        4,
+        "AAAA".into(),
+        "shot",
+    )
+    .unwrap()
+}
+
+/// Where the viewer draws a picture, and whether it is drawn at full resolution.
+fn shown_picture(frame: &limn::Frame, image: &limn::RasterImage) -> Option<(limn::Rect, bool)> {
+    frame.commands.iter().find_map(|command| match command {
+        limn::DrawCommand::RasterImage {
+            rect, image: shown, ..
+        } if shown.sha256() == image.sha256() => Some((*rect, shown.is_full_resolution())),
+        _ => None,
+    })
+}
+
+/// The viewer open on `/work/shot.png` of `size` pixels, on a screen of `scale` pixels a point.
+fn viewing(size: (f32, f32), scale: f32) -> (Store, Ui) {
+    let (store, mut ui) = store_with_session();
+    let path = PathBuf::from("/work/shot.png");
+    ui.sizes.insert(path.clone(), size);
+    ui.thumbs.insert(path.clone(), picture('b'));
+    ui.full.insert(path.clone(), picture('f'));
+    ui.pixels_per_point = scale;
+    ui.viewer = Some(Viewer {
+        path,
+        ..Default::default()
+    });
+    (store, ui)
+}
+
+const BIG_WINDOW: limn::Size = limn::Size::new(2000.0, 1200.0);
+
+fn viewer_frame(store: &Store, ui: &Ui) -> limn::Frame {
+    let mut tree = UiTree::new(view(store, ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.layout(BIG_WINDOW)
+}
+
+#[test]
+fn the_viewer_fills_the_window_with_a_large_screenshot_at_its_proportions() {
+    let (store, ui) = viewing((2880.0, 1800.0), 1.0);
+    let (rect, _) =
+        shown_picture(&viewer_frame(&store, &ui), &picture('f')).expect("the picture is drawn");
+    // As tall as the window less limn's lightbox margins (36 above and below) and its top bar
+    // (40 and a 12 gap): 1076, and 1.6 times as wide.
+    assert!((rect.height - 1076.0).abs() < 1.0, "{rect:?}");
+    assert!((rect.width / rect.height - 1.6).abs() < 0.01, "{rect:?}");
+    // Centred across the window.
+    assert!((rect.x + rect.width / 2.0 - 1000.0).abs() < 1.0, "{rect:?}");
+}
+
+#[test]
+fn the_viewer_does_not_enlarge_a_small_picture_past_its_pixels() {
+    let (store, ui) = viewing((400.0, 300.0), 1.0);
+    let (rect, _) = shown_picture(&viewer_frame(&store, &ui), &picture('f')).unwrap();
+    assert_eq!((rect.width, rect.height), (400.0, 300.0));
+    // On a screen of two pixels a point, one of its pixels on each of the screen's.
+    let (store, ui) = viewing((400.0, 300.0), 2.0);
+    let (rect, _) = shown_picture(&viewer_frame(&store, &ui), &picture('f')).unwrap();
+    assert_eq!((rect.width, rect.height), (200.0, 150.0));
+}
+
+#[test]
+fn the_viewer_shows_the_full_picture_and_its_thumbnail_only_until_it_arrives() {
+    let (store, mut ui) = viewing((2880.0, 1800.0), 1.0);
+    let frame = viewer_frame(&store, &ui);
+    assert_eq!(
+        shown_picture(&frame, &picture('f')).map(|(_, full)| full),
+        Some(true)
+    );
+    assert!(shown_picture(&frame, &picture('b')).is_none());
+    ui.full.clear();
+    let frame = viewer_frame(&store, &ui);
+    assert_eq!(
+        shown_picture(&frame, &picture('b')).map(|(_, full)| full),
+        Some(false)
+    );
+}
+
+#[test]
+fn the_viewer_zooms_pans_and_fits_and_another_picture_opens_fitted() {
+    let (mut store, mut ui) = store_with_session();
+    screenshot(&mut store, "c1", &["/work/a.png"]);
+    screenshot(&mut store, "c2", &["/work/b.png"]);
+    for path in ["/work/a.png", "/work/b.png"] {
+        ui.sizes.insert(path.into(), (2880.0, 1800.0));
+        ui.full.insert(path.into(), picture('f'));
+    }
+    click(&store, &mut ui, "image:step:c1:0");
+    let mut tree = UiTree::new(view(&store, &ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(BIG_WINDOW);
+    let id = format!("{}:view:0:Captured page", view::IMAGE_CLOSE);
+    let fit = tree.zoom_scale(&id).expect("a zoom view");
+    let fitted = shown_picture(&frame, &picture('f')).unwrap().0;
+    let middle = limn::Point::new(1000.0, 600.0);
+    let send = |tree: &mut UiTree, ui: &mut Ui, event: limn::UiEvent| {
+        for action in tree.handle_event(event) {
+            update(&store, ui, &action);
+        }
+        tree.set_root(view(&store, ui, BIG_WINDOW));
+        tree.layout(BIG_WINDOW)
+    };
+    let key = |key| limn::UiEvent::Key {
+        key,
+        shift: false,
+        ctrl: false,
+        alt: false,
+    };
+    // + zooms in by a step, which the viewer keeps; 0 fits again; − at the fit stays there.
+    send(&mut tree, &mut ui, key(limn::Key::Plus));
+    let (scale, at_fit) = ui.viewer.as_ref().unwrap().zoom.expect("the zoom is kept");
+    assert!((scale - fit * 1.5).abs() < 0.001 && !at_fit);
+    // Zoomed in, the arrows hide.
+    let frame = send(&mut tree, &mut ui, limn::UiEvent::PointerMove(middle));
+    assert!(region(&frame, view::IMAGE_NEXT).is_none());
+    // A drag pans it.
+    let before = shown_picture(&frame, &picture('f')).unwrap().0;
+    send(&mut tree, &mut ui, limn::UiEvent::PointerDown(middle));
+    let to = limn::Point::new(middle.x + 80.0, middle.y + 20.0);
+    send(&mut tree, &mut ui, limn::UiEvent::PointerMove(to));
+    let frame = send(&mut tree, &mut ui, limn::UiEvent::PointerUp(to));
+    let after = shown_picture(&frame, &picture('f')).unwrap().0;
+    assert!((after.x - before.x - 80.0).abs() < 0.5 && (after.y - before.y - 20.0).abs() < 0.5);
+    // The wheel zooms about the pointer.
+    send(
+        &mut tree,
+        &mut ui,
+        limn::UiEvent::Scroll {
+            position: to,
+            delta_y: 30.0,
+        },
+    );
+    assert!(ui.viewer.as_ref().unwrap().zoom.unwrap().0 > scale);
+    // 0 fits it again; the run's thumbnails come back under it.
+    let frame = send(&mut tree, &mut ui, key(limn::Key::Num0));
+    assert!(ui.viewer.as_ref().unwrap().zoom.unwrap().1);
+    assert_eq!(tree.zoom_scale(&id), Some(fit));
+    assert_eq!(shown_picture(&frame, &picture('f')).unwrap().0, fitted);
+    send(&mut tree, &mut ui, key(limn::Key::Minus));
+    assert_eq!(tree.zoom_scale(&id), Some(fit));
+    // Another picture opens fitted, its zoom forgotten.
+    send(&mut tree, &mut ui, key(limn::Key::Plus));
+    click(&store, &mut ui, view::IMAGE_NEXT);
+    assert_eq!(ui.viewer.as_ref().unwrap().zoom, None);
+    tree.set_root(view(&store, &ui, BIG_WINDOW));
+    tree.layout(BIG_WINDOW);
+    let next = format!("{}:view:1:Captured page", view::IMAGE_CLOSE);
+    assert_eq!(tree.zoom_scale(&next), Some(fit));
 }
 
 #[test]

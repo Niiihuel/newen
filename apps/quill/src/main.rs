@@ -854,7 +854,8 @@ impl eframe::App for App {
                 .map(|(picture, link)| (link, picture));
             self.qr_for = link;
         }
-        // The image the viewer shows, at full size, decoded once off the window's thread.
+        self.ui.pixels_per_point = ctx.pixels_per_point();
+        // The image the viewer shows, at full size, read once off the window's thread.
         if let Some(path) = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone()) {
             if !self.ui.full.contains_key(&path) && self.full_asked.insert(path.clone()) {
                 let (done, ctx) = (self.full_done.clone(), ctx.clone());
@@ -868,6 +869,13 @@ impl eframe::App for App {
         }
         for (path, full) in std::mem::take(&mut *self.full_done.lock().unwrap()) {
             self.ui.full.insert(path, full);
+        }
+        // A whole picture weighs megabytes: past a few, only the one shown is kept.
+        if self.ui.full.len() > 8 {
+            let shown = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
+            self.ui.full.retain(|path, _| Some(path) == shown.as_ref());
+            let full = &self.ui.full;
+            self.full_asked.retain(|path| full.contains_key(path));
         }
         // The viewer and the editor lay the picture out at the file's size, read off the
         // window's thread.
