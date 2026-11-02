@@ -973,6 +973,9 @@ pub struct BrowserTab {
     /// The viewport set for it, by the person or the agent, instead of the pane's size.
     #[serde(default)]
     pub emulated: Option<(u32, u32)>,
+    /// Whether the agent set `emulated`, rather than the person from the Viewport menu.
+    #[serde(default)]
+    pub emulated_by_agent: bool,
 }
 
 /// What changed in a session's browser.

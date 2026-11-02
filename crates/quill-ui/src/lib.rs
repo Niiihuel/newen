@@ -1389,8 +1389,8 @@ pub struct Ui {
     pub files_reveal: Option<String>,
     /// How many tabs each session's browser had when last heard: a new one opens the pane.
     pub browser_tabs: std::collections::HashMap<SessionId, usize>,
-    /// What each session's browser last had to say, until dismissed.
-    pub browser_notice: std::collections::HashMap<SessionId, String>,
+    /// What each session's browser last had to say, and whether it failed, until dismissed.
+    pub browser_notice: std::collections::HashMap<SessionId, (String, bool)>,
     /// The settings in force, as the engine last kept them, and the agents it can run.
     pub settings: quill_model::Settings,
     pub agents: Vec<quill_model::AgentInfo>,
@@ -2672,13 +2672,16 @@ impl Ui {
                 self.in_panes_of(*session, |ui| ui.open_pane(Pane::Browser));
             }
         }
-        if let Event::Browser {
-            session,
-            update:
-                quill_model::BrowserUpdate::Notice(words) | quill_model::BrowserUpdate::Failed(words),
-        } = event
-        {
-            self.browser_notice.insert(*session, words.clone());
+        if let Event::Browser { session, update } = event {
+            match update {
+                quill_model::BrowserUpdate::Notice(words) => {
+                    self.browser_notice.insert(*session, (words.clone(), false));
+                }
+                quill_model::BrowserUpdate::Failed(words) => {
+                    self.browser_notice.insert(*session, (words.clone(), true));
+                }
+                _ => {}
+            }
         }
         if let Event::AgentModels { agent, models } = event {
             self.agent_models.insert(agent.clone(), models.clone());

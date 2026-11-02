@@ -161,6 +161,37 @@ async fn a_session_opens_a_page_sees_its_frames_and_types_into_it() {
         .unwrap()
         .iter()
         .any(|(_, u)| *u == BrowserUpdate::Copied("hello quill".into())));
+    // The tab says who set its size: the agent's resize, or the person's Viewport menu.
+    let sized = || {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|(owner, update)| match update {
+                BrowserUpdate::Tabs { tabs, .. } if *owner == 7 => tabs
+                    .iter()
+                    .find(|t| t.id == tab)
+                    .map(|t| (t.emulated, t.emulated_by_agent)),
+                _ => None,
+            })
+    };
+    let (_, failed) = browser
+        .tool(
+            7,
+            "resize_window",
+            serde_json::json!({ "width": 1440, "height": 900, "tabId": tab }),
+        )
+        .await;
+    assert!(!failed);
+    assert_eq!(sized(), Some((Some((1440, 900)), true)));
+    let size = Some((375, 812));
+    browser.apply(7, BrowserOp::Viewport { tab, size }).await;
+    assert_eq!(sized(), Some((size, false)));
+    browser
+        .apply(7, BrowserOp::Viewport { tab, size: None })
+        .await;
+    assert_eq!(sized(), Some((None, false)));
     // Another session has cookies of its own.
     browser
         .evaluate(7, tab, "document.cookie='who=seven'")

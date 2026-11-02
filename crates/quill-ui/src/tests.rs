@@ -3439,6 +3439,135 @@ fn the_browser_opens_from_its_toggle_or_when_a_tab_appears_and_navigates_from_it
     );
 }
 
+/// The Viewport button says the page's size: on while one is set, by the agent or the person,
+/// a phone for a phone's width, and the size and who set it in its tooltip; the menu marks
+/// the agent's choice and "Responsive" gives the page the pane's size again. A notice has a
+/// strip under the page until closed. At the narrowest column the toolbar's controls stay
+/// apart and inside the pane.
+#[test]
+fn the_viewport_button_shows_the_size_set_and_the_toolbar_fits_the_narrowest_pane() {
+    use quill_model::{BrowserOp, BrowserTab, BrowserUpdate};
+    let (mut store, mut ui) = store_with_session();
+    let sized = |size: Option<(u32, u32)>, by_agent: bool| Event::Browser {
+        session: 1,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 3,
+                url: "http://localhost:3000/".into(),
+                title: "Acme".into(),
+                emulated: size,
+                emulated_by_agent: by_agent,
+                ..Default::default()
+            }],
+            active: Some(3),
+        },
+    };
+    let hear = |store: &mut Store, ui: &mut Ui, event: Event| {
+        ui.applied(&event);
+        store.apply(event);
+        settle(store, ui);
+    };
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = |store: &Store, ui: &Ui| UiTree::new(view(store, ui, window)).layout(window);
+    // On: the active fill under the button.
+    let on = |frame: &limn::Frame| {
+        let button = region(frame, view::BROWSER_VIEWPORT).unwrap();
+        frame.commands.iter().any(|c| {
+            matches!(c, limn::DrawCommand::FillRect { rect, color, .. }
+                if *color == look::active()
+                    && (rect.x - button.x).abs() < 1.0
+                    && (rect.width - button.width).abs() < 1.0)
+        })
+    };
+    let tab = |store: &Store| store.session(1).unwrap().browser.tab().cloned();
+    hear(&mut store, &mut ui, sized(None, false));
+    assert!(!on(&frame(&store, &ui)));
+    assert_eq!(view::viewport_label(tab(&store).as_ref()), "Viewport");
+    hear(&mut store, &mut ui, sized(Some((1440, 900)), true));
+    assert!(on(&frame(&store, &ui)));
+    assert_eq!(
+        view::viewport_label(tab(&store).as_ref()),
+        "Viewport: 1440 \u{d7} 900 \u{b7} set by the agent"
+    );
+    assert_eq!(view::viewport_icon(Some((1440, 900))), icons::MONITOR);
+    // No strip says it: the button does.
+    assert!(region(&frame(&store, &ui), view::BROWSER_NOTICE_CLOSE).is_none());
+    // The menu marks the agent's size; "Responsive" asks for the pane's size again.
+    click(&store, &mut ui, view::BROWSER_VIEWPORT);
+    assert!(drawn_words(&store, &ui, "Set by the agent"));
+    assert_eq!(
+        click(&store, &mut ui, "browser:viewport:responsive"),
+        vec![Intent::Browser {
+            session: 1,
+            op: BrowserOp::Viewport { tab: 3, size: None }
+        }]
+    );
+    hear(&mut store, &mut ui, sized(Some((375, 812)), false));
+    assert!(on(&frame(&store, &ui)));
+    assert_eq!(
+        view::viewport_label(tab(&store).as_ref()),
+        "Viewport: 375 \u{d7} 812"
+    );
+    assert_eq!(view::viewport_icon(Some((375, 812))), icons::PHONE);
+    hear(&mut store, &mut ui, sized(None, false));
+    assert!(!on(&frame(&store, &ui)));
+    // A failure has its strip until closed.
+    hear(
+        &mut store,
+        &mut ui,
+        Event::Browser {
+            session: 1,
+            update: BrowserUpdate::Failed("The browser stopped.".into()),
+        },
+    );
+    assert!(drawn_words(&store, &ui, "The browser stopped."));
+    click(&store, &mut ui, view::BROWSER_NOTICE_CLOSE);
+    assert!(!drawn_words(&store, &ui, "The browser stopped."));
+    // The narrowest column, with a size set and a notice.
+    hear(&mut store, &mut ui, sized(Some((1440, 900)), true));
+    hear(
+        &mut store,
+        &mut ui,
+        Event::Browser {
+            session: 1,
+            update: BrowserUpdate::Notice(
+                "The page said: are you sure you want to leave this page and lose your changes?"
+                    .into(),
+            ),
+        },
+    );
+    ui.column_fraction = Some(0.0);
+    let window = limn::Size::new(900.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let page = region(&frame, view::BROWSER_VIEW).unwrap();
+    assert!(page.width < view::MIN_COLUMN, "{page:?}");
+    // Back and forward, with nowhere to go, are drawn without a press, so without a region.
+    let controls = [
+        view::BROWSER_RELOAD,
+        view::BROWSER_URL,
+        view::BROWSER_VIEWPORT,
+        view::BROWSER_SELECT,
+    ]
+    .map(|id| (id, region(&frame, id).unwrap_or_else(|| panic!("no {id}"))));
+    for (i, (id, r)) in controls.iter().enumerate() {
+        assert!(
+            r.x >= page.x - 0.5 && r.x + r.width <= page.x + page.width + 0.5,
+            "{id} {r:?} outside {page:?}"
+        );
+        for (other, o) in &controls[i + 1..] {
+            assert!(r.x + r.width <= o.x + 0.5, "{id} {r:?} over {other} {o:?}");
+        }
+    }
+    let close = region(&frame, view::BROWSER_NOTICE_CLOSE).unwrap();
+    assert!(close.x + close.width <= page.x + page.width + 0.5);
+    let words = drawn_spans(&frame)
+        .into_iter()
+        .find(|s| s.0.starts_with("The page said"))
+        .unwrap();
+    assert!(words.3 <= close.x + 0.5, "{words:?} under {close:?}");
+    assert_apart(&drawn_spans(&frame), "narrowest");
+}
+
 #[test]
 fn browser_steps_read_in_desktops_words_and_fold_into_what_they_did() {
     let done = ToolResult {
