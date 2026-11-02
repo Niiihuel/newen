@@ -12,7 +12,7 @@ quill follows it on the same versions.
 
 | PR | Branch | What quill uses it for | State |
 |---|---|---|---|
-| not opened yet | `feat/selection-scope` | `Element::selection_scope()` on the transcript: a selection across paragraphs, Shift+click, Ctrl+A, and `selected_text()` as `Option<String>` | merged into `quill/integration` locally, neither pushed |
+| — | — | nothing waiting: every limn change quill uses is in `main` | — |
 
 Keeping it so:
 
