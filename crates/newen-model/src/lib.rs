@@ -914,7 +914,15 @@ pub enum Intent {
 
 /// The tool a site permission's card names: the built-in browser asks, not the agent, before
 /// the agent opens or uses a site that is not local nor allowed (docs/browser.md §5).
-pub const SITE_PERMISSION: &str = "quill.browser.site";
+pub const SITE_PERMISSION: &str = "newen.browser.site";
+/// [`SITE_PERMISSION`] as quill, Newen's name before, named it in the cards it kept.
+pub const LEGACY_SITE_PERMISSION: &str = "quill.browser.site";
+
+/// Whether `tool` names the browser's site permission, by either name: a card kept by quill is
+/// the same permission.
+pub fn is_site_permission(tool: &str) -> bool {
+    tool == SITE_PERMISSION || tool == LEGACY_SITE_PERMISSION
+}
 
 /// What the person does in a session's browser.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1736,6 +1744,14 @@ pub fn find_pull_request(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    /// A site permission's card kept by quill reads as the same permission.
+    #[test]
+    fn quill_s_site_permission_is_newen_s() {
+        assert!(super::is_site_permission("newen.browser.site"));
+        assert!(super::is_site_permission("quill.browser.site"));
+        assert!(!super::is_site_permission("Bash"));
+    }
+
     use super::*;
 
     #[test]

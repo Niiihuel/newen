@@ -3038,7 +3038,7 @@ pub(crate) fn agent_word(ui: &Ui, agent: &str) -> String {
 fn permission_heading(who: &str, tool: &str, input: &Value) -> String {
     // The browser's own question, Desktop's site card, less the agent's
     // name.
-    if tool == newen_model::SITE_PERMISSION {
+    if newen_model::is_site_permission(tool) {
         if input["kind"] == "server" {
             let name = input["name"].as_str().unwrap_or_default();
             return format!("Allow the agent to start the dev server {name}?");
@@ -6224,7 +6224,7 @@ fn permission(
     let width = column.min(480.0);
     let inner = width - 32.0;
     let wrapped = |e: Element| e.size(Some(inner), None);
-    if tool == newen_model::SITE_PERMISSION {
+    if newen_model::is_site_permission(tool) {
         return site_permission(id, input, ui, width, palette);
     }
     let command = input["command"].as_str();
