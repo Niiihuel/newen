@@ -688,20 +688,26 @@ impl eframe::App for App {
                     Err(error) => eprintln!("quill: could not start the new version: {error}"),
                 }
             }
-            if let Some((level, title, body)) = self
+            if let Some((level, banner)) = self
                 .restored
                 .then(|| quill_ui::notice(&self.store, &self.ui, &event, focused))
                 .flatten()
             {
                 if level == quill_model::NotifyLevel::Banner {
-                    let sound = self.ui.settings.notification_sound;
-                    self.dispatch(vec![Intent::Notify { title, body, sound }]);
+                    self.dispatch(vec![banner]);
                 }
                 if self.ui.settings.attention {
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                         egui::UserAttentionType::Informational,
                     ));
                 }
+            }
+            // A click on a banner brings the window up on its session.
+            if let Event::NotificationClicked { session } = &event {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                let intents = quill_ui::banner_clicked(&self.store, &mut self.ui, *session);
+                self.dispatch(intents);
             }
             // What the page had selected goes on the clipboard.
             if let Event::Browser {

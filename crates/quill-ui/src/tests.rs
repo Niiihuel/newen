@@ -1546,6 +1546,91 @@ fn a_turn_that_ends_unseen_leaves_the_session_unread_until_it_is_opened() {
     }));
 }
 
+/// The sidebar row's dot (6 px fills inside the row) and the face of its title.
+fn row_marks(store: &Store, ui: &Ui) -> (Vec<limn::Color>, Vec<limn::FontFamily>) {
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(store, ui, window)).layout(window);
+    let row = region(&frame, "session:1").expect("the session's row");
+    let inside = |x: f32, y: f32| {
+        x >= row.x && x < row.x + row.width && y >= row.y && y < row.y + row.height
+    };
+    let mut dots = vec![];
+    let mut faces = vec![];
+    for command in &frame.commands {
+        match command {
+            limn::DrawCommand::FillRect { rect, color, .. }
+                if rect.width == 6.0 && rect.height == 6.0 && inside(rect.x, rect.y) =>
+            {
+                dots.push(*color)
+            }
+            limn::DrawCommand::Text {
+                text,
+                position,
+                font_family,
+                ..
+            } if text == "Fix the bug" && inside(position.x, position.y) => {
+                faces.push(*font_family)
+            }
+            _ => {}
+        }
+    }
+    (dots, faces)
+}
+
+/// A turn that ended unseen leaves a blue dot at the row's end, its title at its usual
+/// weight; opening the session clears it and "Mark as unread" brings it back. One that
+/// needs the person carries an amber dot.
+#[test]
+fn an_unread_or_waiting_session_shows_a_dot_not_a_bold_title() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    ui.selected = None;
+    settle(&store, &mut ui);
+    let (dots, faces) = row_marks(&store, &ui);
+    assert!(dots.is_empty(), "read: no dot");
+    assert_eq!(faces, [limn::FontFamily::Sans]);
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    let (dots, faces) = row_marks(&store, &ui);
+    assert_eq!(dots, [look::theme().accent]);
+    assert_eq!(faces, [limn::FontFamily::Sans], "not bold");
+    // Opened, it is read.
+    let opened = click(&store, &mut ui, "session:1");
+    assert!(opened.contains(&Intent::MarkUnread {
+        session: 1,
+        unread: false
+    }));
+    store.apply(Event::Unread {
+        session: 1,
+        unread: false,
+    });
+    assert!(row_marks(&store, &ui).0.is_empty());
+    // "Mark as unread" brings the dot back.
+    assert_eq!(
+        click(&store, &mut ui, "unread:1"),
+        vec![Intent::MarkUnread {
+            session: 1,
+            unread: true
+        }]
+    );
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    assert_eq!(row_marks(&store, &ui).0, [look::theme().accent]);
+    // Waiting on the person, the dot is amber.
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Awaiting,
+    });
+    assert_eq!(row_marks(&store, &ui).0, [look::awaiting()]);
+}
+
 #[test]
 fn a_fork_starts_with_its_parents_conversation_and_opens() {
     let (mut store, mut ui) = store_with_session();
@@ -4008,8 +4093,12 @@ fn a_notice_is_a_banner_only_while_its_session_is_out_of_view() {
         notice(&store, &ui, &asked, false),
         Some((
             NotifyLevel::Banner,
-            "Fix the bug".into(),
-            NOTICE_PERMISSION.into()
+            Intent::Notify {
+                session: 1,
+                title: "Fix the bug".into(),
+                body: NOTICE_PERMISSION.into(),
+                sound: Some(quill_model::Chime::Ask),
+            }
         ))
     );
     // Focused on another session, it is still a banner.
@@ -4038,7 +4127,10 @@ fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
             suggestions: vec![],
         },
     };
-    let text = |event: &Event, ui: &Ui| notice(&store, ui, event, false).map(|n| n.2);
+    let text = |event: &Event, ui: &Ui| match notice(&store, ui, event, false) {
+        Some((_, Intent::Notify { body, .. })) => Some(body),
+        _ => None,
+    };
     assert_eq!(text(&asked(true), &ui), Some(NOTICE_QUESTION.into()));
     assert_eq!(text(&asked(false), &ui), Some(NOTICE_PERMISSION.into()));
     let finished = Event::Agent {
@@ -4070,6 +4162,53 @@ fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
         status: SessionStatus::Awaiting,
     };
     assert_eq!(notice(&store, &ui, &waiting, false), None);
+}
+
+/// A finished task asks for quill's "done" sound and a question for its "ask" one, as
+/// Settings has it; none while the person looks at that very session in the focused window.
+#[test]
+fn a_banner_asks_for_quills_own_sound_per_settings_and_not_in_view() {
+    use quill_model::Chime;
+    let (store, mut ui) = store_with_session();
+    let finished = Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::TurnFinished {
+            ok: true,
+            interrupted: false,
+            usage: Usage::default(),
+            error: None,
+        },
+    };
+    let sound = |ui: &Ui, focused: bool| match notice(&store, ui, &finished, focused) {
+        Some((_, Intent::Notify { sound, .. })) => Some(sound),
+        _ => None,
+    };
+    // In view, focused: no banner and no sound; out of focus, the sound of a finished task.
+    assert_eq!(sound(&ui, true), None);
+    assert_eq!(sound(&ui, false), Some(Some(Chime::Done)));
+    ui.selected = None;
+    assert_eq!(sound(&ui, true), Some(Some(Chime::Done)));
+    // "None" in Settings: the banner alone.
+    ui.settings.notification_sound = false;
+    assert_eq!(sound(&ui, true), Some(None));
+}
+
+/// A click on a session's banner opens that session and reads it.
+#[test]
+fn a_banner_click_opens_its_session() {
+    let (mut store, mut ui) = store_with_session();
+    ui.selected = None;
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    let intents = banner_clicked(&store, &mut ui, 1);
+    assert_eq!(ui.selected, Some(1));
+    assert!(intents.contains(&Intent::MarkUnread {
+        session: 1,
+        unread: false
+    }));
 }
 
 fn slash_command(name: &str, aliases: &[&str]) -> quill_model::AgentSlashCommand {
