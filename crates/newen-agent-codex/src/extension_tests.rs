@@ -106,7 +106,7 @@ fn skills_are_asked_without_a_thread_and_read_with_their_state() {
     );
     // Another answer is not the skills'.
     assert!(codex
-        .skills_answer(r#"{"id":"quill-ext","result":{}}"#)
+        .skills_answer(r#"{"id":"newen-ext","result":{}}"#)
         .is_none());
     assert!(codex.skills_answer(r#"{"id":3,"result":{}}"#).is_none());
 }
@@ -145,15 +145,15 @@ fn a_skills_state_is_written_through_the_app_server_that_stays_open_until_it_ans
     assert!(run
         .until
         .as_deref()
-        .is_some_and(|u| u.contains("quill-skill-write")));
+        .is_some_and(|u| u.contains("newen-skill-write")));
     // Its error is the JSON-RPC one.
-    let said = r#"{"id":"quill-skill-write","error":{"code":-32600,"message":"no such skill"}}"#;
+    let said = r#"{"id":"newen-skill-write","error":{"code":-32600,"message":"no such skill"}}"#;
     assert_eq!(
         codex.extension_failed(said).as_deref(),
         Some("no such skill")
     );
     assert!(codex
-        .extension_failed(r#"{"id":"quill-skill-write","result":{"effectiveEnabled":false}}"#)
+        .extension_failed(r#"{"id":"newen-skill-write","result":{"effectiveEnabled":false}}"#)
         .is_none());
     assert_eq!(codex.extension_words().1[0].0, "on");
 }
@@ -294,7 +294,7 @@ fn the_sessions_mcp_state_is_asked_of_the_thread_and_told_with_each_servers_tool
     let mut codex = started();
     let ask: Value = serde_json::from_str(&codex.encode(AgentCommand::McpStatus)[0]).unwrap();
     assert_eq!(ask["method"], "mcpServerStatus/list");
-    assert_eq!(ask["id"], "quill-mcp-status");
+    assert_eq!(ask["id"], "newen-mcp-status");
     assert_eq!(ask["params"]["threadId"], "th1");
     let decoded = codex.decode(fixture("mcp-status.json").trim());
     let [AgentEvent::McpServers(servers)] = decoded.events.as_slice() else {
@@ -326,7 +326,7 @@ fn reconnecting_loads_the_config_again_and_asks_the_state_once_it_has() {
     let sent: Value =
         serde_json::from_str(&codex.encode(AgentCommand::McpReconnect("docs".into()))[0]).unwrap();
     assert_eq!(sent["method"], "config/mcpServer/reload");
-    let decoded = codex.decode(&json!({ "id": "quill-mcp-reload", "result": {} }).to_string());
+    let decoded = codex.decode(&json!({ "id": "newen-mcp-reload", "result": {} }).to_string());
     assert_eq!(decoded.replies.len(), 1);
     let asked: Value = serde_json::from_str(&decoded.replies[0]).unwrap();
     assert_eq!(asked["method"], "mcpServerStatus/list");
@@ -350,7 +350,7 @@ fn signing_in_to_a_server_gives_its_page_or_why_it_could_not() {
         ),
         (Some("docs"), Some("th1"))
     );
-    let page = codex.decode(&json!({ "id": "quill-mcp-login", "result": { "authorizationUrl": "https://example.com/auth" } }).to_string());
+    let page = codex.decode(&json!({ "id": "newen-mcp-login", "result": { "authorizationUrl": "https://example.com/auth" } }).to_string());
     assert_eq!(
         page.events,
         [AgentEvent::McpSignIn {
@@ -361,7 +361,7 @@ fn signing_in_to_a_server_gives_its_page_or_why_it_could_not() {
     );
     codex.encode(AgentCommand::McpAuthenticate("docs".into()));
     let failed = codex.decode(
-        &json!({ "id": "quill-mcp-login", "error": { "code": -1, "message": "no oauth" } })
+        &json!({ "id": "newen-mcp-login", "error": { "code": -1, "message": "no oauth" } })
             .to_string(),
     );
     assert!(matches!(
@@ -461,7 +461,7 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
     );
     // The answer to the roots is not an event.
     assert!(codex
-        .decode(r#"{"id":"quill-skill-roots","result":{}}"#)
+        .decode(r#"{"id":"newen-skill-roots","result":{}}"#)
         .events
         .is_empty());
     let extras = codex.session_extras();

@@ -175,7 +175,7 @@ impl Claude {
                 decoded.events.push(AgentEvent::Unknown(request.clone()));
                 decoded.replies.push(
                     json!({ "type": "control_response", "response": {
-                        "subtype": "error", "request_id": id, "error": "not supported by quill" } })
+                        "subtype": "error", "request_id": id, "error": "not supported by Newen" } })
                     .to_string(),
                 );
             }
@@ -1360,7 +1360,7 @@ fn success(id: &Value, response: Value) -> String {
 }
 
 /// The id of the `initialize` that asks the CLI for its models outside a session.
-const MODELS_REQUEST: &str = "quill-models";
+const MODELS_REQUEST: &str = "newen-models";
 
 /// The in-process MCP server that carries quill's own tools ([`HOST_TOOLS`]); the agent sees
 /// them as `mcp__sessions__…`.

@@ -1,7 +1,7 @@
 //! What quill's "All agents" layer adds to a Claude Code session without writing the CLI's
 //! files: `--mcp-config` with the servers (V1, docs/agents.md: the CLI expands `${VAR}` in the
 //! JSON, so a secret is only the name of a variable of the process) and `--plugin-dir` with a
-//! plugin of quill's whose skills are the global ones, shown as `quill:<name>` (V4).
+//! plugin of Newen's whose skills are the global ones, shown as `newen:<name>` (V4).
 
 use newen_agent::{InjectedServer, SessionSpec};
 use serde_json::{json, Map, Value};
@@ -38,7 +38,8 @@ pub(crate) fn mcp_config(servers: &[InjectedServer]) -> Value {
 }
 
 /// The arguments for the session's extras. The plugin's `plugin.json` is written beside the
-/// skills folder (`<plugin>/skills`), once.
+/// skills folder (`<plugin>/skills`), and again whenever it says something else (quill's,
+/// named `quill`).
 pub(crate) fn args(spec: &SessionSpec) -> Vec<String> {
     let mut args = vec![];
     if !spec.servers.is_empty() {
@@ -54,10 +55,11 @@ pub(crate) fn args(spec: &SessionSpec) -> Vec<String> {
 
 fn write_plugin(plugin: &Path) -> bool {
     let manifest = plugin.join(".claude-plugin/plugin.json");
-    if manifest.is_file() {
+    let body = json!({ "name": "newen", "description": "Skills for all agents, kept by Newen" })
+        .to_string();
+    if std::fs::read_to_string(&manifest).is_ok_and(|kept| kept == body) {
         return true;
     }
-    let body = json!({ "name": "quill", "description": "Skills for all agents, kept by quill" });
     std::fs::create_dir_all(plugin.join(".claude-plugin")).is_ok()
-        && std::fs::write(manifest, body.to_string()).is_ok()
+        && std::fs::write(manifest, body).is_ok()
 }

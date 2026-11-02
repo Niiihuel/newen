@@ -514,7 +514,7 @@ mod ext {
         let msg: Value = serde_json::from_str(line).ok()?;
         let id = msg["id"].as_str();
         let result = match (msg["method"].as_str(), id) {
-            (Some("initialize"), Some("quill-ext")) => json!({
+            (Some("initialize"), Some("newen-ext")) => json!({
                 "userAgent": "quill/0.163.0 (Fake; x86_64)", "codexHome": "/home/fake/.codex",
                 "platformFamily": "unix", "platformOs": "linux"}),
             (Some("skills/list"), Some(_)) => {

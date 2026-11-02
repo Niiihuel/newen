@@ -1,4 +1,4 @@
-{"id":"quill-mcp-status","result":{"nextCursor":null,"data":[
+{"id":"newen-mcp-status","result":{"nextCursor":null,"data":[
   {"name":"node_repl","runtimeStatus":"connected","pluginId":null,"authStatus":"unsupported","toolsError":null,
    "tools":{"js":{"name":"js","description":"Run JavaScript","annotations":{}},
             "js_reset":{"name":"js_reset","description":"Forget the state","annotations":{"readOnlyHint":true,"destructiveHint":false}}}},

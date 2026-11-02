@@ -26,7 +26,7 @@ const AVATAR_FRESH: Duration = Duration::from_secs(24 * 60 * 60);
 const AVATAR_SIDE: u32 = 128;
 // GitHub defaults this collection to one year ago through the current time.
 // https://docs.github.com/en/graphql/reference/users#user
-const CALENDAR_QUERY: &str = "query quillContributions { viewer { login contributionsCollection { \
+const CALENDAR_QUERY: &str = "query newenContributions { viewer { login contributionsCollection { \
 contributionCalendar { totalContributions weeks { contributionDays { date weekday \
 contributionCount contributionLevel } } } } } }";
 

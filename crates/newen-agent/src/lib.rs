@@ -888,17 +888,17 @@ pub const HOST_TOOLS: [(&str, &str, &str); 6] = [
     ),
     (
         "read_session",
-        "Read another quill session the user mentioned: its title, folder and conversation so far (the people's messages and the agent's replies, the latest last). Read-only.",
+        "Read another Newen session the user mentioned: its title, folder and conversation so far (the people's messages and the agent's replies, the latest last). Read-only.",
         r#"{"type":"object","properties":{"session_id":{"type":"integer"}},"required":["session_id"]}"#,
     ),
     (
         "list_sessions",
-        "List the other quill sessions of this project (this folder, or another checkout of the same repository): each one's id, title, agent, whether it is working, idle or waiting for the user, and its folder; then the agents a session can be started with (start_session's `agent`). Read-only.",
+        "List the other Newen sessions of this project (this folder, or another checkout of the same repository): each one's id, title, agent, whether it is working, idle or waiting for the user, and its folder; then the agents a session can be started with (start_session's `agent`). Read-only.",
         r#"{"type":"object","properties":{}}"#,
     ),
     (
         "wait_for_session",
-        "Wait for another quill session to finish its task, then go on here by yourself. Use it when the user ties work to another conversation finishing (\"when the other conversation is done, cut the release\"); never promise to wait without it, since nothing of that conversation reaches you otherwise. Find the session with list_sessions, or by the id a mention of it gives; if more than one running session could be meant, ask the user with your question tool instead of guessing. The call returns at once: then end your turn, telling the user in a line what you will do when it finishes. quill sends you a message when that session's turn ends with its task done (not while it asks the user something), with its last report and your `then`; if it is deleted or archived first, you are told that instead.",
+        "Wait for another Newen session to finish its task, then go on here by yourself. Use it when the user ties work to another conversation finishing (\"when the other conversation is done, cut the release\"); never promise to wait without it, since nothing of that conversation reaches you otherwise. Find the session with list_sessions, or by the id a mention of it gives; if more than one running session could be meant, ask the user with your question tool instead of guessing. The call returns at once: then end your turn, telling the user in a line what you will do when it finishes. Newen sends you a message when that session's turn ends with its task done (not while it asks the user something), with its last report and your `then`; if it is deleted or archived first, you are told that instead.",
         r#"{"type":"object","properties":{"session_id":{"type":"integer","description":"The session to wait for."},"then":{"type":"string","description":"What you will do when it finishes, standing alone: it is given back to you then."}},"required":["session_id","then"]}"#,
     ),
 ];

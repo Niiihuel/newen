@@ -520,7 +520,7 @@ pub fn agent() -> ureq::Agent {
             .timeout_connect(Some(Duration::from_secs(10)))
             .timeout_recv_response(Some(Duration::from_secs(30)))
             .timeout_per_read(Some(Duration::from_secs(30)))
-            .user_agent(concat!("quill-updater/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("newen-updater/", env!("CARGO_PKG_VERSION")))
             .build(),
     )
 }

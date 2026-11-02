@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 /// The script the page tools run in the page, quill's own: refs kept per element on the
 /// page's window, so a ref read once still names its element later.
 const HELPER: &str = r#"(() => {
-const Q = window.__quill || (window.__quill = { next: 1, refs: new Map(), ids: new WeakMap() });
+const Q = window.__newen || (window.__newen = { next: 1, refs: new Map(), ids: new WeakMap() });
 const refOf = el => { let r = Q.ids.get(el); if (!r) { r = 'ref_' + Q.next++; Q.ids.set(el, r); Q.refs.set(r, new WeakRef(el)); } return r; };
 const byRef = r => { const w = Q.refs.get(r); const el = w && w.deref(); return el && el.isConnected ? el : null; };
 const TAGS = {A:'link',BUTTON:'button',SELECT:'combobox',TEXTAREA:'textbox',IMG:'image',NAV:'navigation',HEADER:'banner',FOOTER:'contentinfo',MAIN:'main',FORM:'form',UL:'list',OL:'list',LI:'listitem',TABLE:'table',TR:'row',TD:'cell',TH:'columnheader',DIALOG:'dialog',SECTION:'region',ARTICLE:'article',ASIDE:'complementary',SUMMARY:'button',DETAILS:'group',OPTION:'option',LABEL:'label',P:'paragraph',H1:'heading',H2:'heading',H3:'heading',H4:'heading',H5:'heading',H6:'heading'};

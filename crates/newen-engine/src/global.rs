@@ -679,12 +679,21 @@ impl Layer {
             }
         }
         for name in names {
-            let link = dir.join(name);
+            let (link, skill) = (dir.join(name), root.join("skills").join(name));
+            #[cfg(unix)]
+            {
+                // One left pointing elsewhere, or nowhere (into quill's folder before it moved),
+                // is made again.
+                if std::fs::read_link(&link).is_ok_and(|to| to != skill) {
+                    let _ = std::fs::remove_file(&link);
+                }
+                if std::fs::symlink_metadata(&link).is_err() {
+                    std::os::unix::fs::symlink(&skill, &link).ok()?;
+                }
+            }
+            #[cfg(not(unix))]
             if !link.exists() {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(root.join("skills").join(name), &link).ok()?;
-                #[cfg(not(unix))]
-                copy_dir(&root.join("skills").join(name), &link).ok()?;
+                copy_dir(&skill, &link).ok()?;
             }
         }
         Some(dir)
@@ -1066,6 +1075,15 @@ mod tests {
         assert!(plan.skill_roots.is_empty());
         let plan = layer.plan(&CLAUDE, &Own::default(), true);
         assert!(plan.skill_roots[0].join("release-notes/SKILL.md").is_file());
+        // A link left dangling, as quill's are once its folder moved, is made again.
+        #[cfg(unix)]
+        {
+            let link = plan.skill_roots[0].join("release-notes");
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink(dir.0.join("moved/skills/release-notes"), &link).unwrap();
+            let plan = layer.plan(&CLAUDE, &Own::default(), true);
+            assert!(plan.skill_roots[0].join("release-notes/SKILL.md").is_file());
+        }
         layer
             .op(GlobalOp::RemoveSkill("other-skill".into()))
             .unwrap();

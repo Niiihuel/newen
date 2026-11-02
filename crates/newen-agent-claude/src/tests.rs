@@ -1278,7 +1278,14 @@ fn the_mode_words_are_desktops_and_the_default_is_manual() {
 #[test]
 fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
     use newen_agent::InjectedServer;
-    let dir = std::env::temp_dir().join(format!("quill-claude-plugin-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-claude-plugin-{}", std::process::id()));
+    // quill's plugin, named `quill`, left in the folder: Newen's takes its place.
+    std::fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        dir.join(".claude-plugin/plugin.json"),
+        r#"{"name":"quill","description":"Skills for all agents, kept by quill"}"#,
+    )
+    .unwrap();
     let plan = Claude::new().launch(&SessionSpec {
         cwd: "/work".into(),
         servers: vec![
@@ -1329,7 +1336,7 @@ fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join(".claude-plugin/plugin.json")).unwrap())
             .unwrap();
-    assert_eq!(manifest["name"], "quill");
+    assert_eq!(manifest["name"], "newen");
     let _ = std::fs::remove_dir_all(dir);
     // Without any, the launch is as it was.
     let plain = Claude::new().launch(&SessionSpec::default());

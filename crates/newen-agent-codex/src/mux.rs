@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// The id of the connection's one `initialize`.
-const INIT: &str = "quill-mux-init";
+const INIT: &str = "newen-mux-init";
 
 #[derive(Default)]
 pub struct CodexMux {
@@ -63,7 +63,7 @@ impl Mux for CodexMux {
             }
             (Some(method), Some(id)) => {
                 self.next += 1;
-                let wire = format!("quill-mux-{}", self.next);
+                let wire = format!("newen-mux-{}", self.next);
                 let opens = matches!(method, "thread/start" | "thread/resume" | "thread/fork");
                 self.requests.insert(wire.clone(), (session, id, opens));
                 msg["id"] = json!(wire);

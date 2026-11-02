@@ -12,11 +12,11 @@ use serde_json::{json, Value};
 
 /// The ids of the app-server requests that are quill's own: names, not numbers, so the
 /// numbers of the requests every capture holds stay the ones the adapter writes.
-pub(crate) const SKILLS_ID: &str = "quill-skills";
-pub(crate) const MCP_STATUS_ID: &str = "quill-mcp-status";
-pub(crate) const MCP_RELOAD_ID: &str = "quill-mcp-reload";
-pub(crate) const MCP_LOGIN_ID: &str = "quill-mcp-login";
-const SKILL_WRITE_ID: &str = "quill-skill-write";
+pub(crate) const SKILLS_ID: &str = "newen-skills";
+pub(crate) const MCP_STATUS_ID: &str = "newen-mcp-status";
+pub(crate) const MCP_RELOAD_ID: &str = "newen-mcp-reload";
+pub(crate) const MCP_LOGIN_ID: &str = "newen-mcp-login";
+const SKILL_WRITE_ID: &str = "newen-skill-write";
 
 fn run(args: &[&str], timeout: u64) -> ProgramRun {
     ProgramRun {
@@ -116,7 +116,7 @@ pub(crate) fn marketplaces(stdout: &str) -> Vec<Marketplace> {
 /// The lines that list the skills of `cwd` without a thread: the handshake, then `skills/list`.
 pub(crate) fn skills_query(cwd: &std::path::Path) -> Vec<String> {
     vec![
-        json!({ "id": "quill-ext", "method": "initialize", "params": { "clientInfo": client() } })
+        json!({ "id": "newen-ext", "method": "initialize", "params": { "clientInfo": client() } })
             .to_string(),
         json!({ "method": "initialized" }).to_string(),
         json!({
@@ -309,7 +309,7 @@ pub(crate) fn op(op: &ExtensionOp) -> Option<ProgramRun> {
         // `skills/config/write` by the skill's file; the write is in config.toml.
         ExtensionOp::SkillState { skill, state } => {
             let lines = [
-                json!({ "id": "quill-ext", "method": "initialize", "params": { "clientInfo": client() } }),
+                json!({ "id": "newen-ext", "method": "initialize", "params": { "clientInfo": client() } }),
                 json!({ "method": "initialized" }),
                 json!({
                     "id": SKILL_WRITE_ID, "method": "skills/config/write",

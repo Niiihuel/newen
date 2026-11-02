@@ -35,9 +35,9 @@ const DEFAULT_MODE: &str = "auto";
 
 /// The id of the `model/list` request: a name, not a number, so that the numbers of the
 /// requests every capture holds stay the ones the adapter writes (the fake agent replays them).
-const MODELS_ID: &str = "quill-models";
+const MODELS_ID: &str = "newen-models";
 /// The same for the request that tells a mode back.
-const MODE_ID: &str = "quill-mode";
+const MODE_ID: &str = "newen-mode";
 
 /// Per-thread config (not `~/.codex/config.toml`): `update_plan` is off by default
 /// (plan.jsonl, two attempts without it) and `request_user_input` only exists in Plan mode
@@ -412,7 +412,7 @@ impl Codex {
                 let roots = self.spec.lock().unwrap().skill_roots.clone();
                 if !roots.is_empty() {
                     let roots: Vec<_> = roots.iter().map(|r| r.to_string_lossy()).collect();
-                    let id = "quill-skill-roots";
+                    let id = "newen-skill-roots";
                     let line = self.named(
                         id,
                         "skills/extraRoots/set",
@@ -1170,7 +1170,7 @@ impl Codex {
             _ => {
                 out.events.push(AgentEvent::Unknown(msg.clone()));
                 return out.replies.push(
-                    json!({ "id": id, "error": { "code": -32601, "message": "not supported by quill" } })
+                    json!({ "id": id, "error": { "code": -32601, "message": "not supported by Newen" } })
                         .to_string(),
                 );
             }
@@ -1745,7 +1745,7 @@ fn remote_error(error: &str) -> String {
 }
 
 fn client() -> Value {
-    json!({ "name": "quill", "title": "quill", "version": env!("CARGO_PKG_VERSION") })
+    json!({ "name": "newen", "title": "Newen", "version": env!("CARGO_PKG_VERSION") })
 }
 
 fn models(data: &Value) -> Vec<ModelInfo> {

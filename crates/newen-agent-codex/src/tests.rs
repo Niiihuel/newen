@@ -486,7 +486,7 @@ fn a_mode_a_model_and_an_effort_apply_to_the_next_turn() {
     // keeps the numbers of the rest; one on its way tells the latest of two.
     assert_eq!(run.written.last().unwrap()["method"], "account/read");
     let id = run.written.last().unwrap()["id"].clone();
-    assert_eq!(id, "quill-mode");
+    assert_eq!(id, "newen-mode");
     let asked = run.written.len();
     run.send(AgentCommand::SetMode("plan".into()));
     run.send(AgentCommand::SetMode("read-only".into()));
@@ -963,7 +963,7 @@ fn resume_is_a_second_process_that_starts_over_and_lists_its_turns() {
     for (w, e) in written.iter().zip(out_lines(&all)) {
         assert_eq!(w["id"], e["id"]);
     }
-    assert_eq!(second.written[0]["params"]["clientInfo"]["name"], "quill");
+    assert_eq!(second.written[0]["params"]["clientInfo"]["name"], "newen");
     assert_eq!(
         second
             .written
