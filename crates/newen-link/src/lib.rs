@@ -117,22 +117,39 @@ pub enum Message {
 /// The most a message may be: a selection of a large file, not a file of any size.
 const LONGEST: u64 = 1 << 20;
 
-/// The folder the sockets live in, the person's own: `$XDG_RUNTIME_DIR/quill`.
-fn folder() -> PathBuf {
+/// The folder the sockets of the app `name` live in, the person's own:
+/// `$XDG_RUNTIME_DIR/<name>`.
+fn folder_of(name: &str) -> PathBuf {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let user = std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .unwrap_or_default();
-            std::env::temp_dir().join(format!("quill-{user}"))
+            std::env::temp_dir().join(format!("{name}-{user}"))
         });
-    base.join("quill")
+    base.join(name)
 }
 
-/// quill's socket.
-pub fn quill_socket() -> PathBuf {
-    folder().join("quill.sock")
+/// Newen's sockets' folder, `$XDG_RUNTIME_DIR/newen`.
+fn folder() -> PathBuf {
+    folder_of("newen")
+}
+
+/// Newen's socket.
+pub fn newen_socket() -> PathBuf {
+    folder().join("newen.sock")
+}
+
+/// The socket a copy of quill, Newen's name before, listens on while it runs:
+/// `$XDG_RUNTIME_DIR/quill/quill.sock`. Read only to know whether one runs ([`answers`]).
+pub fn legacy_socket() -> PathBuf {
+    folder_of("quill").join("quill.sock")
+}
+
+/// Whether an app listens on `socket`, alive.
+pub fn answers(socket: &Path) -> bool {
+    transport::connect(socket).is_ok()
 }
 
 /// The socket of the IDE window showing `root`: named by a hash of the folder, as a path may
@@ -233,10 +250,14 @@ mod tests {
         send(&socket, &ask).unwrap();
         assert_eq!(told.recv_timeout(Duration::from_secs(2)).unwrap(), ask);
         assert!(listen(&socket, |_| {}).is_err());
+        assert!(answers(&socket));
         drop(listening);
         assert!(send(&socket, &ask).is_err());
+        assert!(!answers(&socket));
         assert_eq!(ide_socket(Path::new("/a/b")), ide_socket(Path::new("/a/b")));
         assert_ne!(ide_socket(Path::new("/a/b")), ide_socket(Path::new("/a/c")));
+        assert!(newen_socket().ends_with("newen/newen.sock"));
+        assert!(legacy_socket().ends_with("quill/quill.sock"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

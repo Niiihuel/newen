@@ -2027,7 +2027,7 @@ fn main() -> eframe::Result {
             let linked: Arc<Mutex<Vec<newen_link::Message>>> = Arc::default();
             let link = {
                 let (linked, ctx) = (linked.clone(), creation.egui_ctx.clone());
-                newen_link::listen(&newen_link::quill_socket(), move |message| {
+                newen_link::listen(&newen_link::newen_socket(), move |message| {
                     linked.lock().unwrap().push(message);
                     ctx.request_repaint();
                 })

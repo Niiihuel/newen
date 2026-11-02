@@ -54,7 +54,7 @@ impl App {
     /// listens.
     fn send_to_quill(&mut self) {
         for message in std::mem::take(&mut self.ide.link_out) {
-            let socket = newen_link::quill_socket();
+            let socket = newen_link::newen_socket();
             if newen_link::send(&socket, &message).is_ok() {
                 self.ide.link_note = Some("Sent to quill".into());
                 continue;
