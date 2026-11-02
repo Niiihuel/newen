@@ -238,7 +238,9 @@ jobs:
           fi
           xcrun stapler staple dist/quill.app
           spctl --assess --type execute --verbose=2 dist/quill.app
-      - run: ditto -c -k --keepParent dist/quill.app dist/quill-aarch64-macos.zip
+      # Its attributes in __MACOSX/, which ditto -x restores and the list of files leaves out:
+      # every file in the bundle is then one of the bundle.
+      - run: ditto -c -k --sequesterRsrc --keepParent dist/quill.app dist/quill-aarch64-macos.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: quill-macos
