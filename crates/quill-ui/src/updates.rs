@@ -1,8 +1,8 @@
 //! quill's own updates in the window: Settings' Updates group, the strip over the account
 //! button once a version is ready, and the dialogs (agents still working, a mandatory
 //! version). The engine checks and downloads; this shows what it reports. Desktop
-//! announces a ready update in the sidebar only (no toast, no menu entry:
-//! desk-updates-account.md, "No se encontró ningún toast"), and so does quill.
+//! announces a ready update in the sidebar only (no toast and no menu entry are seen), and
+//! so does quill.
 
 use crate::view::ago;
 use crate::{icons, Store, Ui};
@@ -70,8 +70,8 @@ fn restart(store: &Store, ui: &mut Ui) -> Vec<Intent> {
 }
 
 /// "Wait for agents" kept: install the first time no session is busy. Called after every
-/// event the store takes, which is every status change, so it needs no timer (Desktop polls
-/// every 60 s, MAIN `H6t`).
+/// event the store takes, which is every status change, so it needs no timer (Desktop seems
+/// to look again about once a minute, inferred).
 pub fn settled(store: &Store, ui: &mut Ui) -> Vec<Intent> {
     if !ui.restart_when_idle || busy(store) {
         return vec![];

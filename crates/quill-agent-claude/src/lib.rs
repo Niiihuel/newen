@@ -37,7 +37,7 @@ pub struct Claude {
     /// `mcp_authenticate` requests waiting for their answers, with their server.
     sign_ins: HashMap<String, String>,
     interrupted: bool,
-    /// The turn's answer was the CLI's `authentication_failed` (cli-auth.md §4): its result
+    /// The turn's answer was the CLI's `authentication_failed`: its result
     /// ends the turn with `AuthRequired`.
     auth_failed: bool,
     /// `can_use_tool` waiting for a decision: its tool call and input, echoed back on allow.

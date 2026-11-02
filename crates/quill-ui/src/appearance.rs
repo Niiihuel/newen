@@ -1,7 +1,7 @@
 //! The step after the welcome: choose System, Light or Dark before anything else is shown.
 //! quill's own design (inferred): Desktop has no theme step; its Settings › General has an
-//! icon-only System / Light / Dark control, default System, and no onboarding (evidence
-//! report `desk-onboarding-usage.md` § Paso de apariencia). The cards here are miniature
+//! icon-only System / Light / Dark control, default System, and no onboarding step for it.
+//! The cards here are miniature
 //! quill windows, so the choice is seen, not read; choosing applies live, as Settings does.
 
 use crate::Ui;

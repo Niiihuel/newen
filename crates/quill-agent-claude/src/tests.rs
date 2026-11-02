@@ -1187,7 +1187,7 @@ fn web_search_results_keep_their_query_and_sources() {
     );
 }
 
-// `claude auth status --json` as 2.1.312 printed it (cli-auth.md §2).
+// `claude auth status --json` as 2.1.312 printed it.
 #[test]
 fn auth_state_reads_the_cli_status() {
     let claude = Claude::new();

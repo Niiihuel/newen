@@ -1,4 +1,4 @@
-//! A shell on a pseudo-terminal in a session's folder (features/terminal.md): its output is
+//! A shell on a pseudo-terminal in a session's folder: its output is
 //! parsed into a screen of cells for limn's `TerminalView`, and keys become the bytes a
 //! terminal sends. A reader thread wakes the window when new output arrives.
 
@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// The sixteen ANSI colors of Claude Desktop's light terminal theme, as
-/// features/terminal.md records them.
+/// The sixteen ANSI colors of Claude Desktop's light terminal theme, as its terminal shows
+/// them.
 const ANSI: [Color; 16] = [
     Color::rgb(0x1a, 0x1a, 0x1a),
     Color::rgb(0xff, 0x3a, 0x30),

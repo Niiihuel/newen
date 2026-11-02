@@ -81,7 +81,7 @@ struct App {
     /// Annotated copies made off the window's thread, each with the picture it replaces; `None`
     /// when the copy could not be written.
     annotated: Arc<Mutex<Vec<AnnotatedCopy>>>,
-    /// The terminal tabs of each folder, kept while the window lives (features/terminal.md).
+    /// The terminal tabs of each folder, kept while the window lives.
     terminals: HashMap<PathBuf, quill_pty::Tabs>,
     fonts_attached: bool,
     /// The interface font and code font in force, as Settings chose them.

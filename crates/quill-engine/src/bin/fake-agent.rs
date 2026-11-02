@@ -145,7 +145,7 @@ fn next_line(input: &mut impl Iterator<Item = std::io::Result<String>>) -> Optio
     }
 }
 
-/// `auth status|login|logout` as Claude Code 2.1.312 answers them (cli-auth.md §1-3). The
+/// `auth status|login|logout` as Claude Code 2.1.312 answers them. The
 /// account starts as `QUILL_FAKE_AUTH` says (`signed-in`, the default, or `signed-out`); a login
 /// or a logout flips it through a marker file (`QUILL_FAKE_AUTH_MARKER`, else `.fake-auth` in the
 /// working directory), so the next `status` agrees.
