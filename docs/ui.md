@@ -247,12 +247,14 @@ Regla del gallery de limn: un test falla si dos controles comparten ID (§6).
 
 | Estado | Señal | Color quill (§3) |
 |---|---|---|
-| `Running` | punto que late 0.3↔1 opacidad, 1.2 s; quieto con movimiento reducido | `muted` |
-| `Awaiting` (permiso) | punto fijo | `warning` |
-| `Ready` (no leída) | punto fijo — en la captura es azul `#257DE0`  | `accent` |
-| `Error` | ícono `!` | `danger` |
+| `Running` | quill: el título en gris con un brillo que pasa (sin punto) | `muted` |
+| `Awaiting` (pide permiso, pregunta o aprobar un plan) | punto fijo de 6 px al final de la fila | `awaiting` (ámbar) |
+| `Ready` (terminó y no se vio) | punto fijo de 6 px al final de la fila; el título conserva su peso, no va en negrita | `accent` (azul de quill) |
+| `Error` | punto fijo | `removed` (rojo) |
 | `Idle` | sin punto | — |
 | Cargando lista | 3–5 filas `SkeletonGroup::rows` | — |
+
+El punto azul aparece cuando un turno termina mientras la persona mira otra sesión, y se va al abrirla (en la lista o desde el banner). "Mark as unread" (menú "···", tecla U) lo vuelve a poner; "Mark as read" lo quita. Cada punto dice qué es a un lector de pantalla ("Unread response", "Needs your input", "Failed"). Desktop muestra en la fila un punto azul para la respuesta sin leer, ámbar (o una mano) para lo que espera a la persona, gris que late mientras trabaja y un aro gris tenue para lo terminado; lo que quill no copia: que el punto mismo se pueda pulsar para marcar leída o no leída. Que el punto vaya al final de la fila, y su tamaño, son inferidos.
 
 **Interacciones:** clic abre `/session/{sid}`; clic derecho → `ContextMenu` (renombrar, fijar, archivar); `b` oculta; arrastre del borde.
 

@@ -2424,9 +2424,9 @@ fn group_header(
 }
 
 /// A session's row: its title, its status, and under the pointer "···" with Desktop's
-/// Pin, Rename and Delete. As the newer Desktop draws them: a working session's title is gray with a light passing over it, an unread
-/// one is bold, one that needs the person ends in a warning, and a finished top-level one in
-/// the place it ran (this computer).
+/// Pin, Rename and Delete. As the newer Desktop draws them: a working session's title is gray with a light passing over it, one
+/// that needs the person ends in an amber dot, one that finished unseen in a blue one, and a
+/// finished top-level one in the place it ran (this computer). The title keeps its weight.
 fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalette) -> Element {
     let id = format!("row-menu:{}", session.id);
     let open = ui.row_menu == Some(session.id);
@@ -2493,11 +2493,7 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
     } else {
         Element::truncated_text(session_title(session)).foreground(look::palette().text)
     }
-    .font_family(if session.unread && !working {
-        FontFamily::SansBold
-    } else {
-        FontFamily::Sans
-    })
+    .font_family(FontFamily::Sans)
     .font_size(BODY)
     .flex(1.0)
     .centered_y();
@@ -2508,8 +2504,8 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
             .centered_y()
     };
     let indicator = match session.status {
-        SessionStatus::Awaiting => mark(icons::WARNING, look::palette().text),
-        SessionStatus::Failed(_) => status_dot(session),
+        SessionStatus::Awaiting | SessionStatus::Failed(_) => status_dot(session),
+        _ if session.unread && !working => status_dot(session),
         // It waits for another session's task to end (`wait_for_session`).
         _ if !session.waits.is_empty() => mark(icons::HOURGLASS, look::muted()),
         // Grouped by folder Desktop marks no place.
@@ -2633,22 +2629,31 @@ fn side_row_with(
     }
 }
 
-/// Running and awaiting sessions carry a dot in the sidebar, as Desktop's rows do.
+/// Running and awaiting sessions carry a dot in the sidebar, as Desktop's rows do, and so
+/// does an unread one, in the accent; each says what it means to a screen reader.
 fn status_dot(session: &Session) -> Element {
     let status = &session.status;
     let color = match status {
         SessionStatus::Running | SessionStatus::Starting => look::running(),
         SessionStatus::Awaiting => look::awaiting(),
         SessionStatus::Failed(_) => look::removed(),
-        // Unread reads as a small gray dot.
-        _ if session.unread => look::muted(),
+        // A turn that ended while the person looked elsewhere: "Unread response".
+        _ if session.unread => look::theme().accent,
         _ => return Element::spacer().size(Some(6.0), Some(6.0)),
+    };
+    let said = match status {
+        SessionStatus::Running | SessionStatus::Starting => "Running",
+        SessionStatus::Awaiting => "Needs your input",
+        SessionStatus::Failed(_) => "Failed",
+        _ => "Unread response",
     };
     // A running session's dot pulses, as Desktop's does.
     let running = matches!(status, SessionStatus::Running | SessionStatus::Starting);
     limn::StatusDot::new(color)
         .pulse(running)
         .size(6.0)
+        .id(format!("dot:{}", session.id))
+        .description(said)
         .render()
         .centered_y()
 }

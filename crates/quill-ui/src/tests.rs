@@ -1546,6 +1546,91 @@ fn a_turn_that_ends_unseen_leaves_the_session_unread_until_it_is_opened() {
     }));
 }
 
+/// The sidebar row's dot (6 px fills inside the row) and the face of its title.
+fn row_marks(store: &Store, ui: &Ui) -> (Vec<limn::Color>, Vec<limn::FontFamily>) {
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(store, ui, window)).layout(window);
+    let row = region(&frame, "session:1").expect("the session's row");
+    let inside = |x: f32, y: f32| {
+        x >= row.x && x < row.x + row.width && y >= row.y && y < row.y + row.height
+    };
+    let mut dots = vec![];
+    let mut faces = vec![];
+    for command in &frame.commands {
+        match command {
+            limn::DrawCommand::FillRect { rect, color, .. }
+                if rect.width == 6.0 && rect.height == 6.0 && inside(rect.x, rect.y) =>
+            {
+                dots.push(*color)
+            }
+            limn::DrawCommand::Text {
+                text,
+                position,
+                font_family,
+                ..
+            } if text == "Fix the bug" && inside(position.x, position.y) => {
+                faces.push(*font_family)
+            }
+            _ => {}
+        }
+    }
+    (dots, faces)
+}
+
+/// A turn that ended unseen leaves a blue dot at the row's end, its title at its usual
+/// weight; opening the session clears it and "Mark as unread" brings it back. One that
+/// needs the person carries an amber dot.
+#[test]
+fn an_unread_or_waiting_session_shows_a_dot_not_a_bold_title() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    ui.selected = None;
+    settle(&store, &mut ui);
+    let (dots, faces) = row_marks(&store, &ui);
+    assert!(dots.is_empty(), "read: no dot");
+    assert_eq!(faces, [limn::FontFamily::Sans]);
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    let (dots, faces) = row_marks(&store, &ui);
+    assert_eq!(dots, [look::theme().accent]);
+    assert_eq!(faces, [limn::FontFamily::Sans], "not bold");
+    // Opened, it is read.
+    let opened = click(&store, &mut ui, "session:1");
+    assert!(opened.contains(&Intent::MarkUnread {
+        session: 1,
+        unread: false
+    }));
+    store.apply(Event::Unread {
+        session: 1,
+        unread: false,
+    });
+    assert!(row_marks(&store, &ui).0.is_empty());
+    // "Mark as unread" brings the dot back.
+    assert_eq!(
+        click(&store, &mut ui, "unread:1"),
+        vec![Intent::MarkUnread {
+            session: 1,
+            unread: true
+        }]
+    );
+    store.apply(Event::Unread {
+        session: 1,
+        unread: true,
+    });
+    assert_eq!(row_marks(&store, &ui).0, [look::theme().accent]);
+    // Waiting on the person, the dot is amber.
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Awaiting,
+    });
+    assert_eq!(row_marks(&store, &ui).0, [look::awaiting()]);
+}
+
 #[test]
 fn a_fork_starts_with_its_parents_conversation_and_opens() {
     let (mut store, mut ui) = store_with_session();
