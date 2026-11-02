@@ -15,6 +15,7 @@ mod auth;
 // The `$BROWSER` bridge is a Unix socket; elsewhere the system's browser opens addresses.
 #[cfg(unix)]
 mod bridge;
+mod chime;
 mod github;
 mod global;
 mod images;
@@ -1437,7 +1438,11 @@ impl Router {
                 return;
             }
             Intent::Notify { title, body, sound } => {
-                notify(&title, &body, sound);
+                // quill's own sound, so the banner itself stays silent.
+                if let Some(chime) = sound {
+                    tokio::spawn(chime::play(chime));
+                }
+                notify(&title, &body, false);
                 return;
             }
             Intent::ChooseView { session, view } => {

@@ -71,6 +71,7 @@ se publican **macOS arm64 y Windows x64** además de Linux x86_64.
 | No dejar dormir | `systemd-inhibit` | **falta** (`SetThreadExecutionState` necesita FFI) | `caffeinate` | |
 | Batería | `/sys/class/power_supply` | vacío | vacío | "no mantener despierto a batería" no distingue fuera de Linux |
 | Notificaciones | `notify-send`/`busctl` | PowerShell | `osascript` | |
+| Sonido propio de quill | `pw-play`, `paplay`, `aplay` | PowerShell `SoundPlayer` | `afplay` | Windows y macOS sin probar |
 | Leer en voz alta | `spd-say` | **falta** | **falta** (sería `say`) | |
 | Servidores de `preview_start` | grupo + `PDEATHSIG` | `taskkill /T /F` | grupo, sin `PDEATHSIG` | En Windows no mueren si quill muere de golpe |
 | `$BROWSER` de los agentes (bridge) | socket Unix | **falta**: abren el navegador del sistema | anda en teoría | |

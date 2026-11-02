@@ -26,7 +26,7 @@ pub use slash::{key as slash_key, slash_query};
 pub use view::{menu_digit, view};
 
 use quill_model::{
-    AgentCapabilities, AgentEvent, BrowserOp, Decision, Event, FileEffect, Intent, Lane,
+    AgentCapabilities, AgentEvent, BrowserOp, Chime, Decision, Event, FileEffect, Intent, Lane,
     LogoWanted, NewSession, NotifyLevel, ProposalAnswer, QueuedMessage, RequestId, SessionId,
     SessionStatus, Settings, Suggestion, TranscriptView,
 };
@@ -1002,14 +1002,15 @@ pub fn palette_hover(store: &Store, ui: &mut Ui, id: &str) {
 }
 
 /// The banner an engine event earns, when its session is not in view: the level from
-/// Settings, the session's title and the notice's text. A permission request, a question
-/// or a finished turn of a session the person is not looking at; a side chat's turn is not.
+/// Settings and the banner, with the session's title, the notice's text and quill's sound
+/// for it when Settings has one. A permission request, a question or a finished turn of a
+/// session the person is not looking at; a side chat's turn is not.
 pub fn notice(
     store: &Store,
     ui: &Ui,
     event: &Event,
     focused: bool,
-) -> Option<(NotifyLevel, String, String)> {
+) -> Option<(NotifyLevel, Intent)> {
     let Event::Agent { session, event, .. } = event else {
         return None;
     };
@@ -1038,7 +1039,17 @@ pub fn notice(
         .map(|s| s.title.clone())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| "quill".into());
-    Some((level, title, text.into()))
+    let chime = if text == NOTICE_DONE {
+        Chime::Done
+    } else {
+        Chime::Ask
+    };
+    let banner = Intent::Notify {
+        title,
+        body: text.into(),
+        sound: ui.settings.notification_sound.then_some(chime),
+    };
+    Some((level, banner))
 }
 
 /// The folder the terminal and new sessions work in: the selected session's, else the chosen one.
@@ -5346,7 +5357,7 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             ("notify_permission", value) => settings.notify_permission = notify_level(value),
             ("notify_question", value) => settings.notify_question = notify_level(value),
             ("notify_done", value) => settings.notify_done = notify_level(value),
-            ("notification_sound", value) => settings.notification_sound = value == "system",
+            ("notification_sound", value) => settings.notification_sound = value != "none",
             ("text_size", "small") => settings.text_size = TextSize::Small,
             ("text_size", "medium") => settings.text_size = TextSize::Medium,
             ("text_size", "large") => settings.text_size = TextSize::Large,

@@ -3964,8 +3964,11 @@ fn a_notice_is_a_banner_only_while_its_session_is_out_of_view() {
         notice(&store, &ui, &asked, false),
         Some((
             NotifyLevel::Banner,
-            "Fix the bug".into(),
-            NOTICE_PERMISSION.into()
+            Intent::Notify {
+                title: "Fix the bug".into(),
+                body: NOTICE_PERMISSION.into(),
+                sound: Some(quill_model::Chime::Ask),
+            }
         ))
     );
     // Focused on another session, it is still a banner.
@@ -3994,7 +3997,10 @@ fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
             suggestions: vec![],
         },
     };
-    let text = |event: &Event, ui: &Ui| notice(&store, ui, event, false).map(|n| n.2);
+    let text = |event: &Event, ui: &Ui| match notice(&store, ui, event, false) {
+        Some((_, Intent::Notify { body, .. })) => Some(body),
+        _ => None,
+    };
     assert_eq!(text(&asked(true), &ui), Some(NOTICE_QUESTION.into()));
     assert_eq!(text(&asked(false), &ui), Some(NOTICE_PERMISSION.into()));
     let finished = Event::Agent {
@@ -4026,6 +4032,36 @@ fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
         status: SessionStatus::Awaiting,
     };
     assert_eq!(notice(&store, &ui, &waiting, false), None);
+}
+
+/// A finished task asks for quill's "done" sound and a question for its "ask" one, as
+/// Settings has it; none while the person looks at that very session in the focused window.
+#[test]
+fn a_banner_asks_for_quills_own_sound_per_settings_and_not_in_view() {
+    use quill_model::Chime;
+    let (store, mut ui) = store_with_session();
+    let finished = Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::TurnFinished {
+            ok: true,
+            interrupted: false,
+            usage: Usage::default(),
+            error: None,
+        },
+    };
+    let sound = |ui: &Ui, focused: bool| match notice(&store, ui, &finished, focused) {
+        Some((_, Intent::Notify { sound, .. })) => Some(sound),
+        _ => None,
+    };
+    // In view, focused: no banner and no sound; out of focus, the sound of a finished task.
+    assert_eq!(sound(&ui, true), None);
+    assert_eq!(sound(&ui, false), Some(Some(Chime::Done)));
+    ui.selected = None;
+    assert_eq!(sound(&ui, true), Some(Some(Chime::Done)));
+    // "None" in Settings: the banner alone.
+    ui.settings.notification_sound = false;
+    assert_eq!(sound(&ui, true), Some(None));
 }
 
 fn slash_command(name: &str, aliases: &[&str]) -> quill_model::AgentSlashCommand {

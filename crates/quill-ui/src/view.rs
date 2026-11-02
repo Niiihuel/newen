@@ -10143,14 +10143,15 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                                 palette,
                             ),
                         ),
+                        // quill's own sounds in place of Desktop's "System sound".
                         setting(
                             "Notification sound",
-                            "Played when an OS banner is shown.",
+                            "Played with an OS banner: one sound when a task completes, another when a session needs you.",
                             setting_select(
                                 ui,
                                 "notification_sound",
-                                &choices(&[("system", "System sound"), ("none", "None")]),
-                                if s.notification_sound { "system" } else { "none" },
+                                &choices(&[("quill", "quill"), ("none", "None")]),
+                                if s.notification_sound { "quill" } else { "none" },
                                 palette,
                             ),
                         ),
