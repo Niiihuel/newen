@@ -1056,7 +1056,9 @@ carpeta `locales\`. En el manifiesto es `windows-x86_64`. Compilado con MSVC y
 ```
 
 `newen.exe` busca CEF primero a su lado y si no en `versions\{su versión}\`.
-Newen se considera instalado sólo si corre desde esa carpeta.
+Newen se considera instalado sólo si corre desde esa carpeta (las dos rutas se
+comparan resueltas: `current_exe` no trae el prefijo `\\?\` que pone
+`canonicalize`).
 
 La primera vez: descomprimir el zip en una carpeta (cualquiera) y correr
 `newen.exe --install` desde ahí. Copia `newen.exe` a la raíz y el resto (si

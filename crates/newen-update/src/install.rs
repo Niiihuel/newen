@@ -139,11 +139,12 @@ impl Install {
         &self.root
     }
 
-    /// Whether `program`, this one as `current_exe` names it (links resolved), runs from this
-    /// installation.
+    /// Whether `program`, this one as `current_exe` names it, runs from this installation.
     pub fn runs(&self, program: &Path) -> bool {
-        // Resolved as `program` is (and on Windows with its `\\?\` prefix).
-        let root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+        // Both resolved alike: links followed, and on Windows both with the `\\?\` prefix,
+        // which `current_exe` lacks and `canonicalize` adds.
+        let resolved = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let (program, root) = (resolved(program), resolved(&self.root));
         if cfg!(windows) {
             program.parent() == Some(root.as_path())
         } else if cfg!(target_os = "macos") {

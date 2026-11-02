@@ -578,6 +578,8 @@ fn an_update_replaces_the_installation_whole_or_not_at_all() {
     assert_eq!(mode & 0o111, 0o111, "executable");
     let running = std::fs::canonicalize(&program).unwrap();
     assert!(install.runs(&running));
+    // Named as a launcher names it, not resolved (as Windows' `current_exe` names it).
+    assert!(install.runs(&program));
     assert!(!install.runs(&built.join("newen")));
     // The installed program asked again: nothing to do.
     assert_eq!(install.adopt(&running, &version("1.0.0")).unwrap(), program);
