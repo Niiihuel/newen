@@ -2,7 +2,7 @@
 //! quill's updates before there is a real one (`docs/UPDATES.md`):
 //!
 //! ```text
-//! cargo run -p quill-release --bin quill-test-feed -- \
+//! cargo run -p newen-release --bin newen-test-feed -- \
 //!     [--version 9.9.9] [--mandatory] [--slow] [--corrupt] [--port 8765] [--artifact <file>]
 //!     [--platform windows-x86_64] [--tree <folder>]
 //! ```
@@ -68,9 +68,9 @@ fn main() {
     };
     // As the release workflow names them.
     let name = match platform.split('-').next() {
-        Some("windows") => "quill-x86_64-windows.zip",
-        Some("macos") => "quill-aarch64-macos.zip",
-        _ => "quill-x86_64-linux.tar.gz",
+        Some("windows") => "newen-x86_64-windows.zip",
+        Some("macos") => "newen-aarch64-macos.zip",
+        _ => "newen-x86_64-linux.tar.gz",
     };
 
     let mut seed = [0; 32];

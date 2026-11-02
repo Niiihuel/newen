@@ -574,7 +574,7 @@ mod mac {
             .get_or_init(|| {
                 let program = std::env::current_exe().map_err(|e| e.to_string())?;
                 if !bundled(&program) {
-                    return Err("not running from quill.app: no CEF framework".into());
+                    return Err("not running from Newen.app: no CEF framework".into());
                 }
                 let loader = cef::library_loader::LibraryLoader::new(&program, false);
                 if !loader.load() {

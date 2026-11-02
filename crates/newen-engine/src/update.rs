@@ -1034,7 +1034,7 @@ mod tests {
         artifact: Option<&[u8]>,
     ) -> VerifyingKey {
         use sha2::Digest as _;
-        let name = format!("quill-{version}.tar.gz");
+        let name = format!("newen-{version}.tar.gz");
         let mut platforms = std::collections::BTreeMap::new();
         if let Some(bytes) = artifact {
             server.put(&format!("/{name}"), bytes.to_vec());
@@ -1067,11 +1067,11 @@ mod tests {
         let dir = folder.join(format!("bundle-{version}"));
         std::fs::create_dir_all(dir.join("locales")).unwrap();
         std::fs::write(
-            dir.join("quill"),
+            dir.join("newen"),
             [b"\x7fELF".as_slice(), version.to_string().as_bytes()].concat(),
         )
         .unwrap();
-        std::fs::set_permissions(dir.join("quill"), std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(dir.join("newen"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
         std::fs::write(dir.join("libcef.so"), "cef").unwrap();
         let out = folder.join(format!("{version}.tar.gz"));
@@ -1080,7 +1080,7 @@ mod tests {
             .arg(&out)
             .arg("-C")
             .arg(&dir)
-            .args(["quill", "libcef.so", "locales"])
+            .args(["newen", "libcef.so", "locales"])
             .status()
             .unwrap();
         assert!(status.success());
@@ -1098,8 +1098,8 @@ mod tests {
         let running = running();
         let built = folder.path().join("built");
         std::fs::create_dir_all(&built).unwrap();
-        std::fs::write(built.join("quill"), b"\x7fELF running").unwrap();
-        let program = install.adopt(&built.join("quill"), &running).unwrap();
+        std::fs::write(built.join("newen"), b"\x7fELF running").unwrap();
+        let program = install.adopt(&built.join("newen"), &running).unwrap();
         let server = newen_update::serve::serve(0).unwrap();
         let (one, two) = (next(1), next(2));
         let key = release(&server, &one, false, Some(&bundle(folder.path(), &one)));
@@ -1134,7 +1134,7 @@ mod tests {
         assert_eq!(install.current(), Some(running.to_string()));
         assert!(install
             .root()
-            .join(format!("versions/{one}/quill"))
+            .join(format!("versions/{one}/newen"))
             .is_file());
         // Downloading showed on its way.
         assert!(told.events.lock().unwrap().iter().any(|event| matches!(
@@ -1200,13 +1200,13 @@ mod tests {
     ) -> VerifyingKey {
         use sha2::Digest as _;
         let archive = bundle(folder, version);
-        let name = format!("quill-{version}.tar.gz");
+        let name = format!("newen-{version}.tar.gz");
         server.put(&format!("/{name}"), archive.clone());
         let tree = folder.join(format!("bundle-{version}"));
         let platform = newen_update::platform();
         let list = newen_update::serve::publish_files(server, &tree, version, &platform);
         if corrupt {
-            let program = std::fs::read(tree.join("quill")).unwrap();
+            let program = std::fs::read(tree.join("newen")).unwrap();
             let blob = files::blob_name(&newen_update::hex(&sha2::Sha256::digest(&program)));
             // The same size, every byte flipped: it no longer unpacks to the program.
             server.configure(|files| {
@@ -1243,7 +1243,7 @@ mod tests {
         let running = running();
         bundle(folder.path(), &running);
         let built = folder.path().join(format!("bundle-{running}"));
-        install.adopt(&built.join("quill"), &running).unwrap();
+        install.adopt(&built.join("newen"), &running).unwrap();
         let server = newen_update::serve::serve(0).unwrap();
         let (one, two) = (next(1), next(2));
         let key = release_with_files(&server, folder.path(), &one, false);
@@ -1264,8 +1264,8 @@ mod tests {
         assert_eq!(updates.state(), ready(&one));
         let staged = install.root().join(format!("versions/{one}"));
         assert_eq!(
-            std::fs::read(staged.join("quill")).unwrap(),
-            std::fs::read(folder.path().join(format!("bundle-{one}/quill"))).unwrap()
+            std::fs::read(staged.join("newen")).unwrap(),
+            std::fs::read(folder.path().join(format!("bundle-{one}/newen"))).unwrap()
         );
         assert_eq!(std::fs::read(staged.join("libcef.so")).unwrap(), b"cef");
         let fetched: Vec<String> = (server.requests().into_iter())

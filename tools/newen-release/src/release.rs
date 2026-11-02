@@ -2,30 +2,31 @@
 //! release workflow (`docs/UPDATES.md`):
 //!
 //! ```text
-//! quill-release keygen <private-key-file>   a new key: the private half to the file, the public to stdout
-//! quill-release tag <tag>                   the tag is annotated and names this workspace's version
-//! quill-release whats-new <tag> <base-url> <out-dir>
+//! newen-release keygen <private-key-file>   a new key: the private half to the file, the public to stdout
+//! newen-release tag <tag>                   the tag is annotated and names this workspace's version
+//! newen-release whats-new <tag> <base-url> <out-dir>
 //!                                          whats-new.json and its media from release/notes/<version>.toml
 //!                                          and release/media/<version>/, into <out-dir>; prints each file
-//! quill-release files <tag> <base-url> <out-dir> [--previous <dir>] <platform>=<folder>...
+//! newen-release files <tag> <base-url> <out-dir> [--previous <dir>] <platform>=<folder>...
 //!                                          files-<platform>.json of each unpacked bundle, and the
 //!                                          blobs no earlier release published, into <out-dir>;
 //!                                          prints each file written
-//! quill-release manifest <tag> <base-url> [--whats-new <file>] [--previous <dir>]
+//! newen-release manifest <tag> <base-url> [--whats-new <file>] [--previous <dir>]
 //!                        [--files <platform>=<file>]... [--expires <rfc3339>] <platform>=<file>...
 //!                                          the manifest of the release, to stdout; its sequence is
 //!                                          the previous release's plus one
-//! quill-release sign <manifest>             <manifest>.sig, with QUILL_UPDATE_SIGNING_KEY
-//! quill-release cosign <manifest> <key-file>
+//! newen-release sign <manifest>             <manifest>.sig, with NEWEN_UPDATE_SIGNING_KEY
+//! newen-release cosign <manifest> <key-file>
 //!                                          one more signature, a line of <manifest>.sigs (a rotation)
-//! quill-release verify <manifest>           its signatures verify with the keys compiled in, and the
+//! newen-release verify <manifest>           its signatures verify with the keys compiled in, and the
 //!                                          whats-new.json, media, lists and new blobs beside it match
 //!                                          what it names
 //! ```
 //!
-//! `--previous` is a folder holding the latest published release's `quill-update.json`, its
-//! signatures and its `files-*.json`: verified with the keys compiled in, it gives the sequence
-//! and the blobs this release need not upload again.
+//! `--previous` is a folder holding the latest published release's `newen-update.json` (quill's
+//! `quill-update.json` for the release before Newen's first, 0.1.9), its signatures and its
+//! `files-*.json`: verified with the keys compiled in, it gives the sequence and the blobs this
+//! release need not upload again.
 //!
 //! A private key is 32 bytes in base64 and never printed.
 
@@ -56,12 +57,12 @@ fn main() -> ExitCode {
         ["sign", file] => sign(Path::new(file)),
         ["cosign", file, key] => cosign(Path::new(file), Path::new(key)),
         ["verify", file] => verify(Path::new(file)),
-        _ => Err("usage: quill-release keygen <file> | tag <tag> | whats-new <tag> <base-url> <out-dir> | files <tag> <base-url> <out-dir> [--previous <dir>] <platform>=<folder>... | manifest <tag> <base-url> [--whats-new <file>] [--previous <dir>] [--files <platform>=<file>]... [--expires <rfc3339>] <platform>=<file>... | sign <manifest> | cosign <manifest> <key-file> | verify <manifest>".into()),
+        _ => Err("usage: newen-release keygen <file> | tag <tag> | whats-new <tag> <base-url> <out-dir> | files <tag> <base-url> <out-dir> [--previous <dir>] <platform>=<folder>... | manifest <tag> <base-url> [--whats-new <file>] [--previous <dir>] [--files <platform>=<file>]... [--expires <rfc3339>] <platform>=<file>... | sign <manifest> | cosign <manifest> <key-file> | verify <manifest>".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("quill-release: {error}");
+            eprintln!("newen-release: {error}");
             ExitCode::FAILURE
         }
     }
@@ -211,9 +212,15 @@ fn pair(text: &str) -> Result<(&str, &Path)> {
 }
 
 /// The release published before, from the folder `dir` (`--previous`): its manifest, verified
-/// with `keys`, and the lists of files it names, each matching its digest.
+/// with `keys`, and the lists of files it names, each matching its digest. Newen's manifest, or
+/// quill's when that is the one there (Newen's first release follows quill's last).
 fn read_previous(dir: &Path, keys: &[VerifyingKey]) -> Result<(Manifest, Vec<Bundle>)> {
-    let manifest = read_signed(&dir.join(newen_update::MANIFEST), keys)?;
+    let file = [newen_update::MANIFEST, newen_update::LEGACY_MANIFEST]
+        .map(|name| dir.join(name))
+        .into_iter()
+        .find(|file| file.is_file())
+        .unwrap_or_else(|| dir.join(newen_update::MANIFEST));
+    let manifest = read_signed(&file, keys)?;
     let mut bundles = Vec::new();
     for (platform, entry) in &manifest.files {
         let bytes = matching(dir, entry)?;
@@ -412,7 +419,7 @@ fn cosign(file: &Path, key_file: &Path) -> Result<()> {
     let text = std::fs::read_to_string(key_file)
         .map_err(|error| format!("{}: {error}", key_file.display()))?;
     let key =
-        signing_key(&text).ok_or("the key file does not hold a key from `quill-release keygen`")?;
+        signing_key(&text).ok_or("the key file does not hold a key from `newen-release keygen`")?;
     let signature = signature_of(file, &key)?;
     let mut out = std::fs::OpenOptions::new()
         .create(true)
@@ -423,10 +430,10 @@ fn cosign(file: &Path, key_file: &Path) -> Result<()> {
 }
 
 fn sign(file: &Path) -> Result<()> {
-    let seed = std::env::var("QUILL_UPDATE_SIGNING_KEY")
-        .map_err(|_| "QUILL_UPDATE_SIGNING_KEY is not set")?;
+    let seed = std::env::var("NEWEN_UPDATE_SIGNING_KEY")
+        .map_err(|_| "NEWEN_UPDATE_SIGNING_KEY is not set")?;
     let key = signing_key(&seed)
-        .ok_or("QUILL_UPDATE_SIGNING_KEY is not a key from `quill-release keygen`")?;
+        .ok_or("NEWEN_UPDATE_SIGNING_KEY is not a key from `newen-release keygen`")?;
     // Only what quill would accept is signed.
     let signature = signature_of(file, &key)?;
     std::fs::write(signature_path(file), format!("{signature}\n"))
@@ -436,7 +443,7 @@ fn sign(file: &Path) -> Result<()> {
 fn verify(file: &Path) -> Result<()> {
     let keys = newen_update::compiled_keys();
     if keys.is_empty() {
-        return Err("no release key compiled in: run quill-release keygen and commit crates/quill-update/release-key.pub".into());
+        return Err("no release key compiled in: run newen-release keygen and commit crates/newen-update/release-key.pub".into());
     }
     let manifest = read_signed(file, &keys)?;
     let now = std::time::SystemTime::now()
@@ -836,6 +843,14 @@ file = "browser.png"
             Ok((3, 0))
         );
         let (previous, lists) = read_previous(&out, &[key.verifying_key()]).unwrap();
+        // Published by quill (0.1.9, before Newen's first): read the same.
+        let quill = out.join(newen_update::LEGACY_MANIFEST);
+        std::fs::rename(&manifest_file, &quill).unwrap();
+        std::fs::rename(signature_path(&manifest_file), signature_path(&quill)).unwrap();
+        assert_eq!(
+            read_previous(&out, &[key.verifying_key()]).unwrap().0,
+            previous
+        );
         // Another key's release is not one to build on.
         assert!(read_previous(&out, &[SigningKey::from_bytes(&[1; 32]).verifying_key()]).is_err());
 

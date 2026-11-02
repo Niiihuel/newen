@@ -301,7 +301,7 @@ fn state_line(state: &UpdateState) -> String {
         UpdateState::Installed { version, .. } => format!("Installing {version}\u{2026}"),
         UpdateState::Failed { reason } => reason.clone(),
         UpdateState::FromSource => "Built from source \u{2014} update with git pull".into(),
-        UpdateState::NotInstalled => "Run quill --install to keep it up to date".into(),
+        UpdateState::NotInstalled => "Run newen --install to keep it up to date".into(),
     }
 }
 

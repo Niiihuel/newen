@@ -188,16 +188,20 @@ fn asked(server: &Server, from: usize) -> Vec<String> {
         .collect()
 }
 
-/// At a feed, Newen's manifest is looked for first and quill's when there is none; either goes
-/// through the same signature and admission, and Newen's may name itself the product.
+/// At a feed, Newen's manifest is looked for first and quill's when there is none (the
+/// release before 0.2.0 is quill's 0.1.9); either goes through the same signature and
+/// admission, and quill's may name quill the product.
 #[test]
-fn a_feed_s_newen_manifest_is_read_first_and_quill_s_when_there_is_none() {
+fn a_feed_s_manifest_is_newen_s_first_and_quill_s_when_there_is_none() {
     let signer = key();
     let server = serve(0).unwrap();
     let (agent, feed) = (agent(), Source::at(server.base()));
     let trust = Trust::new(vec![signer.verifying_key()]);
-    let quill = manifest("9.0.0", None, &[]);
-    publish(&server, &signer, &quill);
+    let quill = Manifest {
+        product: LEGACY_PRODUCT.into(),
+        ..manifest("0.1.9", None, &[])
+    };
+    publish_as(&server, &signer, &quill, LEGACY_MANIFEST);
     assert_eq!(check(&agent, &feed, &trust), Ok(quill.clone()));
     assert_eq!(
         asked(&server, 0),
@@ -208,11 +212,9 @@ fn a_feed_s_newen_manifest_is_read_first_and_quill_s_when_there_is_none() {
             "/quill-update.json.sigs"
         ]
     );
-    let newen = Manifest {
-        product: NEWEN_PRODUCT.into(),
-        ..manifest("9.1.0", None, &[])
-    };
-    publish_as(&server, &signer, &newen, NEWEN_MANIFEST);
+    let newen = manifest("9.1.0", None, &[]);
+    assert_eq!(newen.product, "newen");
+    publish(&server, &signer, &newen);
     let before = server.requests().len();
     assert_eq!(check(&agent, &feed, &trust), Ok(newen.clone()));
     assert_eq!(
@@ -224,14 +226,14 @@ fn a_feed_s_newen_manifest_is_read_first_and_quill_s_when_there_is_none() {
         ]
     );
     // Newen's, signed by another key: refused, and quill's is not read instead.
-    publish_as(&server, &key(), &newen, NEWEN_MANIFEST);
+    publish_as(&server, &key(), &newen, MANIFEST);
     assert_eq!(check(&agent, &feed, &trust), Err(Error::Signature));
     // Nor another product's under Newen's name.
     let other = Manifest {
         product: "other".into(),
         ..newen
     };
-    publish_as(&server, &signer, &other, NEWEN_MANIFEST);
+    publish(&server, &signer, &other);
     assert_eq!(check(&agent, &feed, &trust), Err(Error::Foreign));
 }
 
@@ -284,18 +286,17 @@ fn newen_s_repository_is_read_first_and_quill_s_when_it_has_no_manifest() {
     assert_eq!(check(&agent(), &unreachable, &trust), Err(Error::Network));
 }
 
-/// What copies up to 0.1.8 read of a release stays what 0.1.9 publishes: they look its
-/// manifest and signature up by these names, and install only a bundle with this program at
-/// its root (`tools/quill-release`, `scripts/package.sh` and the workflows are unchanged).
+/// A release of Newen is published under Newen's names: its manifest and signature, and its
+/// bundle's program at its root.
 #[test]
-fn what_copies_up_to_0_1_8_read_of_a_release_is_unchanged() {
-    assert_eq!(MANIFEST, "quill-update.json");
-    assert_eq!(SIGNATURE, "quill-update.json.sig");
+fn a_release_is_published_and_read_under_newen_s_names() {
+    assert_eq!(MANIFEST, "newen-update.json");
+    assert_eq!(SIGNATURE, "newen-update.json.sig");
     assert_eq!(
         install::PROGRAM,
-        if cfg!(windows) { "quill.exe" } else { "quill" }
+        if cfg!(windows) { "newen.exe" } else { "newen" }
     );
-    // The local test feed publishes under them, and a check still finds them.
+    // The local test feed publishes under them, and a check finds them.
     let server = serve(0).unwrap();
     let published = manifest("9.0.0", None, &[]);
     let key = serve::publish(&server, &published);
@@ -303,6 +304,7 @@ fn what_copies_up_to_0_1_8_read_of_a_release_is_unchanged() {
         check(&agent(), &Source::at(server.base()), &Trust::new(vec![key])),
         Ok(published)
     );
+    assert_eq!(asked(&server, 0)[0], "/newen-update.json");
 }
 
 #[test]
@@ -392,11 +394,11 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     assert!(!path.exists());
     assert!(!folder
         .path()
-        .join(format!("quill-{}.part", wrong.sha256))
+        .join(format!("newen-{}.part", wrong.sha256))
         .exists());
     assert!(!folder
         .path()
-        .join(format!("quill-{}", wrong.sha256))
+        .join(format!("newen-{}", wrong.sha256))
         .exists());
     // Larger than signed: stopped and deleted.
     let mut short = wrong.clone();
@@ -407,7 +409,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     );
     assert!(!folder
         .path()
-        .join(format!("quill-{}.part", short.sha256))
+        .join(format!("newen-{}.part", short.sha256))
         .exists());
     // Smaller than signed: kept to resume, never installed.
     let mut long = wrong;
@@ -430,7 +432,7 @@ fn a_cut_download_resumes_where_it_stopped() {
         matches!(first, Err(Error::Network | Error::Incomplete)),
         "{first:?}"
     );
-    let part = folder.path().join(format!("quill-{}.part", wanted.sha256));
+    let part = folder.path().join(format!("newen-{}.part", wanted.sha256));
     // What arrived before the cut, as far as the client read it.
     let kept = std::fs::metadata(&part).unwrap().len();
     assert!(kept > 0 && kept <= 150_000, "{kept}");
@@ -451,7 +453,7 @@ fn a_stopped_download_keeps_its_part() {
     let folder = tempfile::tempdir().unwrap();
     let stopped = download(&agent, &wanted, folder.path(), |have, _| have < 100_000);
     assert_eq!(stopped, Err(Error::Interrupted));
-    let part = folder.path().join(format!("quill-{}.part", wanted.sha256));
+    let part = folder.path().join(format!("newen-{}.part", wanted.sha256));
     assert!(std::fs::metadata(&part).unwrap().len() >= 100_000);
     let path = download(&agent, &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
@@ -488,25 +490,25 @@ fn a_program_is_known_by_its_first_bytes_and_a_bundle_by_its_path() {
     assert!(!starts_native("linux", b"quill\0\0\0"));
     assert!(!starts_native("linux", b""));
 
-    let program = Path::new("/Users/ana/Applications/quill.app/Contents/MacOS/quill");
+    let program = Path::new("/Users/ana/Applications/Newen.app/Contents/MacOS/newen");
     assert_eq!(
         bundle_root(program),
         Some(Path::new("/Users/ana/Applications"))
     );
     assert_eq!(
-        bundle_root(Path::new("/Applications/quill.app/Contents/MacOS/quill")),
+        bundle_root(Path::new("/Applications/Newen.app/Contents/MacOS/newen")),
         Some(Path::new("/Applications"))
     );
     // Not in a bundle, or in one of another name.
     assert_eq!(
-        bundle_root(Path::new("/src/quill/target/debug/quill")),
+        bundle_root(Path::new("/src/newen/target/debug/newen")),
         None
     );
     assert_eq!(
-        bundle_root(Path::new("/Applications/Other.app/Contents/MacOS/quill")),
+        bundle_root(Path::new("/Applications/quill.app/Contents/MacOS/newen")),
         None
     );
-    assert_eq!(bundle_root(Path::new("quill")), None);
+    assert_eq!(bundle_root(Path::new("newen")), None);
 }
 
 /// A tiny "program": the ELF magic and a marker.
@@ -515,15 +517,15 @@ fn elf(marker: &str) -> Vec<u8> {
     [b"\x7fELF".as_slice(), marker.as_bytes()].concat()
 }
 
-/// A bundle as a release holds it, in `dir`: `quill` (an executable starting with `program`),
+/// A bundle as a release holds it, in `dir`: `newen` (an executable starting with `program`),
 /// CEF's library and a locale, each saying `marker`.
 #[cfg(target_os = "linux")]
 fn bundle(dir: &std::path::Path, program: &[u8], marker: &str) {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::create_dir_all(dir.join("locales")).unwrap();
-    std::fs::write(dir.join("quill"), program).unwrap();
-    std::fs::set_permissions(dir.join("quill"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join("newen"), program).unwrap();
+    std::fs::set_permissions(dir.join("newen"), std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(dir.join("libcef.so"), format!("cef {marker}")).unwrap();
     std::fs::write(dir.join("locales/en-US.pak"), format!("en-US {marker}")).unwrap();
 }
@@ -531,7 +533,7 @@ fn bundle(dir: &std::path::Path, program: &[u8], marker: &str) {
 /// The Linux artifact of a bundle in `dir`: a gzipped tar, flat at its root.
 #[cfg(target_os = "linux")]
 fn tar_gz(dir: &std::path::Path, out: &std::path::Path) -> Vec<u8> {
-    tar_gz_of(dir, out, &["quill", "libcef.so", "locales"])
+    tar_gz_of(dir, out, &["newen", "libcef.so", "locales"])
 }
 
 /// [`tar_gz`] of the entries `names` of `dir`.
@@ -560,11 +562,11 @@ fn an_update_replaces_the_installation_whole_or_not_at_all() {
     bundle(&built, &elf("1.0.0"), "1.0.0");
     // A file of the folder that is not the bundle's own, and a folder that is not `locales`.
     std::fs::create_dir(built.join("deps")).unwrap();
-    // `quill --install`: this very program, and CEF's files beside it, become the first version.
+    // `newen --install`: this very program, and CEF's files beside it, become the first version.
     let program = install
-        .adopt(&built.join("quill"), &version("1.0.0"))
+        .adopt(&built.join("newen"), &version("1.0.0"))
         .unwrap();
-    assert_eq!(program, install.root().join("current/quill"));
+    assert_eq!(program, install.root().join("current/newen"));
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
     let current = install.root().join("current");
     let read = |name: &str| std::fs::read_to_string(current.join(name)).unwrap();
@@ -576,7 +578,7 @@ fn an_update_replaces_the_installation_whole_or_not_at_all() {
     assert_eq!(mode & 0o111, 0o111, "executable");
     let running = std::fs::canonicalize(&program).unwrap();
     assert!(install.runs(&running));
-    assert!(!install.runs(&built.join("quill")));
+    assert!(!install.runs(&built.join("newen")));
     // The installed program asked again: nothing to do.
     assert_eq!(install.adopt(&running, &version("1.0.0")).unwrap(), program);
 
@@ -633,17 +635,19 @@ fn a_program_built_alone_is_installed_alone() {
     let install = Install::at(root.path().join("app"));
     let built = root.path().join("target/release");
     std::fs::create_dir_all(&built).unwrap();
-    std::fs::write(built.join("quill"), elf("1.0.0")).unwrap();
-    std::fs::write(built.join("quill.d"), "not CEF's").unwrap();
+    std::fs::write(built.join("newen"), elf("1.0.0")).unwrap();
+    std::fs::write(built.join("newen.d"), "not CEF's").unwrap();
     let program = install
-        .adopt(&built.join("quill"), &version("1.0.0"))
+        .adopt(&built.join("newen"), &version("1.0.0"))
         .unwrap();
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
-    let names: Vec<_> = std::fs::read_dir(install.root().join("current"))
+    let mut names: Vec<_> = std::fs::read_dir(install.root().join("current"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
-    assert_eq!(names, ["quill"]);
+    names.sort();
+    // And the link launchers quill's users made start.
+    assert_eq!(names, ["newen", "quill"]);
 }
 
 /// A staged version changes nothing that starts; the next start activates it on trial, counts
@@ -659,7 +663,7 @@ fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
     let built = root.path().join("built");
     bundle(&built, &elf("1.0.0"), "1.0.0");
     let program = install
-        .adopt(&built.join("quill"), &version("1.0.0"))
+        .adopt(&built.join("newen"), &version("1.0.0"))
         .unwrap();
     let artifact = |name: &str, marker: &str| {
         let dir = root.path().join(name);
@@ -673,7 +677,7 @@ fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
         .stage(&artifact("next", "1.1.0"), &version("1.1.0"))
         .unwrap();
     assert_eq!(staged, install.root().join("versions/1.1.0"));
-    assert_eq!(std::fs::read(staged.join("quill")).unwrap(), elf("1.1.0"));
+    assert_eq!(std::fs::read(staged.join("newen")).unwrap(), elf("1.1.0"));
     assert_eq!(install.current().as_deref(), Some("1.0.0"));
     assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
     let mark = Staged {
@@ -757,44 +761,46 @@ fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
     assert_eq!(install.current().as_deref(), Some("1.1.0"));
 }
 
-/// 0.1.9 installs a release of Newen, quill's next name: its manifest under Newen's name, its
-/// program `newen`. The version staged gets a `quill` link to it, so launchers of
-/// `current/quill` start Newen; the next start activates it on trial and starts
-/// `current/newen`. When Newen's starts never run a minute (counted by this same code, which
-/// Newen keeps), its third goes back to 0.1.9, which the activation gave a `newen` link to its
-/// `quill`: launchers Newen wrote (`current/newen`) and quill's start 0.1.9. File by file, the
-/// same layout.
+/// An installation quill made, its 0.1.9 in `versions/0.1.9/quill`.
+#[cfg(target_os = "linux")]
+fn quill_s_installation(root: &std::path::Path) -> Install {
+    let install = Install::at(root);
+    let version = root.join("versions/0.1.9");
+    bundle(&version, &elf("0.1.9"), "0.1.9");
+    std::fs::rename(version.join("newen"), version.join("quill")).unwrap();
+    std::os::unix::fs::symlink("versions/0.1.9", root.join("current")).unwrap();
+    install
+}
+
+/// An installation quill 0.1.9 made takes a release of Newen, read under Newen's names. The
+/// version staged gets a `quill` link to `newen`, so launchers of `current/quill` start
+/// Newen; activated on trial, `current/newen` starts, and 0.1.9 gets a `newen` link to its
+/// `quill`. When Newen's starts never run a minute, its third goes back to 0.1.9: launchers of
+/// `current/newen` and of `current/quill` start 0.1.9 (without the link, the second). File by
+/// file, the same layout.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
+fn a_release_of_newen_replaces_quill_s_on_trial_and_rolls_back_to_it() {
     use crate::install::Launch;
     use std::path::Path;
 
     let signer = key();
     let root = tempfile::tempdir().unwrap();
-    let install = Install::at(root.path().join("app"));
-    let built = root.path().join("built");
-    bundle(&built, &elf("0.1.9"), "0.1.9");
-    let quill = install
-        .adopt(&built.join("quill"), &version("0.1.9"))
-        .unwrap();
+    let install = quill_s_installation(&root.path().join("app"));
+    let quill = install.root().join("current/quill");
+    assert_eq!(install.program(), quill, "quill's while it has no other");
     // Newen's bundle: `newen` and CEF's files, and no `quill`.
     let tree = root.path().join("newen");
     bundle(&tree, &elf("0.2.0"), "0.2.0");
-    std::fs::rename(tree.join("quill"), tree.join("newen")).unwrap();
-    let archive = tar_gz_of(
-        &tree,
-        &root.path().join("newen-x86_64-linux.tar.gz"),
-        &["newen", "libcef.so", "locales"],
-    );
+    let archive = tar_gz(&tree, &root.path().join("newen-x86_64-linux.tar.gz"));
     let server = serve(0).unwrap();
     server.put("/newen-x86_64-linux.tar.gz", archive.clone());
     let url = format!("{}/newen-x86_64-linux.tar.gz", server.base());
-    let newen = Manifest {
-        product: NEWEN_PRODUCT.into(),
-        ..manifest("0.2.0", None, &[(&platform(), artifact(&url, &archive))])
-    };
-    publish_as(&server, &signer, &newen, NEWEN_MANIFEST);
+    publish(
+        &server,
+        &signer,
+        &manifest("0.2.0", None, &[(&platform(), artifact(&url, &archive))]),
+    );
     let agent = agent();
     let trust = Trust::new(vec![signer.verifying_key()]);
     let found = check(&agent, &Source::at(server.base()), &trust).unwrap();
@@ -826,6 +832,10 @@ fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
     );
     assert_eq!(install.program(), started);
     assert_eq!(std::fs::read(&quill).unwrap(), elf("0.2.0"), "a launcher's");
+    assert_eq!(
+        std::fs::read_link(install.root().join("versions/0.1.9/newen")).unwrap(),
+        Path::new("quill")
+    );
     // Newen never runs a minute: its third start goes back to 0.1.9, refused from then on.
     assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
     assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
@@ -839,19 +849,15 @@ fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
     );
     assert_eq!(install.current().as_deref(), Some("0.1.9"));
     assert_eq!(install.program(), started);
-    assert_eq!(
-        std::fs::read(&started).unwrap(),
-        elf("0.1.9"),
-        "Newen's launchers'"
-    );
+    assert_eq!(std::fs::read(&started).unwrap(), elf("0.1.9"), "launchers'");
     assert_eq!(std::fs::read(&quill).unwrap(), elf("0.1.9"));
     assert_eq!(install.bad(), Some(version("0.2.0")));
+    // Without the link, quill's own program.
+    std::fs::remove_file(install.root().join("versions/0.1.9/newen")).unwrap();
+    assert_eq!(install.program(), quill);
 
     // File by file, from its list and blobs: the same layout.
-    let later = Install::at(root.path().join("later"));
-    later
-        .adopt(&built.join("quill"), &version("0.1.9"))
-        .unwrap();
+    let later = quill_s_installation(&root.path().join("later"));
     let entry = serve::publish_files(&server, &tree, &version("0.2.0"), &platform());
     let list = files::fetch_bundle(&agent, &entry, &version("0.2.0"), &platform()).unwrap();
     let blobs = later.downloads().join("blobs");
@@ -886,16 +892,19 @@ fn the_installation_is_newen_s_or_quill_s_until_moved() {
     }
 }
 
-/// A bundle's program is Newen's when it has one, else quill's, on every system.
+/// A bundle's program is Newen's, or quill's when it has only that one, on every system.
 #[test]
-fn a_bundle_s_program_is_newen_s_when_it_has_one() {
-    use crate::install::{program_in, NEWEN_PROGRAM, PROGRAM};
+fn a_bundle_s_program_is_newen_s_or_quill_s_when_it_has_only_that() {
+    use crate::install::{program_in, LEGACY_PROGRAM, PROGRAM};
     let folder = tempfile::tempdir().unwrap();
     assert_eq!(program_in(folder.path()), folder.path().join(PROGRAM));
-    std::fs::write(folder.path().join(PROGRAM), "quill").unwrap();
+    std::fs::write(folder.path().join(LEGACY_PROGRAM), "quill").unwrap();
+    assert_eq!(
+        program_in(folder.path()),
+        folder.path().join(LEGACY_PROGRAM)
+    );
+    std::fs::write(folder.path().join(PROGRAM), "newen").unwrap();
     assert_eq!(program_in(folder.path()), folder.path().join(PROGRAM));
-    std::fs::write(folder.path().join(NEWEN_PROGRAM), "newen").unwrap();
-    assert_eq!(program_in(folder.path()), folder.path().join(NEWEN_PROGRAM));
 }
 
 #[cfg(target_os = "linux")]
@@ -956,11 +965,11 @@ fn a_start_counts_its_trial_rolls_back_after_two_and_else_activates_what_is_newe
     );
     assert_eq!(
         staged_path("windows", root, &at),
-        Path::new("/apps/quill.exe.0.1.9.new")
+        Path::new("/apps/newen.exe.0.1.9.new")
     );
     assert_eq!(
         staged_path("macos", root, &at),
-        Path::new("/apps/.quill.app.0.1.9")
+        Path::new("/apps/.Newen.app.0.1.9")
     );
 }
 
@@ -972,12 +981,12 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     bundle(&folder.path().join("bundle"), &elf("2.0.0"), "2.0.0");
     let built = tar_gz(
         &folder.path().join("bundle"),
-        &folder.path().join("quill-x86_64-linux.tar.gz"),
+        &folder.path().join("newen-x86_64-linux.tar.gz"),
     );
     let server = serve(0).unwrap();
-    server.put("/quill-x86_64-linux.tar.gz", built.clone());
+    server.put("/newen-x86_64-linux.tar.gz", built.clone());
     let linux = artifact(
-        &format!("{}/quill-x86_64-linux.tar.gz", server.base()),
+        &format!("{}/newen-x86_64-linux.tar.gz", server.base()),
         &built,
     );
     publish(
@@ -1419,7 +1428,7 @@ fn installed_and_next(folder: &std::path::Path) -> (Install, std::path::PathBuf)
     bundle(&one, &elf("1.0.0"), "same");
     let install = Install::at(folder.join("app"));
     install
-        .adopt(&one.join("quill"), &version("1.0.0"))
+        .adopt(&one.join("newen"), &version("1.0.0"))
         .unwrap();
     let two = folder.join("two");
     bundle(&two, &elf("2.0.0"), "same");
@@ -1461,7 +1470,10 @@ fn a_bundle_is_staged_from_local_files_and_only_the_changed_blobs() {
     })
     .unwrap();
     assert_eq!(staged, install.root().join("versions/2.0.0"));
-    assert_eq!(tree(&staged), tree(&two));
+    // With the link to `newen` launchers quill's users made start.
+    let mut released = tree(&two);
+    released.insert("quill".into(), (b"newen".to_vec(), 0));
+    assert_eq!(tree(&staged), released);
     // The program and the new file came; CEF's files and the locale did not.
     let fetched: Vec<String> = (server.requests().into_iter())
         .map(|(path, _)| path)
@@ -1471,14 +1483,14 @@ fn a_bundle_is_staged_from_local_files_and_only_the_changed_blobs() {
         let file = bundle.files.iter().find(|file| file.path == path).unwrap();
         (format!("/{}", files::blob_name(&file.sha256)), file.packed)
     };
-    let (quill, data) = (blob_of("quill"), blob_of("extra/data.bin"));
-    let mut expected = vec![quill.0.clone(), data.0.clone()];
+    let (newen, data) = (blob_of("newen"), blob_of("extra/data.bin"));
+    let mut expected = vec![newen.0.clone(), data.0.clone()];
     expected.sort();
     let mut fetched_sorted = fetched.clone();
     fetched_sorted.sort();
     assert_eq!(fetched_sorted, expected);
     // Progress counts the bytes downloaded, not the bundle.
-    assert_eq!(told.last(), Some(&(quill.1 + data.1, quill.1 + data.1)));
+    assert_eq!(told.last(), Some(&(newen.1 + data.1, newen.1 + data.1)));
     let inode = |path: std::path::PathBuf| std::fs::metadata(path).unwrap().ino();
     assert_eq!(
         inode(install.root().join("current/libcef.so")),
@@ -1500,14 +1512,14 @@ fn a_bad_blob_stages_nothing() {
     let entry = serve::publish_files(&server, &two, &version("2.0.0"), "linux-x86_64");
     let agent = agent();
     let bundle = files::fetch_bundle(&agent, &entry, &version("2.0.0"), "linux-x86_64").unwrap();
-    let quill = bundle
+    let newen = bundle
         .files
         .iter()
-        .find(|file| file.path == "quill")
+        .find(|file| file.path == "newen")
         .unwrap();
-    let name = files::blob_name(&quill.sha256);
+    let name = files::blob_name(&newen.sha256);
     // The same size, other bytes: a valid gzip of something else would do the same.
-    server.put(&format!("/{name}"), vec![0x1f; quill.packed as usize]);
+    server.put(&format!("/{name}"), vec![0x1f; newen.packed as usize]);
     let blobs = install.downloads().join("blobs");
     assert_eq!(
         files::stage(&agent, &install, &bundle, &blobs, |_, _| true),
@@ -1516,7 +1528,7 @@ fn a_bad_blob_stages_nothing() {
     assert!(!install.root().join("versions/2.0.0").exists());
     assert!(!blobs.join(&name).exists());
     // A blob larger than listed is cut off and refused before it is unpacked.
-    server.put(&format!("/{name}"), vec![0; quill.packed as usize + 10]);
+    server.put(&format!("/{name}"), vec![0; newen.packed as usize + 10]);
     assert_eq!(
         files::stage(&agent, &install, &bundle, &blobs, |_, _| true),
         Err(Error::Digest)

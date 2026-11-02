@@ -45,7 +45,7 @@ pub struct Bundle {
 /// One file, and where its blob is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct File {
-    /// Relative, `/` between folders, as the archive holds it (macOS: `quill.app/…`).
+    /// Relative, `/` between folders, as the archive holds it (macOS: `Newen.app/…`).
     pub path: String,
     pub size: u64,
     /// Of the file itself, lowercase hex.

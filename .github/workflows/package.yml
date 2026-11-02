@@ -1,4 +1,4 @@
-# The bundles a release ships, one per platform (docs/UPDATES.md): quill with the CEF it was
+# The bundles a release ships, one per platform (docs/UPDATES.md): Newen with the CEF it was
 # built against. release.yml calls it for a tag (macOS signed and notarized). Run alone, on a
 # pull request that touches packaging or by hand, it shows the bundles come out: macOS is then
 # signed when the secrets are there (else ad hoc) and never notarized.
@@ -74,19 +74,19 @@ jobs:
       - run: cargo build --release --locked -p newen
       - run: scripts/package.sh linux target/release dist
       # The libraries it needs at run time, in the log (docs/UPDATES.md#linux).
-      - run: ldd dist/quill/quill
+      - run: ldd dist/newen/newen
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: quill-linux
-          path: dist/quill-x86_64-linux.tar.gz
+          name: newen-linux
+          path: dist/newen-x86_64-linux.tar.gz
           compression-level: 0
           if-no-files-found: error
 
   windows:
     name: Windows x86_64
-    # A release builds it once the owner sets the repository variable QUILL_WINDOWS_RELEASES to
+    # A release builds it once the owner sets the repository variable NEWEN_WINDOWS_RELEASES to
     # "true" (docs/UPDATES.md#windows); a pull request or a run by hand always does.
-    if: ${{ !inputs.release || vars.QUILL_WINDOWS_RELEASES == 'true' }}
+    if: ${{ !inputs.release || vars.NEWEN_WINDOWS_RELEASES == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 120
     defaults:
@@ -126,26 +126,26 @@ jobs:
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: build
         env:
-          # The C runtime inside quill.exe, so no Visual C++ Redistributable has to be installed
+          # The C runtime inside newen.exe, so no Visual C++ Redistributable has to be installed
           # (CEF's wrapper is built against the static one too); with --target it reaches only
           # the program, not build scripts.
           RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release --locked --target x86_64-pc-windows-msvc -p newen
       - run: scripts/package.sh windows target/x86_64-pc-windows-msvc/release dist
-      # Its entries flat at the root: quill.exe beside CEF's files.
-      - run: cd dist/quill && 7z a -tzip -mx=9 ../quill-x86_64-windows.zip -- *
+      # Its entries flat at the root: newen.exe beside CEF's files.
+      - run: cd dist/newen && 7z a -tzip -mx=9 ../newen-x86_64-windows.zip -- *
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: quill-windows
-          path: dist/quill-x86_64-windows.zip
+          name: newen-windows
+          path: dist/newen-x86_64-windows.zip
           compression-level: 0
           if-no-files-found: error
 
   macos:
     name: macOS arm64
-    # A release builds it once the owner sets the repository variable QUILL_MACOS_RELEASES to
+    # A release builds it once the owner sets the repository variable NEWEN_MACOS_RELEASES to
     # "true" and the signing secrets (docs/UPDATES.md#macos); a pull request always does.
-    if: ${{ !inputs.release || vars.QUILL_MACOS_RELEASES == 'true' }}
+    if: ${{ !inputs.release || vars.NEWEN_MACOS_RELEASES == 'true' }}
     runs-on: macos-15
     timeout-minutes: 150
     env:
@@ -176,7 +176,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
-      # quill and the helper apps' program (quill-helper).
+      # Newen and the helper apps' program (newen-helper).
       - run: cargo build --release --locked --target aarch64-apple-darwin -p newen -p newen-browser --bins
       - run: scripts/package.sh macos target/aarch64-apple-darwin/release dist
       - name: sign
@@ -205,7 +205,7 @@ jobs:
           else
             sign=(--sign - --timestamp=none)
           fi
-          app=dist/quill.app
+          app=dist/Newen.app
           framework="$app/Contents/Frameworks/Chromium Embedded Framework.framework"
           entitlements=apps/newen/assets/quill.entitlements
           # From the inside out: the framework's libraries, the framework, the helpers, quill.
@@ -225,7 +225,7 @@ jobs:
           API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/key.p8"
-          ditto -c -k --keepParent dist/quill.app "$RUNNER_TEMP/notarize.zip"
+          ditto -c -k --keepParent dist/Newen.app "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$RUNNER_TEMP/key.p8" \
             --key-id "$API_KEY_ID" --issuer "$API_ISSUER" --wait --timeout 60m \
             --output-format json | tee "$RUNNER_TEMP/notary.json"
@@ -233,18 +233,18 @@ jobs:
           status=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["status"])' \
             "$RUNNER_TEMP/notary.json")
           if [ "$status" != Accepted ]; then
-            echo "Apple did not accept quill.app; its log: xcrun notarytool log <id>" >&2
+            echo "Apple did not accept Newen.app; its log: xcrun notarytool log <id>" >&2
             exit 1
           fi
-          xcrun stapler staple dist/quill.app
-          spctl --assess --type execute --verbose=2 dist/quill.app
+          xcrun stapler staple dist/Newen.app
+          spctl --assess --type execute --verbose=2 dist/Newen.app
       # Its attributes in __MACOSX/, which ditto -x restores and the list of files leaves out:
       # every file in the bundle is then one of the bundle.
-      - run: ditto -c -k --sequesterRsrc --keepParent dist/quill.app dist/quill-aarch64-macos.zip
+      - run: ditto -c -k --sequesterRsrc --keepParent dist/Newen.app dist/newen-aarch64-macos.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: quill-macos
-          path: dist/quill-aarch64-macos.zip
+          name: newen-macos
+          path: dist/newen-aarch64-macos.zip
           compression-level: 0
           if-no-files-found: error
       - name: forget the signing keychain

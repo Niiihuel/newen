@@ -1,8 +1,8 @@
-//! quill's own updates (`docs/UPDATES.md`).
+//! Newen's own updates (`docs/UPDATES.md`).
 //!
-//! Every release publishes `quill-update.json`, a manifest of its version, notes, the oldest
+//! Every release publishes `newen-update.json`, a manifest of its version, notes, the oldest
 //! version still accepted (`minimum_version`), one artifact per platform (address, size,
-//! SHA-256) and one list of files per platform ([`files`]), and `quill-update.json.sig`, the
+//! SHA-256) and one list of files per platform ([`files`]), and `newen-update.json.sig`, the
 //! Ed25519 signature of those exact bytes in base64 (`.sigs`, more signatures, one a line, for
 //! a key rotation). The public halves of the release key and of an offline backup key are
 //! compiled in (`release-key.pub`, `backup-key.pub`); a manifest signed by either is trusted.
@@ -11,10 +11,9 @@
 //!
 //! A check reads the latest release of [`REPOSITORIES`], which are public, at their download
 //! addresses (not GitHub's API, so no token and no API rate limit); a feed at a base address
-//! (`QUILL_UPDATE_FEED`, for the tests) the same way. Newen, quill's next name, publishes
-//! `newen-update.json` from `Niiihuel/newen`: both are looked for first (docs/UPDATES.md, «El
-//! paso a Newen»). The signature is verified
-//! before the JSON is read, and an artifact is installed only once its size and digest match
+//! (`QUILL_UPDATE_FEED`, for the tests) the same way. quill's releases, `quill-update.json` from
+//! `Niiihuel/quill`, are looked for after Newen's (docs/UPDATES.md, «Venir de quill»). The
+//! signature is verified before the JSON is read, and an artifact is installed only once its size and digest match
 //! what was signed ([`install`]). Network, disk and every wait run on the caller's thread:
 //! never the interface's.
 
@@ -41,22 +40,22 @@ pub use semver::Version;
 
 /// This program's version: the workspace's, which a release's tag matches.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The repositories releases are read from, in turn: Newen's, the name quill's repository is
-/// renamed to, then quill's own. Public, so read with no token.
+/// The repositories releases are read from, in turn: Newen's, then quill's, the name it had
+/// (renamed, GitHub sends it on to Newen's). shortcut: quill's goes once every copy reads
+/// Newen's first, a release cycle after 0.2.0. Public, so read with no token.
 pub const REPOSITORIES: [&str; 2] = ["Niiihuel/newen", "Niiihuel/quill"];
-/// The manifest's name in quill's releases: the one copies up to 0.1.8 look for.
-pub const MANIFEST: &str = "quill-update.json";
-pub const SIGNATURE: &str = "quill-update.json.sig";
-/// More signatures of the manifest, one a line: a rotation's new keys sign here. Copies up to
-/// 0.1.8 read only [`SIGNATURE`], which keeps one line.
-pub const SIGNATURES: &str = "quill-update.json.sigs";
-/// The manifest's name in Newen's releases, looked for before [`MANIFEST`]; its signatures are
-/// beside it the same way (`.sig`, `.sigs`).
-pub const NEWEN_MANIFEST: &str = "newen-update.json";
-/// What every manifest of quill names as its product and channel.
-pub const PRODUCT: &str = "quill";
-/// Newen's manifests may name it as their product: it is quill renamed.
-pub const NEWEN_PRODUCT: &str = "newen";
+/// The manifest's name in a release.
+pub const MANIFEST: &str = "newen-update.json";
+pub const SIGNATURE: &str = "newen-update.json.sig";
+/// More signatures of the manifest, one a line: a rotation's new keys sign here.
+pub const SIGNATURES: &str = "newen-update.json.sigs";
+/// The manifest's name in quill's releases (up to 0.1.9), looked for after [`MANIFEST`]; its
+/// signatures are beside it the same way (`.sig`, `.sigs`).
+pub const LEGACY_MANIFEST: &str = "quill-update.json";
+/// What every manifest of Newen names as its product and channel.
+pub const PRODUCT: &str = "newen";
+/// quill's manifests name it as their product: Newen is quill renamed.
+pub const LEGACY_PRODUCT: &str = "quill";
 pub const CHANNEL: &str = "stable";
 /// The word in an annotated tag's message that makes its version mandatory.
 pub const MANDATORY_WORD: &str = "mandatory";
@@ -121,7 +120,7 @@ pub struct Manifest {
 }
 
 impl Default for Manifest {
-    /// An empty release 0.0.0 of quill's stable channel.
+    /// An empty release 0.0.0 of Newen's stable channel.
     fn default() -> Self {
         Self {
             version: Version::new(0, 0, 0),
@@ -206,7 +205,7 @@ impl Error {
             Self::Incomplete => "The download is incomplete: it resumes when retried.".into(),
             Self::Digest => "The download does not match what was signed: it was deleted.".into(),
             Self::Disk => "Could not write the update to disk.".into(),
-            Self::NotInstalled => "This copy of quill was not installed with quill --install: update it from where you built it.".into(),
+            Self::NotInstalled => "This copy of Newen was not installed with newen --install: update it from where you built it.".into(),
             Self::Replayed => "The update server offered an older release than one it offered before: nothing was installed.".into(),
             Self::Expired => "The update's description has expired: nothing was installed.".into(),
             Self::Foreign => "The update is not one of quill's stable releases: nothing was installed.".into(),
@@ -341,10 +340,11 @@ impl Trust {
     }
 }
 
-/// `manifest`, verified, is quill's (or Newen's) stable channel, not lower than `sequence` and
+/// `manifest`, verified, is Newen's (or quill's) stable channel, not lower than `sequence` and
 /// not expired at `now` (seconds since 1970).
 pub fn admit(manifest: &Manifest, sequence: u64, now: u64) -> Result<(), Error> {
-    if ![PRODUCT, NEWEN_PRODUCT].contains(&manifest.product.as_str()) || manifest.channel != CHANNEL
+    if ![PRODUCT, LEGACY_PRODUCT].contains(&manifest.product.as_str())
+        || manifest.channel != CHANNEL
     {
         return Err(Error::Foreign);
     }
@@ -546,7 +546,7 @@ pub fn check(agent: &ureq::Agent, source: &Source, trust: &Trust) -> Result<Mani
 /// then quill's. Only a 404 moves on to the next; anything else is the answer.
 fn find_manifest(agent: &ureq::Agent, source: &Source) -> Result<(String, Vec<u8>), Error> {
     for base in &source.bases {
-        for name in [NEWEN_MANIFEST, MANIFEST] {
+        for name in [MANIFEST, LEGACY_MANIFEST] {
             let url = format!("{base}/{name}");
             match fetch(agent, &url, MAX_MANIFEST) {
                 Err(Error::Status(404)) => {}
@@ -649,14 +649,16 @@ pub fn download(
     mut progress: impl FnMut(u64, u64) -> bool,
 ) -> Result<PathBuf, Error> {
     let digest = artifact.sha256.to_ascii_lowercase();
-    let done = folder.join(format!("quill-{digest}"));
-    let part = folder.join(format!("quill-{digest}.part"));
+    let done = folder.join(format!("newen-{digest}"));
+    let part = folder.join(format!("newen-{digest}.part"));
     std::fs::create_dir_all(folder).map_err(disk)?;
-    // Another release's download, done or partial, is never resumed: it goes.
+    // Another release's download, done or partial, is never resumed: it goes (quill's too).
     for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with("quill-") && !name.starts_with(&format!("quill-{digest}")) {
+        if (name.starts_with("newen-") || name.starts_with("quill-"))
+            && !name.starts_with(&format!("newen-{digest}"))
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
