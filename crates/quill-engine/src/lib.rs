@@ -8,7 +8,7 @@ use quill_model::{
     SessionId, SessionStatus, WaitOutcome,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 mod auth;
@@ -131,21 +131,33 @@ pub struct Config {
 impl Config {
     /// Sessions kept in `$XDG_DATA_HOME/quill/quill.db` (`~/.local/share/quill` without it).
     pub fn default_database() -> Self {
-        let data = quill_files::data_dir().unwrap_or_else(|| ".".into());
-        let config = quill_files::config_dir().unwrap_or_else(|| ".".into());
+        Self::under(
+            &quill_files::data_dir().unwrap_or_else(|| ".".into()),
+            &quill_files::config_dir().unwrap_or_else(|| ".".into()),
+        )
+    }
+
+    /// [`Self::default_database`] with the data folder `data` and the settings folder
+    /// `config`: quill's own folder in each ([`quill_files::own_dir`], Newen's once Newen moved
+    /// it), and in it Newen's `newen.db` when it renamed the database, else `quill.db`.
+    pub fn under(data: &Path, config: &Path) -> Self {
+        let (data, config) = (quill_files::own_dir(data), quill_files::own_dir(config));
+        let database = Some(data.join("newen.db"))
+            .filter(|newen| newen.is_file())
+            .unwrap_or_else(|| data.join("quill.db"));
         Self {
-            database: Some(data.join("quill/quill.db")),
-            snapshots: Some(data.join("quill/snapshots")),
-            settings: Some(config.join("quill/settings.json")),
-            logos: Some(data.join("quill/logos")),
-            pictures: Some(data.join("quill/pictures")),
-            avatars: Some(data.join("quill/avatars")),
-            browser: Some(data.join("quill/browser")),
-            extensions: Some(config.join("quill/extensions.json")),
+            database: Some(database),
+            snapshots: Some(data.join("snapshots")),
+            settings: Some(config.join("settings.json")),
+            logos: Some(data.join("logos")),
+            pictures: Some(data.join("pictures")),
+            avatars: Some(data.join("avatars")),
+            browser: Some(data.join("browser")),
+            extensions: Some(config.join("extensions.json")),
             updates: true,
-            whats_new: Some(data.join("quill/whats-new")),
-            update_log: Some(data.join("quill/updates.log")),
-            codecs: Some(data.join("quill/codecs")),
+            whats_new: Some(data.join("whats-new")),
+            update_log: Some(data.join("updates.log")),
+            codecs: Some(data.join("codecs")),
             open_pages: true,
             ..Self::default()
         }
@@ -4676,6 +4688,70 @@ fn waives_server_consent(agent: Option<&str>, mode: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quill started after going back from Newen finds what Newen moved: `newen/` in the data
+    /// and settings folders, with `quill/` left as a link to it or not at all, and the database
+    /// renamed `newen.db` or not; before Newen, `quill/` and `quill.db`.
+    #[test]
+    fn the_folders_and_the_database_newen_moved_are_found() {
+        let base = tempfile::tempdir().unwrap();
+        let (data, config) = (base.path().join("data"), base.path().join("config"));
+        let under = || Config::under(&data, &config);
+        let paths = |config: &Config| (config.database.clone(), config.settings.clone());
+        // Before Newen, or never moved.
+        std::fs::create_dir_all(data.join("quill")).unwrap();
+        std::fs::create_dir_all(config.join("quill")).unwrap();
+        assert_eq!(
+            paths(&under()),
+            (
+                Some(data.join("quill/quill.db")),
+                Some(config.join("quill/settings.json"))
+            )
+        );
+        assert_eq!(under().update_log, Some(data.join("quill/updates.log")));
+        // Moved by Newen, the database not renamed (yet), and no links left.
+        std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
+        std::fs::rename(config.join("quill"), config.join("newen")).unwrap();
+        let store = quill_store::Store::open(&data.join("newen/quill.db")).unwrap();
+        store.mark("written", "by quill").unwrap();
+        drop(store);
+        let moved = (
+            Some(data.join("newen/quill.db")),
+            Some(config.join("newen/settings.json")),
+        );
+        assert_eq!(paths(&under()), moved);
+        // Renamed `newen.db`: that is the one opened, with what was kept in it.
+        std::fs::rename(data.join("newen/quill.db"), data.join("newen/newen.db")).unwrap();
+        let renamed = (
+            Some(data.join("newen/newen.db")),
+            Some(config.join("newen/settings.json")),
+        );
+        assert_eq!(paths(&under()), renamed);
+        let store = quill_store::Store::open(under().database.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            store.marked("written").unwrap().as_deref(),
+            Some("by quill")
+        );
+        for (folder, path) in [
+            (&under().snapshots, "snapshots"),
+            (&under().pictures, "pictures"),
+            (&under().browser, "browser"),
+            (&under().whats_new, "whats-new"),
+            (&under().update_log, "updates.log"),
+        ] {
+            assert_eq!(
+                folder.as_deref(),
+                Some(data.join("newen").join(path).as_path())
+            );
+        }
+        // With `quill/` left as a link to `newen/`: the same.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("newen", data.join("quill")).unwrap();
+            std::os::unix::fs::symlink("newen", config.join("quill")).unwrap();
+            assert_eq!(paths(&under()), renamed);
+        }
+    }
 
     /// A router of eight busy sessions, with every event it tells kept.
     fn router() -> (Router, Arc<Mutex<Vec<Event>>>) {

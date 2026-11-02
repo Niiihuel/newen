@@ -52,6 +52,19 @@ const BUNDLE: &str = "quill.app";
 #[cfg(target_os = "macos")]
 const NEWEN_BUNDLE: &str = "Newen.app";
 
+/// Linux: the installation in the data folder `data`, `quill/app`; `newen/app` when Newen,
+/// quill's next name, moved it there, so a quill started after going back from Newen updates
+/// where it runs.
+#[cfg(any(test, not(any(windows, target_os = "macos"))))]
+pub(crate) fn app_root(data: &Path) -> PathBuf {
+    let newen = data.join("newen/app");
+    if newen.is_dir() {
+        newen
+    } else {
+        data.join("quill/app")
+    }
+}
+
 /// The program in `dir`, a bundle's folder: Newen's when it is there, else quill's.
 pub(crate) fn program_in(dir: &Path) -> PathBuf {
     let newen = dir.join(NEWEN_PROGRAM);
@@ -81,8 +94,9 @@ pub struct Install {
 
 impl Install {
     /// `QUILL_UPDATE_ROOT` when set (a test installation), or this person's:
-    /// `$XDG_DATA_HOME/quill/app` on Linux, `%LOCALAPPDATA%\Programs\quill` on Windows, and on
-    /// macOS the folder holding the `quill.app` this program runs from, else `~/Applications`.
+    /// `$XDG_DATA_HOME/quill/app` on Linux ([`app_root`]), `%LOCALAPPDATA%\Programs\quill` on
+    /// Windows, and on macOS the folder holding the `quill.app` this program runs from, else
+    /// `~/Applications`.
     pub fn locate() -> Option<Self> {
         if let Some(root) = std::env::var_os("QUILL_UPDATE_ROOT").filter(|root| !root.is_empty()) {
             return Some(Self::at(root));
@@ -105,14 +119,14 @@ impl Install {
             .map(Path::to_path_buf)
             .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join("Applications")))?;
         #[cfg(not(any(windows, target_os = "macos")))]
-        let root = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|base| base.is_absolute())
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-            })?
-            .join("quill")
-            .join("app");
+        let root = app_root(
+            &std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|base| base.is_absolute())
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+                })?,
+        );
         Some(Self::at(root))
     }
 

@@ -370,6 +370,19 @@ pub fn config_dir() -> Option<PathBuf> {
     app_dir("XDG_CONFIG_HOME", ".config", "APPDATA")
 }
 
+/// quill's own folder in `base`, its [`data_dir`] or [`config_dir`]: `newen/` when it is there,
+/// else `quill/`. Newen, quill's next name, moves the folders there; a quill started after
+/// going back from Newen finds its sessions and settings in them (docs/UPDATES.md, «El paso a
+/// Newen»).
+pub fn own_dir(base: &Path) -> PathBuf {
+    let newen = base.join("newen");
+    if newen.is_dir() {
+        newen
+    } else {
+        base.join("quill")
+    }
+}
+
 fn app_dir(xdg: &str, linux: &str, windows: &str) -> Option<PathBuf> {
     if cfg!(windows) {
         return std::env::var_os(windows).map(PathBuf::from);

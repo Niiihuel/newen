@@ -861,6 +861,29 @@ fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
     );
 }
 
+/// On Linux the installation is `quill/app` in the data folder, and `newen/app` once Newen
+/// moved it there, with or without `quill/` left as a link to it.
+#[test]
+fn the_installation_is_found_where_newen_moved_it() {
+    use crate::install::app_root;
+    let data = tempfile::tempdir().unwrap();
+    let data = data.path();
+    assert_eq!(app_root(data), data.join("quill/app"));
+    std::fs::create_dir_all(data.join("quill/app/versions")).unwrap();
+    assert_eq!(app_root(data), data.join("quill/app"));
+    // Newen's folder without an installation in it is not one.
+    std::fs::create_dir_all(data.join("newen")).unwrap();
+    assert_eq!(app_root(data), data.join("quill/app"));
+    std::fs::remove_dir(data.join("newen")).unwrap();
+    std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
+    assert_eq!(app_root(data), data.join("newen/app"));
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("newen", data.join("quill")).unwrap();
+        assert_eq!(app_root(data), data.join("newen/app"));
+    }
+}
+
 /// A bundle's program is Newen's when it has one, else quill's, on every system.
 #[test]
 fn a_bundle_s_program_is_newen_s_when_it_has_one() {
