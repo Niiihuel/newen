@@ -36,7 +36,7 @@ impl Bridge {
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join(format!("quill-{}", std::process::id()));
+        let dir = base.join(format!("newen-{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok()?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
         let socket = dir.join("browser.sock");

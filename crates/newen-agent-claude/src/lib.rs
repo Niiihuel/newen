@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// The PostToolUse hook quill registers: each call reports a tool's end with its prompt.
-const POST_TOOL_HOOK: &str = "quill_post_tool";
+const POST_TOOL_HOOK: &str = "newen_post_tool";
 
 /// Permission modes the CLI accepts at launch (`auto` stays out of the MVP, spec.md §6).
 const MODES: [&str; 3] = ["default", "acceptEdits", "plan"];
