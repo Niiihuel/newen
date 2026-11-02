@@ -9163,3 +9163,67 @@ fn an_open_group_folds_from_a_chevron_at_its_end() {
     let frame = UiTree::new(view(&store, &ui, window)).layout(window);
     assert!(region(&frame, &fold).is_none());
 }
+
+/// The browser's address shows its whole line, in the middle of its field, in the stand-in
+/// measure and in the fonts the app lays text out in.
+#[test]
+fn the_browser_address_shows_its_whole_line() {
+    use quill_model::{BrowserTab, BrowserUpdate};
+    let (mut store, mut ui) = store_with_session();
+    let tabs = Event::Browser {
+        session: 1,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 3,
+                url: "https://code.claude.com/docs/en/overview".into(),
+                title: "Overview".into(),
+                ..Default::default()
+            }],
+            active: Some(3),
+        },
+    };
+    ui.applied(&tabs);
+    store.apply(tabs);
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    for laid_out in [false, true] {
+        let mut tree = UiTree::new(view(&store, &ui, window));
+        tree.set_text_layout(laid_out);
+        let frame = tree.layout(window);
+        let field = region(&frame, view::BROWSER_URL).expect("the address");
+        let mut clips = vec![];
+        let mut drawn = vec![];
+        for command in &frame.commands {
+            match command {
+                limn::DrawCommand::PushClip(rect) => clips.push(*rect),
+                limn::DrawCommand::PopClip => {
+                    clips.pop();
+                }
+                limn::DrawCommand::Text {
+                    text,
+                    position,
+                    font_size,
+                    ..
+                } if text.contains("claude.com") => {
+                    drawn.push((position.y, *font_size, clips.last().copied()))
+                }
+                limn::DrawCommand::Glyphs(run) if run.text.contains("claude.com") => {
+                    drawn.push((run.origin.y, run.size, clips.last().copied()))
+                }
+                _ => {}
+            }
+        }
+        assert!(!drawn.is_empty(), "{laid_out}: the address is drawn");
+        for (top, size, clip) in drawn {
+            let line = 18.0 * size / 14.0;
+            let clip = clip.expect("clipped to its field");
+            assert!(clip.height >= line - 0.5, "{laid_out}: {clip:?}");
+            assert!(clip.y >= field.y && clip.y + clip.height <= field.y + field.height);
+            let middle = top + line / 2.0 - field.y;
+            assert!(
+                (middle - field.height / 2.0).abs() < 1.0,
+                "{laid_out}: {middle}"
+            );
+        }
+    }
+}
