@@ -9858,12 +9858,15 @@ fn a_thumbnail_s_card_does_not_outlive_the_viewer() {
     };
     let frame = press(&mut tree, &mut ui, center);
     assert!(ui.viewer.is_some(), "the viewer opened");
-    let close = region(&frame, view::IMAGE_CLOSE).expect("its close");
-    let frame = press(
-        &mut tree,
-        &mut ui,
-        limn::Point::new(close.x + close.width / 2.0, close.y + close.height / 2.0),
-    );
+    // Closed as a person does, through the tree, the pointer gone from the thumbnail (to the
+    // viewer's corner, where its close is): Esc, since a press on the picture zooms it.
+    let _ = frame;
+    tree.handle_event(limn::UiEvent::PointerMove(limn::Point::new(1380.0, 30.0)));
+    for action in tree.handle_event(key(limn::Key::Escape)) {
+        update(&store, &mut ui, &action);
+    }
+    tree.set_root(view(&store, &ui, window));
+    let frame = tree.layout(window);
     assert!(ui.viewer.is_none(), "the viewer closed");
     assert!(
         painted(&frame, "2 of 2").is_none(),
