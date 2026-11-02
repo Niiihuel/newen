@@ -129,10 +129,45 @@ Lo que la persona ve, como lo muestra Claude Desktop y con las palabras de quill
   el medio no se muestra; el texto se desplaza dentro de la tarjeta y los botones quedan
   siempre visibles.
 
-**Video.** El formato ya admite un video (`webm`) con su `poster`. Hasta que limn tenga un
-componente de video (rama `feat/video` de limn, sin integrar todavía), la tarjeta muestra el
-`poster`: `quill_model::Media::Video { poster, clip }` y `whats_new::picture` en
-`crates/quill-ui` son la costura donde se conecta.
+### Videos y el códec de Cisco
+
+Un anuncio puede traer un clip MP4 (H.264 Constrained Baseline, 1280 × 720 y 30 fps como
+mucho; ver la guía de `limn-video`, «Clips») con su `poster`. Se reproduce con `limn::Video`,
+sin sonido y en bucle, con el botón ▶/❚❚ de limn; con «reducir movimiento» queda en pausa
+sobre el `poster`. Sin códec, o si el clip no se puede leer, se ve el `poster` solo, sin
+botón.
+
+El códec es **OpenH264 de Cisco**, el binario que Cisco compila y distribuye: su licencia de
+patentes H.264 lo cubre sólo si quill cumple sus condiciones, que están completas en
+`licenses/openh264/BINARY_LICENSE.txt`:
+
+- **quill nunca lo trae ni lo baja solo.** La primera vez que una tarjeta tiene un clip, abajo
+  del medio pregunta «Play videos in What's new — downloads the OpenH264 video codec from
+  Cisco.», con el aviso de Cisco y **Download** / **Not now**. *Not now* no vuelve a
+  preguntar en la tarjeta. La respuesta se guarda en `settings.json` (`video_codec`) antes de
+  que el motor baje nada (test `the_video_codec_is_fetched_only_after_a_yes_that_is_kept_first`).
+- **La persona lo prende, apaga y vuelve a prender** en Ajustes › Sistema › Updates › «Play
+  videos in What's new», con el aviso «OpenH264 Video Codec provided by Cisco Systems, Inc.»
+  al lado y el estado (bajando, o por qué falló). **Apagado, el archivo se borra**; prenderlo
+  de nuevo lo vuelve a bajar.
+- **La licencia de Cisco** está en Ajustes › Sistema › quill › Licenses, entera (bajada de
+  https://www.openh264.org/BINARY_LICENSE.txt, ver `licenses/openh264/SOURCE.txt`).
+
+Con el sí, el motor (`crates/quill-engine/src/codec.rs`, fuera del hilo de la interfaz) baja
+el `.bz2` de esta plataforma directo de `ciscobinary.openh264.org` por HTTPS (la versión, la
+dirección, el nombre y el SHA-256 los da `limn_video::cisco::current()`, que el programa le
+pasa al motor), lo descomprime (`bzip2`, en Rust puro), compara el SHA-256 con el de la release
+y lo guarda, escrito al lado y renombrado, en
+`~/.local/share/quill/codecs/openh264/2.6.0/<archivo>`. Lo que no coincide no se escribe. Al
+arrancar con el sí ya dado, sólo comprueba el archivo que está. El programa lo carga con
+`Codec::load` en otro hilo, que vuelve a comprobar el SHA-256; si no carga, lo dice en el log y
+el clip queda en su `poster`. El reproductor se crea al abrir la tarjeta y se suelta al
+cerrarla; sólo pide repintar mientras el clip se reproduce a la vista.
+
+**libstdc++.** En Linux, la biblioteca de Cisco necesita `libstdc++.so.6` al cargarse; las
+distribuciones de escritorio la traen. En NixOS no está en una ruta estándar: `shell.nix` la
+suma a `LD_LIBRARY_PATH` (`stdenv.cc.cc.lib`), y quien arranque quill de otra forma tiene que
+darla (por ejemplo con `nix-ld`). Sin ella, los clips muestran el `poster`.
 
 ### El formato
 
@@ -155,7 +190,7 @@ campos que no conoce, y `Manifest` no los rechaza):
     "body": "Open any page next to the session.",
     "bullets": ["…"],
     "media": [
-      { "kind": "video", "url": ".../whats-new-browser.webm", "size": 812345, "sha256": "…",
+      { "kind": "video", "url": ".../whats-new-browser.mp4", "size": 812345, "sha256": "…",
         "poster": { "url": ".../whats-new-browser.png", "size": 183402, "sha256": "…" } },
       { "kind": "image", "url": ".../whats-new-browser.png", "size": 183402, "sha256": "…" }
     ],
@@ -197,7 +232,7 @@ Junto al cambio de versión, en el repositorio:
 ```text
 release/notes/0.2.0.toml
 release/media/0.2.0/browser.png
-release/media/0.2.0/browser.webm
+release/media/0.2.0/browser.mp4
 ```
 
 ```toml
@@ -213,7 +248,7 @@ bullets = ["Pages keep their sign-ins"]
 try_it = "browser"
 
 [[announcement.media]]           # un video: file y su poster
-file = "browser.webm"
+file = "browser.mp4"
 poster = "browser.png"
 
 [[announcement.media]]           # una imagen: file solo
@@ -473,7 +508,9 @@ deja la lista exacta en el log de cada release.
 **inferido** de cómo rune lo documenta, no probado con quill: la salida es
 compilar desde el código en `nix-shell` (y entonces esa copia no se actualiza
 sola) o usar [`nix-ld`](https://github.com/nix-community/nix-ld) con las mismas
-bibliotecas.
+bibliotecas. Para los videos de las novedades hace falta además `libstdc++.so.6`
+(`stdenv.cc.cc.lib`), que `shell.nix` ya suma (ver [Videos y el códec de
+Cisco](#videos-y-el-códec-de-cisco)).
 
 ## Portabilidad y CI
 
