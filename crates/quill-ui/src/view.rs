@@ -41,6 +41,8 @@ const PREVIEW_HEIGHT: f32 = 240.0;
 const CARD_HEIGHT: f32 = 84.0;
 
 pub const COMPOSER: &str = "composer";
+/// Where the composer was last laid out, so it glides from a new page's middle to its dock.
+const COMPOSER_MOVE: &str = "composer:move";
 pub const NEW_SESSION: &str = "new-session";
 pub const STOP: &str = "stop";
 pub const REWIND_UNDO: &str = "rewind:undo";
@@ -480,18 +482,25 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
     let mut row = vec![];
     if layout.main > 0.0 {
         let column = look::column().min(layout.main - 64.0).max(240.0);
-        let body = match session {
-            Some(session) => transcript(store, session, ui, column, palette),
-            None => empty(ui),
+        // One ID in both places, so the first message glides the composer down to its dock.
+        // A new page's card is as wide as the column, up to 920.
+        let width = if session.is_some() {
+            column
+        } else {
+            column.min(920.0)
         };
-        row.push(
-            Element::column(vec![
-                body.flex(1.0),
-                composer(store, session, ui, column, palette).centered_x(),
+        let composer = composer(store, session, ui, width, palette)
+            .centered_x()
+            .animate_move(COMPOSER_MOVE);
+        let body = match session {
+            Some(session) => vec![
+                transcript(store, session, ui, column, palette).flex(1.0),
+                composer,
                 Element::spacer().size(None, Some(12.0)),
-            ])
-            .size(Some(layout.main), Some(below)),
-        );
+            ],
+            None => home(ui, below, composer),
+        };
+        row.push(Element::column(body).size(Some(layout.main), Some(below)));
     }
     if !layout.panes.is_empty() && layout.shown > 0.0 {
         let heights = pane_heights(&layout, ui, window);
@@ -2697,26 +2706,34 @@ fn status_dot(session: &Session) -> Element {
         .centered_y()
 }
 
-/// A new session's page greets the person centered just over the composer, 26 px: quill's
-/// pen and words that follow the local hour and day (`greeting`). The person's place and size
-/// for it, not Desktop's top corner.
-fn empty(ui: &Ui) -> Element {
+/// A new session's page: the greeting and the composer as one block, centered across the
+/// column with the greeting's line 42 % down it, as a chat app's new page sits, never nearer
+/// the top than 24 px. The greeting is quill's pen in the accent and words that follow the
+/// local hour and day (`greeting`), 40 px in the interface's face: limn bundles no serif.
+fn home(ui: &Ui, height: f32, composer: Element) -> Vec<Element> {
     let greeting = crate::greeting::now(ui.utc_offset, ui.name.as_deref());
     let line = Element::row(vec![
         Element::icon(icons::of(include_str!(
             "../../../apps/quill/assets/icons/quill-mark.svg"
         )))
-        .foreground(look::palette().text)
-        .large_icon(36.0)
+        .foreground(look::theme().accent)
+        .large_icon(44.0)
         .centered_y(),
-        text(greeting).font_size(26.0).centered_y(),
+        text(greeting).font_size(40.0).centered_y(),
     ])
-    .gap(10.0);
-    Element::column(vec![
-        Element::spacer().flex(1.0),
+    .gap(12.0);
+    let top = (height * 0.42 - 48.0).max(24.0);
+    vec![
+        Element::spacer().size(None, Some(24.0)),
+        // A short window takes the room from above the block first, not from the block.
+        Element::spacer()
+            .size(None, Some(top - 24.0))
+            .shrink_height_to_fit(),
         line.centered_x(),
-        Element::spacer().size(None, Some(28.0)),
-    ])
+        Element::spacer().size(None, Some(24.0)),
+        composer,
+        Element::spacer().flex(1.0),
+    ]
 }
 
 fn transcript(
@@ -6636,10 +6653,9 @@ fn actions(
         .render()
 }
 
-/// Desktop's composer, as Desktop lays it out: a new
-/// session's place and folder as filled chips over a 44 px box that holds only the message
-/// and its return arrow; under the box "+" and the mode on the left, the model, its effort
-/// and the plan's usage on the right.
+/// Desktop's composer, as Desktop lays it out: a 44 px box that holds only the message and
+/// its return arrow; under the box "+" and the mode on the left, the model, its effort and
+/// the plan's usage on the right. A new session's is a taller card instead (`home_footer`).
 fn composer(
     store: &Store,
     session: Option<&Session>,
@@ -6684,30 +6700,47 @@ fn composer(
     .enter_submits(true)
     // Desktop's hint stays in the focused box, as it is right after sending.
     .persistent_placeholder(true)
-    .auto_grow(28.0, 184.0)
     .editor_font_size(15.0)
-    .pill_controls(Element::spacer().size(Some(0.0), None), trailing)
-    .inline_controls(true)
     .border_color(look::composer_border())
     .shadow_color(look::composer_shadow())
     .card_radius(14.0)
-    .context(composer_footer(store, session, ui, palette))
-    .attachments(composer_images(ui, palette))
-    .render();
+    .attachments(composer_images(ui, palette));
+    let Some(session) = session else {
+        // A new session's card: two lines to write in over "+" and send, and under it
+        // where the session runs on the left and how on the right.
+        let box_ = box_
+            .auto_grow(52.0, 184.0)
+            .pill_controls(plus_menu(None, ui), trailing)
+            .card_radius(18.0)
+            .context(home_footer(store, ui, palette))
+            .render();
+        let box_ = crate::slash::list(store, ui, box_, column);
+        return crate::mention::list(store, ui, box_, column);
+    };
+    let box_ = box_
+        .auto_grow(28.0, 184.0)
+        .pill_controls(Element::spacer().size(Some(0.0), None), trailing)
+        .inline_controls(true)
+        .context(composer_footer(store, Some(session), ui, palette))
+        .render();
     let box_ = crate::slash::list(store, ui, box_, column);
     let box_ = crate::mention::list(store, ui, box_, column);
-    if let Some(session) = session {
-        // The queue sits above the branch bar, so the composer's stack reads top to bottom.
-        let mut stack: Vec<Element> = queue_bar(session, ui, column, palette)
-            .into_iter()
-            .chain(branch_bar(session, ui, column, palette))
-            .collect();
-        if stack.is_empty() {
-            return box_;
-        }
-        stack.push(box_);
-        return Element::column(stack).gap(8.0);
+    // The queue sits above the branch bar, so the composer's stack reads top to bottom.
+    let mut stack: Vec<Element> = queue_bar(session, ui, column, palette)
+        .into_iter()
+        .chain(branch_bar(session, ui, column, palette))
+        .collect();
+    if stack.is_empty() {
+        return box_;
     }
+    stack.push(box_);
+    Element::column(stack).gap(8.0)
+}
+
+/// The row under a new session's card: its place, agent and folder as filled chips on the
+/// left, wrapping when the column is narrow; the mode, the model, its effort and the
+/// plan's usage on the right.
+fn home_footer(store: &Store, ui: &Ui, palette: ComponentPalette) -> Element {
     // quill runs sessions on this computer only, so "Local" is a label, not a menu.
     let local = Element::row(vec![
         hgap(8.0),
@@ -6719,18 +6752,25 @@ fn composer(
     .background(look::cancel())
     .radius(6.0)
     .size(None, Some(24.0));
-    Element::column(vec![
-        Element::row(
-            [local]
-                .into_iter()
-                .chain(agent_menu(ui))
-                .chain([folder_menu(store, ui)])
-                .collect(),
-        )
-        .gap(8.0),
-        box_,
+    let chips = [local]
+        .into_iter()
+        .chain(agent_menu(ui))
+        .chain([folder_menu(store, ui)])
+        .collect();
+    let row = Element::row(vec![
+        Element::row(chips)
+            .gap(8.0)
+            .wrap()
+            .shrink_to_fit()
+            .centered_y(),
+        Element::spacer().flex(1.0),
+        mode_menu(store, None, ui),
+        model_menu(store, None, ui, palette),
+        effort_menu(store, ui),
+        usage_menu(store, None, ui),
     ])
-    .gap(13.0)
+    .gap(2.0);
+    Element::column(vec![Element::spacer().size(None, Some(6.0)), row])
 }
 
 /// The composer's image tiles, each with its remove and open actions, and the note why an
