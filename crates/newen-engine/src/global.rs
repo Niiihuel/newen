@@ -24,15 +24,15 @@ pub trait Secrets: Send + Sync + std::fmt::Debug {
     fn delete(&self, account: &str);
 }
 
-/// The system keychain (Secret Service on Linux), service `quill`; a secret it does not have is
-/// read from `newen`'s, where Newen, quill's next name, keeps the ones it writes, so a quill
-/// started after going back from Newen still has them (docs/UPDATES.md, «El paso a Newen»).
+/// The system keychain (Secret Service on Linux), service `newen`; a secret it does not have is
+/// read from `quill`'s, where quill, Newen's name before, kept them, and copied forward
+/// (docs/UPDATES.md, «Venir de quill»).
 #[derive(Debug)]
 pub struct Keychain;
 
 impl Keychain {
     fn services() -> Carried<Service, Service> {
-        Carried(Service("quill"), Service("newen"))
+        Carried(Service("newen"), Service("quill"))
     }
 }
 
@@ -78,19 +78,24 @@ impl Secrets for Service {
     }
 }
 
-/// Secrets written to the first; read from the second when the first has none. A write
-/// removes the second's: Newen reads its own first, and an older copy it made would hide the
-/// value written here. A delete removes both, or the second would give back a secret deleted
-/// here.
+/// Secrets written to the first; read from the second when the first has none, and then
+/// copied to the first (a copy that cannot be written is no error: the second still has it). A
+/// write removes the second's: quill 0.1.9, which a rollback returns to, reads its own first,
+/// and an older value there would hide the one written here. A delete removes both, or the
+/// second would give back a secret deleted here.
 #[derive(Debug)]
 struct Carried<A, B>(A, B);
 
 impl<A: Secrets, B: Secrets> Secrets for Carried<A, B> {
     fn get(&self, account: &str) -> Result<Option<String>, String> {
-        match self.0.get(account)? {
-            Some(value) => Ok(Some(value)),
-            None => self.1.get(account),
+        if let Some(value) = self.0.get(account)? {
+            return Ok(Some(value));
         }
+        let found = self.1.get(account)?;
+        if let Some(value) = &found {
+            let _ = self.0.set(account, value);
+        }
+        Ok(found)
     }
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
         self.0.set(account, value)?;
@@ -751,23 +756,28 @@ mod tests {
     use super::*;
     use newen_model::GlobalVar;
 
-    /// What the keychain does with its two services, quill's and Newen's: a secret is written
-    /// to quill's, read from it first and from Newen's when quill's has none. A write removes
-    /// Newen's copy, so Newen, which reads its own first, finds the new value in quill's; a
-    /// delete removes both, so a deleted one never comes back from Newen's.
+    /// What the keychain does with its two services, Newen's and quill's: a secret is written
+    /// to Newen's, read from it first and from quill's when Newen's has none, copied forward
+    /// then. A write removes quill's copy, so quill 0.1.9 after a rollback, which reads its own
+    /// first, finds the new value in Newen's; a delete removes both, so a deleted one never
+    /// comes back from quill's.
     #[test]
-    fn a_secret_is_read_from_newen_s_service_when_quill_s_has_none() {
+    fn a_secret_is_read_from_quill_s_service_when_newen_s_has_none_and_copied() {
         let both = Carried(MemorySecrets::default(), MemorySecrets::default());
         let account = "mcp/github/env:TOKEN";
         assert_eq!(both.get(account), Ok(None));
-        // Written by Newen: found.
-        both.1.set(account, "from newen").unwrap();
-        assert_eq!(both.get(account), Ok(Some("from newen".into())));
-        // Written here: quill's, which comes first; Newen's older copy goes.
-        both.set(account, "from quill").unwrap();
-        assert_eq!(both.0.get(account), Ok(Some("from quill".into())));
-        assert_eq!(both.1.get(account), Ok(None));
+        // Written by quill: found, and copied forward; quill's stays.
+        both.1.set(account, "from quill").unwrap();
         assert_eq!(both.get(account), Ok(Some("from quill".into())));
+        assert_eq!(both.0.get(account), Ok(Some("from quill".into())));
+        assert_eq!(both.1.get(account), Ok(Some("from quill".into())));
+        // Written here: Newen's; quill's older copy goes.
+        both.set(account, "from newen").unwrap();
+        assert_eq!(both.0.get(account), Ok(Some("from newen".into())));
+        assert_eq!(both.1.get(account), Ok(None));
+        assert_eq!(both.get(account), Ok(Some("from newen".into())));
+        // Deleted: from both.
+        both.1.set(account, "from quill again").unwrap();
         both.delete(account);
         assert_eq!(both.get(account), Ok(None));
         assert_eq!(both.1.get(account), Ok(None));
