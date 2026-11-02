@@ -839,6 +839,9 @@ fn a_release_of_newen_replaces_quill_s_on_trial_and_rolls_back_to_it() {
     // Newen never runs a minute: its third start goes back to 0.1.9, refused from then on.
     assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
     assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
+    // A newer version Newen staged meanwhile is not 0.1.9's to activate: on Windows it would
+    // look for it under its own name.
+    install.keep_staged(&install.staged_mark("0.2.1")).unwrap();
     assert_eq!(
         install.launch(&version("0.2.0")).unwrap(),
         Launch::RolledBack {
@@ -848,6 +851,7 @@ fn a_release_of_newen_replaces_quill_s_on_trial_and_rolls_back_to_it() {
         }
     );
     assert_eq!(install.current().as_deref(), Some("0.1.9"));
+    assert_eq!(install.staged(), None);
     assert_eq!(install.program(), started);
     assert_eq!(std::fs::read(&started).unwrap(), elf("0.1.9"), "launchers'");
     assert_eq!(std::fs::read(&quill).unwrap(), elf("0.1.9"));

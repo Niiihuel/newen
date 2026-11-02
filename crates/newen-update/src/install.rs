@@ -779,8 +779,11 @@ impl Install {
             }
             Step::RollBack(trial) => {
                 // Whatever happens, this trial is over: a rollback that cannot be done is not
-                // tried at every start.
+                // tried at every start. What the version on trial staged goes too: the one
+                // that comes back stages its own, under its own names (quill's Windows program
+                // looks for `quill.exe.{version}.new`).
                 self.forget(TRIAL);
+                self.forget(STAGED);
                 let program = self.roll_back(&trial)?;
                 let refused = self
                     .bad()

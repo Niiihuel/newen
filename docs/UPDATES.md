@@ -218,9 +218,11 @@ borrado, el tercer arranque vuelve a la versión anterior (el enlace `current`
 a `versions/<anterior>`; en Windows `newen.exe.old` vuelve a ser `newen.exe`;
 en macOS `.Newen.app.old` vuelve a ser `Newen.app`), anota la versión en
 `bad-version` (no se ofrece nunca más, salvo una más nueva; Ajustes dice «Version
-X did not start on this computer and was rolled back.»), lo deja en el registro
-y arranca la anterior. `trial.json` se borra cuando la versión corrió 60 s con
-la ventana abierta y el motor andando.
+X did not start on this computer and was rolled back.»), olvida lo que esa
+versión dejó preparado (`staged.json`: la anterior prepara lo suyo, con sus
+propios nombres; quill 0.1.9 en Windows busca `quill.exe.<v>.new`), lo deja en
+el registro y arranca la anterior. `trial.json` se borra cuando la versión
+corrió 60 s con la ventana abierta y el motor andando.
 
 En macOS esos archivos van en `.Newen.app.update/`, al lado del bundle, para no
 dejarlos sueltos en Aplicaciones.
