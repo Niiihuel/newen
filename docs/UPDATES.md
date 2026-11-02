@@ -4,8 +4,9 @@ quill se actualiza solo desde las releases de `Niiihuel/quill`, un repositorio
 **privado**. Cada tag `v*` publica una release con un manifiesto firmado; una
 versión es **obligatoria** si el mensaje de su tag anotado tiene la palabra
 «mandatory», y entonces quill se actualiza antes de seguir. Si no, la
-actualización es **opcional**: se descarga sola (si Ajustes lo permite) y se
-instala cuando la persona lo pide.
+actualización es **opcional**: se descarga sola (si Ajustes lo permite), queda
+preparada y se aplica sola en el próximo arranque, o antes si la persona pide
+reiniciar.
 
 Código: `crates/quill-update` (manifiesto, firma, descarga, instalación y el
 servidor de prueba), `crates/quill-engine/src/update.rs` (búsquedas, descargas
@@ -41,9 +42,24 @@ una opcional.
    clave compilada. Una firma que no verifica no instala nada.
 3. Se comparan versiones con SemVer. Si hay una más nueva, el estado pasa a
    «versión disponible» con sus notas; si es obligatoria, o si Ajustes tiene
-   **Actualizar solo** encendido, se descarga sin preguntar.
-4. Una búsqueda empieza a los 20 s de abrir quill y se repite cada 6 horas;
-   **Buscar actualizaciones** la hace en el momento.
+   **Actualizar solo** encendido, se descarga sin preguntar. Una versión que la
+   persona saltó o que se volvió atrás en esta computadora no se ofrece (ver
+   abajo).
+4. **Cuándo se busca**, siempre con el reloj de pared (no con un temporizador
+   que se detiene mientras la computadora duerme):
+   - al arrancar, pasados 20 s, sólo si la última búsqueda tiene más de una
+     hora; si no, cuando se cumple su intervalo;
+   - cada **4 horas ± 15 %** (al azar, para que no busquen todas a la vez);
+   - cuando la ventana vuelve a tener el foco o la computadora se despierta
+     (el reloj de pared saltó más que el del proceso) y la última búsqueda
+     tiene más de una hora;
+   - **Buscar actualizaciones**, en el momento.
+
+   El fin de la última búsqueda se guarda en `quill-store` (`update_last_check`)
+   antes de mostrarse, y vale entre arranques.
+5. **Se sigue buscando con una versión bajando o lista.** Si aparece una más
+   nueva, la reemplaza: la descarga anterior se corta y la nueva queda
+   preparada en su lugar. Una obligatoria toma el control igual.
 
 Los estados que ve la persona (`quill_model::UpdateState`):
 
@@ -51,24 +67,41 @@ Los estados que ve la persona (`quill_model::UpdateState`):
 | --- | --- |
 | Sin buscar / Buscando | «Buscando actualizaciones…» |
 | Al día | «quill está al día · Revisado hace 5 min» |
-| Disponible | «La versión 0.3.0 está disponible», con las notas |
-| Descargando | progreso; si es obligatoria, una ventana sin cerrar |
-| Lista | En la barra lateral, sobre el botón de la cuenta, una tira «Relaunch to update · v0.3.0» (con la barra oculta, un punto en el botón de mostrarla); en Ajustes, «Restart to update». Sin aviso emergente ni entrada en el menú de la cuenta |
+| Disponible | En Ajustes, «La versión 0.3.0 está disponible», con las notas, **Download** y **Skip this version**. Con **Actualizar solo** apagado, además la tira «Update available · v0.3.0 · Download» (pulsarla descarga) |
+| Descargando | En Ajustes, «Downloading 0.3.0 · 42%»; con **Actualizar solo** apagado, también en la tira («Downloading update · 42%»); si es obligatoria, una ventana sin cerrar |
+| Lista | En la barra lateral, sobre el botón de la cuenta, una tira «Relaunch to update · v0.3.0» (con la barra oculta, un punto en el botón de mostrarla); «Restart to update» en el menú de la cuenta y en Ajustes; y un aviso del sistema (ver abajo) |
 | Error | el motivo, en una línea discreta, con **Reintentar** |
 | Compilado desde el código | «Compilado desde el código: actualiza con git pull» |
 | Sin instalar | «Ejecuta quill --install para mantenerlo actualizado» |
 | Sin acceso | «Las actualizaciones necesitan acceso al repositorio privado…» |
 
-Pulsar la tira (o el botón de Ajustes) reinicia al instante si ninguna sesión
-trabaja. Si alguna está en marcha o esperando a la persona, abre «Agents are
+En Ajustes la línea dice además cuándo terminó la última búsqueda («… ·
+Checked 3 minutes ago»), así que **Buscar actualizaciones** siempre responde:
+«Up to date · Checked just now», el progreso de lo que baja, o el error. Si una
+búsqueda falla con una versión bajando o lista, ésta sigue a la vista y la línea
+suma «Last check failed: …».
+
+**El aviso del sistema** (el notificador de la computadora, el mismo de las
+sesiones; pulsarlo trae quill al frente) sale una sola vez por versión: cuando
+queda lista con la ventana sin foco, o cuando lleva 24 horas lista sin que quill
+se reinicie. La versión avisada se guarda en `quill-store` (`update_notified`)
+antes de mostrar el aviso, así que nunca se repite.
+
+**Saltar una versión.** **Skip this version** guarda esa versión en
+`quill-store` (`update_skipped`) antes de que la interfaz se entere; no se
+vuelve a ofrecer hasta que salga una más nueva. Una obligatoria no se puede
+saltar.
+
+Pulsar la tira, la entrada del menú o el botón de Ajustes reinicia al instante
+si ninguna sesión trabaja. Si alguna está en marcha o esperando a la persona, abre «Agents are
 still working» con **Cancel**, **Update anyway** y **Wait for agents**: esta
 última deja la tira en «Restarting when agents finish» (con una x que lo
-cancela) e instala la primera vez que no queda ninguna sesión ocupada. La
-descarga y la búsqueda no muestran nada en la barra lateral: su progreso está
-sólo en Ajustes › Sistema. Es el comportamiento de Claude Desktop
-(la tira, el punto y el diálogo; no tiene aviso emergente ni entrada de menú);
-las palabras del diálogo dicen «agents» porque quill no nombra a ningún
-proveedor.
+cancela) e instala la primera vez que no queda ninguna sesión ocupada. Con
+**Actualizar solo** encendido, la búsqueda y la descarga no muestran nada en la
+barra lateral: su progreso está sólo en Ajustes › Sistema. La tira, el punto y
+el diálogo son como en Claude Desktop; la entrada del menú y el aviso del
+sistema son de quill (Desktop no los muestra). Las palabras del diálogo dicen
+«agents» porque quill no nombra a ningún proveedor.
 
 Una copia compilada desde el código (bajo una carpeta `target`, o con
 `QUILL_NO_UPDATE` puesto) no busca, no descarga y no se instala sola. Una copia
@@ -84,13 +117,71 @@ descargada que nunca pasó por `quill --install` tampoco se toca.
 - Al terminar, se comprueban **tamaño y SHA-256** contra lo firmado. Si no
   coinciden, se borra y no se instala nada. Una descarga que está completa y
   verificada se reutiliza si la instalación falló.
-- **Instalar siempre espera a la persona** («Reiniciar para actualizar»). La
-  instalación deja la versión nueva en su lugar y quill la arranca con los
-  mismos argumentos; la ventana vieja se cierra después de que la nueva empezó
-  (`QUILL_RESTART_AFTER`: la nueva espera a que la vieja salga, porque el socket
-  de quill-ide sólo lo atiende una ventana a la vez).
+- **Preparar** (*stage*): verificada, la versión se desempaqueta en su lugar
+  definitivo pero sin ser la que arranca (Linux `versions/<v>`, Windows
+  `versions\<v>` y `quill.exe.<v>.new`, macOS `.quill.app.<v>`), se guarda
+  `staged.json` (versión, SHA-256, ruta y hora) en la instalación, se borra la
+  descarga y **recién entonces** la interfaz se entera de que está lista.
+  `staged.json` va en la instalación y no en `quill.db` porque lo lee `main()`
+  antes de abrir nada (ni la ventana ni la base), vale sólo para esa
+  instalación (una de prueba con `QUILL_UPDATE_ROOT` no toca la de la persona)
+  y está al lado de lo que nombra.
+- **Activar**: el único cambio atómico (el enlace `current`, el `quill.exe`, o
+  el `quill.app`) y la limpieza de versiones viejas. Pasa en dos momentos:
+  - **en el próximo arranque, solo**: `main()`, antes de la ventana (junto a
+    `wait_for_restarter`), ve una versión preparada más nueva que la que corre,
+    la activa a prueba (ver [Volver atrás](#volver-atrás)) y arranca el
+    programa instalado con los mismos argumentos; queda en el registro;
+  - **«Restart to update»**: lo mismo en el momento; la ventana vieja se cierra
+    después de que la nueva empezó (`QUILL_RESTART_AFTER`: la nueva espera a
+    que la vieja salga, porque el socket de quill-ide sólo lo atiende una
+    ventana a la vez).
 - Los datos de la persona (sesiones, ajustes, `~/.config/quill`) no los toca la
   actualización.
+
+### Volver atrás
+
+Antes de activar, quill escribe en la instalación (no en `quill.db`)
+`trial.json`: `{version, previous, attempts}`. Cada arranque de esa versión
+suma un intento antes de abrir la ventana. Si llega a 2 sin que se haya
+borrado, el tercer arranque vuelve a la versión anterior (el enlace `current`
+a `versions/<anterior>`; en Windows `quill.exe.old` vuelve a ser `quill.exe`;
+en macOS `.quill.app.old` vuelve a ser `quill.app`), anota la versión en
+`bad-version` (no se ofrece nunca más, salvo una más nueva; Ajustes dice «Version
+X did not start on this computer and was rolled back.»), lo deja en el registro
+y arranca la anterior. `trial.json` se borra cuando la versión corrió 60 s con
+la ventana abierta y el motor andando.
+
+En macOS esos archivos van en `.quill.app.update/`, al lado del bundle, para no
+dejarlos sueltos en Aplicaciones.
+
+Lo que no cubre: una versión que ni siquiera llega a `main()` (por ejemplo, le
+falta una biblioteca del sistema) no puede contar sus intentos ni volver atrás.
+
+**Las migraciones de la base deben ser compatibles hacia atrás por una
+versión**: si una versión nueva cambia `quill.db` y se vuelve atrás, la
+anterior tiene que poder abrirla.
+
+### El registro
+
+`<datos>/quill/updates.log` (`~/.local/share/quill/updates.log` en Linux), las
+últimas 200 líneas, cada una con la hora en UTC:
+
+```text
+2026-11-02T14:03:11Z check: 0.1.9 offered (0.1.8 runs)
+2026-11-02T14:03:11Z download: 0.1.9 started, 104857600 bytes
+2026-11-02T14:04:02Z download: 0.1.9 done, 104857600 bytes in 51.2 s; size and SHA-256 match
+2026-11-02T14:04:05Z stage: 0.1.9 at /home/ana/.local/share/quill/app/versions/0.1.9
+2026-11-02T14:04:05Z notify: 0.1.9 is ready (the window is away)
+2026-11-02T18:10:40Z activate: 0.1.9 in place of 0.1.8, at the start
+2026-11-02T18:10:41Z start: 0.1.9 on trial after 0.1.8, start 1
+2026-11-02T18:11:41Z start: 0.1.9 ran a minute, its trial is over
+```
+
+También: `check: up to date`, `check failed: <motivo>`, `download: … failed`,
+`stage: … failed`, `skip: …`, `rollback: …`, `schedule: the computer woke`. Una
+línea nombra versiones, tamaños, tiempos y el motivo de un fallo; **nunca una
+dirección ni el token**.
 
 ## Novedades («What's new»)
 
@@ -438,10 +529,19 @@ comprimido y la instalación lo rechaza), `--platform windows-x86_64`.
 
 `cargo test -p quill-update` cubre lo mismo sin ventana ni red: firmas,
 manifiestos alterados, obligatoria contra opcional, descargas que no coinciden,
-reanudación, la búsqueda por la API con un token que no alcanza, e instalación
-atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y `locales/`).
-Lo de Windows y macOS sólo se compila (la comprobación de los primeros bytes
-del programa y la ruta del bundle sí se prueban en cualquier sistema).
+reanudación y corte, la búsqueda por la API con un token que no alcanza,
+instalación atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y
+`locales/`), preparar sin cambiar lo que arranca, activar en el próximo
+arranque, y volver atrás tras dos arranques fallidos; el registro y su
+rotación. Lo de Windows y macOS sólo se compila (la decisión de cada arranque,
+las rutas de lo preparado, la comprobación de los primeros bytes del programa y
+la ruta del bundle sí se prueban en cualquier sistema).
+
+`cargo test -p quill-engine update::` prueba el motor contra el feed de
+`serve`: lo preparado se guarda antes de avisar «lista» y una versión más nueva
+lo reemplaza; saltar una versión; los avisos del sistema (sin foco, a las 24 h,
+nunca dos veces); el calendario con su azar y la búsqueda al volver el foco o
+despertar; y que el registro no tenga el token ni direcciones.
 
 ## Linux
 
@@ -482,14 +582,15 @@ del menú (rune sí): hasta entonces, se arranca con
 
 Cada actualización:
 
-1. extrae el tar con el `tar` del sistema en `versions/.{versión}.{pid}`
-   (conserva los permisos), comprueba que `quill` sea un programa ELF y
-   sincroniza todo al disco;
-2. lo renombra a `versions/{versión}`;
-3. crea un enlace `current.new` y lo renombra sobre `current`: un inicio
-   encuentra la versión vieja o la nueva, nunca ninguna;
-4. borra las versiones que no son la actual ni la anterior (la anterior es la
-   que todavía corre).
+1. **preparar**: extrae el tar con el `tar` del sistema en
+   `versions/.{versión}.{pid}` (conserva los permisos), comprueba que `quill`
+   sea un programa ELF, sincroniza todo al disco y lo renombra a
+   `versions/{versión}`; `staged.json` lo nombra;
+2. **activar** (al arrancar o al reiniciar): crea un enlace `current.new` y lo
+   renombra sobre `current`: un inicio encuentra la versión vieja o la nueva,
+   nunca ninguna;
+3. borra las versiones que no son la actual ni la anterior (la anterior es la
+   que todavía corre, y a la que se vuelve atrás).
 
 Un fallo en cualquier paso deja `current` como estaba.
 
@@ -534,6 +635,7 @@ carpeta `locales\`. En el manifiesto es `windows-x86_64`. Compilado con MSVC y
 %LOCALAPPDATA%\Programs\quill\
   quill.exe                 el programa, siempre en el mismo lugar
   quill.exe.old             el anterior, hasta la siguiente actualización
+  quill.exe.0.3.0.new       una versión preparada, hasta activarla
   versions\0.2.0\           el resto del bundle de cada versión
     libcef.dll  *.pak  icudtl.dat  …
     locales\
@@ -549,18 +651,22 @@ la carpeta tiene `libcef.dll`; si no, sólo el programa) a
 
 **Cada actualización**:
 
-1. extrae el zip con el `tar.exe` de Windows
+1. (preparar) extrae el zip con el `tar.exe` de Windows
    (`%SystemRoot%\System32\tar.exe`, desde Windows 10 1803; sin ventana de
    consola) en `versions\.{versión}.{pid}`;
-2. saca de ahí `quill.exe` como `quill.exe.{versión}.new` al lado del que
-   corre, comprueba que empiece por `MZ` y sincroniza todo al disco;
-3. renombra la carpeta a `versions\{versión}`;
-4. renombra el `quill.exe` que corre a `quill.exe.old` (Windows permite
-   renombrar un ejecutable en uso, no sobrescribirlo) y el nuevo toma su
-   nombre: ése es el punto de no retorno, y quill arranca;
-5. borra las versiones que no son la nueva ni la que todavía corre. Una
-   carpeta se renombra antes de borrarse: si un quill la está usando, Windows
-   no deja y queda entera.
+2. (preparar) saca de ahí `quill.exe` como `quill.exe.{versión}.new` al lado
+   del que corre, comprueba que empiece por `MZ` y sincroniza todo al disco;
+3. (preparar) renombra la carpeta a `versions\{versión}`;
+4. (activar) renombra el `quill.exe` que corre a `quill.exe.old` (Windows
+   permite renombrar un ejecutable en uso, no sobrescribirlo) y el nuevo toma
+   su nombre: ése es el punto de no retorno, y quill arranca;
+5. borra las versiones que no son la nueva ni la que todavía corre, y los
+   `quill.exe.*.new` y `quill.exe.*.bad` que dejaron preparaciones y vueltas
+   atrás. Una carpeta se renombra antes de borrarse: si un quill la está
+   usando, Windows no deja y queda entera.
+
+Volver atrás renombra el `quill.exe` a prueba a `quill.exe.{versión}.bad` y
+`quill.exe.old` vuelve a ser `quill.exe`.
 
 Un fallo antes del paso 4 deja la instalación anterior funcionando.
 
@@ -594,13 +700,18 @@ a la instalación (`~/Applications/quill.app`, salvo `QUILL_UPDATE_ROOT`).
 
 **Cada actualización**:
 
-1. extrae el zip con `ditto -x -k` en `.quill.app.{versión}.{pid}`, al lado
-   del bundle;
-2. corre `codesign --verify --deep --strict` sobre el `quill.app` nuevo y lo
-   rechaza si no verifica; comprueba que `Contents/MacOS/quill` sea un
-   programa Mach-O (64 bits o universal) y sincroniza todo al disco;
-3. borra el `.quill.app.old` de la actualización anterior, renombra el
-   `quill.app` que corre a `.quill.app.old` y el nuevo toma su nombre.
+1. (preparar) extrae el zip con `ditto -x -k` en `.quill.app.{versión}.{pid}`,
+   al lado del bundle;
+2. (preparar) corre `codesign --verify --deep --strict` sobre el `quill.app`
+   nuevo y lo rechaza si no verifica; comprueba que `Contents/MacOS/quill` sea
+   un programa Mach-O (64 bits o universal), sincroniza todo al disco y lo
+   mueve a `.quill.app.{versión}`;
+3. (activar) borra el `.quill.app.old` de la actualización anterior, renombra
+   el `quill.app` que corre a `.quill.app.old` y el preparado toma su nombre;
+   borra otros `.quill.app.*` que quedaron (no `.old` ni `.update`).
+
+Volver atrás renombra el `quill.app` a prueba a `.quill.app.{versión}.bad` y
+`.quill.app.old` vuelve a ser `quill.app`.
 
 Un fallo antes del último paso deja el bundle como estaba. La descarga espera
 en `quill-updates` dentro de la carpeta temporal del usuario.

@@ -658,6 +658,7 @@ impl Store {
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::UpdateChecked { .. }
             | Event::WhatsNew(_)
             | Event::Codec(_)
             | Event::Extensions { .. }
@@ -1068,8 +1069,12 @@ pub fn notice(
     Some((level, banner))
 }
 
-/// A click on a session's banner opens it, as a click on its row does.
+/// A click on a session's banner opens it, as a click on its row does. Session 0 is quill's
+/// own notice (an update is ready): the window coming up is all it does.
 pub fn banner_clicked(store: &Store, ui: &mut Ui, session: SessionId) -> Vec<Intent> {
+    if session == 0 {
+        return vec![];
+    }
     update(
         store,
         ui,
@@ -1364,6 +1369,8 @@ pub struct Ui {
     pub github: github::Github,
     /// quill's own update, as the engine last reported it.
     pub update: quill_model::UpdateState,
+    /// When the last check for it ended (seconds since 1970), and why it failed if it did.
+    pub update_checked: Option<(u64, Option<String>)>,
     /// "Agents are still working" is up, and "Wait for agents" was chosen (the update installs
     /// the first time none is busy).
     pub update_asking: bool,
@@ -2175,6 +2182,7 @@ impl Ui {
             github: Default::default(),
             account: Default::default(),
             update: quill_model::UpdateState::Idle,
+            update_checked: None,
             update_asking: false,
             restart_when_idle: false,
             whats_new: Default::default(),

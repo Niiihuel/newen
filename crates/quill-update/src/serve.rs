@@ -32,6 +32,8 @@ pub struct Server {
     files: Arc<Mutex<Files>>,
     requests: Requests,
     stop: Arc<AtomicBool>,
+    /// The throwaway key [`publish`] signs with.
+    seed: [u8; 32],
 }
 
 impl Server {
@@ -64,6 +66,19 @@ impl Drop for Server {
     }
 }
 
+/// Serve `manifest` and its signature on `server`, signed with the server's throwaway key: the
+/// key a check verifies it with, the same for every manifest the server publishes.
+pub fn publish(server: &Server, manifest: &crate::Manifest) -> ed25519_dalek::VerifyingKey {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let key = ed25519_dalek::SigningKey::from_bytes(&server.seed);
+    let bytes = serde_json::to_vec(manifest).unwrap();
+    let signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
+    server.put(&format!("/{}", crate::SIGNATURE), signature.into_bytes());
+    server.put(&format!("/{}", crate::MANIFEST), bytes);
+    key.verifying_key()
+}
+
 /// Serve on `127.0.0.1:{port}` (0: any free port), with nothing yet.
 pub fn serve(port: u16) -> std::io::Result<Server> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
@@ -85,11 +100,19 @@ pub fn serve(port: u16) -> std::io::Result<Server> {
             });
         }
     });
+    // From std's own random hasher keys: no randomness crate for a test key.
+    let mut seed = [0; 32];
+    for (at, piece) in seed.chunks_mut(8).enumerate() {
+        use std::hash::BuildHasher as _;
+        let random = std::collections::hash_map::RandomState::new().hash_one(at);
+        piece.copy_from_slice(&random.to_le_bytes());
+    }
     Ok(Server {
         address,
         files,
         requests,
         stop,
+        seed,
     })
 }
 

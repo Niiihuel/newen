@@ -24,6 +24,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use serde::{Deserialize, Serialize};
+
 use crate::Version;
 
 /// The program's file name in a bundle.
@@ -133,12 +135,19 @@ impl Install {
         Some(target.file_name()?.to_str()?.to_owned())
     }
 
-    /// Install `version` from the artifact at `artifact` (verified already) and make it current:
-    /// on Linux a gzipped tar of the bundle, on Windows a zip of it, on macOS a zip holding
-    /// `quill.app`. Returns [`Self::program`].
+    /// Install `version` from the artifact at `artifact` (verified already) and make it current
+    /// at once: [`Self::stage`] then [`Self::activate`]. Returns [`Self::program`].
     pub fn apply(&self, artifact: &Path, version: &Version) -> io::Result<PathBuf> {
+        self.stage(artifact, version)?;
+        self.activate(version)
+    }
+
+    /// Unpack `version` from the artifact at `artifact` (verified already) into its place, ready
+    /// but not the one that starts: on Linux a gzipped tar of the bundle, on Windows a zip of
+    /// it, on macOS a zip holding `quill.app`. Returns where it is staged ([`staged_path`]).
+    pub fn stage(&self, artifact: &Path, version: &Version) -> io::Result<PathBuf> {
         #[cfg(not(any(windows, target_os = "macos")))]
-        return self.place(version, |staging| {
+        return self.stage_with(version, |staging| {
             run(Command::new("tar")
                 .arg("-xzf")
                 .arg(artifact)
@@ -146,7 +155,7 @@ impl Install {
                 .arg(staging))
         });
         #[cfg(windows)]
-        return self.place(version, |staging| {
+        return self.stage_with(version, |staging| {
             use std::os::windows::process::CommandExt;
             // Windows' own bsdtar reads zip; another `tar` on the PATH (Git's) may not.
             let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
@@ -161,7 +170,7 @@ impl Install {
             )
         });
         #[cfg(target_os = "macos")]
-        return self.place(version, |staging| {
+        return self.stage_with(version, |staging| {
             run(Command::new("/usr/bin/ditto")
                 .args(["-x", "-k"])
                 .arg(artifact)
@@ -180,7 +189,7 @@ impl Install {
             return Ok(self.program());
         }
         #[cfg(not(target_os = "macos"))]
-        return self.place(version, |staging| {
+        self.stage_with(version, |staging| {
             let folder = program.parent().unwrap_or(Path::new("."));
             // shortcut: a bundle's files are the folder's own and `locales/`, what a release
             // holds; a bundle with other folders would need them listed here.
@@ -192,9 +201,9 @@ impl Install {
                 }
             }
             fs::copy(program, staging.join(PROGRAM)).map(drop)
-        });
+        })?;
         #[cfg(target_os = "macos")]
-        return self.place(version, |staging| {
+        self.stage_with(version, |staging| {
             let from = bundle_root(program).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
@@ -204,22 +213,27 @@ impl Install {
             run(Command::new("/usr/bin/ditto")
                 .arg(from.join(BUNDLE))
                 .arg(staging.join(BUNDLE)))
-        });
+        })?;
+        self.activate(version)
     }
 
-    /// Fill a temporary folder with `version`'s bundle by `fill`, move it into place and make it
-    /// current, or leave everything as it was.
+    /// Stage `version` from what `fill` leaves in an empty temporary folder: the bundle as a
+    /// release holds it (Linux and Windows: the program and CEF's files at its root; macOS:
+    /// `quill.app/`). It is checked to be a program for this system, synced to the disk and
+    /// moved to [`staged_path`], or nothing is left. Nothing that starts changes: that is
+    /// [`Self::activate`]'s. A per-file stager plugs in here as its own `fill`.
     #[cfg(not(any(windows, target_os = "macos")))]
-    fn place(
+    pub fn stage_with(
         &self,
         version: &Version,
         fill: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<PathBuf> {
         let name = version.to_string();
-        if self.current().as_deref() == Some(name.as_str()) {
-            return Ok(self.program());
-        }
         let versions = self.root.join("versions");
+        let target = versions.join(&name);
+        if self.current().as_deref() == Some(name.as_str()) {
+            return Ok(target);
+        }
         fs::create_dir_all(&versions)?;
         let staging = versions.join(format!(".{name}.{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
@@ -229,26 +243,77 @@ impl Install {
             // one that does.
             .and_then(|()| native(&staging.join(PROGRAM), "the release is not a Linux program"))
             .and_then(|()| sync_tree(&staging));
-        let target = versions.join(&name);
         let moved = staged.and_then(|()| {
             // A copy an earlier try left, never current.
             let _ = fs::remove_dir_all(&target);
-            fs::rename(&staging, &target)
+            fs::rename(&staging, &target)?;
+            fs::File::open(&versions)?.sync_all()
         });
         if let Err(error) = moved {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);
         }
+        Ok(target)
+    }
+
+    /// Make the staged `version` the one that starts, by renaming a new link over `current`: a
+    /// start finds the old version or the new one, never neither. Every version but the new
+    /// one and the one before goes. Returns [`Self::program`].
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub fn activate(&self, version: &Version) -> io::Result<PathBuf> {
+        let name = version.to_string();
+        if self.current().as_deref() == Some(name.as_str()) {
+            return Ok(self.program());
+        }
+        if !self
+            .root
+            .join("versions")
+            .join(&name)
+            .join(PROGRAM)
+            .is_file()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{name} is not staged"),
+            ));
+        }
         let previous = self.current();
+        self.switch(&name)?;
+        self.prune(&name, previous.as_deref());
+        Ok(self.program())
+    }
+
+    /// `current` names `versions/{name}` from now on, on the disk.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    fn switch(&self, name: &str) -> io::Result<()> {
         let link = self.root.join("current.new");
         let _ = fs::remove_file(&link);
-        std::os::unix::fs::symlink(Path::new("versions").join(&name), &link)?;
+        std::os::unix::fs::symlink(Path::new("versions").join(name), &link)?;
         fs::rename(&link, self.root.join("current"))?;
         // The rename reaches the disk before anything is deleted.
         if let Ok(folder) = fs::File::open(&self.root) {
             let _ = folder.sync_all();
         }
-        self.prune(&name, previous.as_deref());
+        Ok(())
+    }
+
+    /// Back to `trial.previous`, which the activation of `trial.version` kept.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    fn roll_back(&self, trial: &Trial) -> io::Result<PathBuf> {
+        let name = trial.previous.to_string();
+        if !self
+            .root
+            .join("versions")
+            .join(&name)
+            .join(PROGRAM)
+            .is_file()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{name} is no longer here"),
+            ));
+        }
+        self.switch(&name)?;
         Ok(self.program())
     }
 
@@ -270,11 +335,9 @@ impl Install {
 
     /// Windows: the bundle `fill` leaves in `versions\.{version}.{pid}` gives up its program,
     /// written beside the running one as `quill.exe.{version}.new`; the rest becomes
-    /// `versions\{version}`. Then the running program is renamed to `quill.exe.old` (kept until
-    /// the next update replaces it) and the new one takes its name. Versions that are neither
-    /// the new one nor this running one's are deleted.
+    /// `versions\{version}`.
     #[cfg(windows)]
-    fn place(
+    pub fn stage_with(
         &self,
         version: &Version,
         fill: impl FnOnce(&Path) -> io::Result<()>,
@@ -285,7 +348,7 @@ impl Install {
         let staging = versions.join(format!(".{name}.{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir(&staging)?;
-        let new = self.root.join(format!("{PROGRAM}.{name}.new"));
+        let new = staged_path("windows", &self.root, version);
         let target = versions.join(&name);
         let placed = fill(&staging).and_then(|()| {
             let _ = fs::remove_file(&new);
@@ -305,6 +368,23 @@ impl Install {
             let _ = fs::remove_file(&new);
             return Err(error);
         }
+        Ok(new)
+    }
+
+    /// Windows: the running program is renamed to `quill.exe.old` (kept until the next update
+    /// replaces it) and the staged one takes its name: that rename is the commit point.
+    /// Versions that are neither the new one nor this running one's are deleted, and the
+    /// programs earlier stages and rollbacks left.
+    #[cfg(windows)]
+    pub fn activate(&self, version: &Version) -> io::Result<PathBuf> {
+        let name = version.to_string();
+        let new = staged_path("windows", &self.root, version);
+        if !new.is_file() || !self.root.join("versions").join(&name).is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{name} is not staged"),
+            ));
+        }
         let program = self.program();
         let aside = self.root.join(format!("{PROGRAM}.old"));
         let _ = fs::remove_file(&aside);
@@ -313,23 +393,49 @@ impl Install {
         }
         if let Err(error) = fs::rename(&new, &program) {
             let _ = fs::rename(&aside, &program);
-            let _ = fs::remove_file(&new);
             return Err(error);
         }
-        for entry in fs::read_dir(&versions).into_iter().flatten().flatten() {
+        for entry in fs::read_dir(self.root.join("versions"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let found = entry.file_name();
             let found = found.to_string_lossy();
             if found != name && found != crate::VERSION {
                 let _ = discard(&entry.path());
             }
         }
+        self.sweep(&format!("{PROGRAM}."), &[&format!("{PROGRAM}.old")]);
         Ok(program)
     }
 
-    /// macOS: the bundle `fill` leaves in `.quill.app.{version}.{pid}/` replaces `quill.app`,
-    /// which is renamed to `.quill.app.old` (deleted by the next update).
+    /// Windows: the program on trial is renamed aside as `quill.exe.{version}.bad` (a running
+    /// program can be renamed) and `quill.exe.old`, the one before, takes its name again.
+    #[cfg(windows)]
+    fn roll_back(&self, trial: &Trial) -> io::Result<PathBuf> {
+        let program = self.program();
+        let aside = self.root.join(format!("{PROGRAM}.old"));
+        if !aside.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the version before is no longer here",
+            ));
+        }
+        let bad = self.root.join(format!("{PROGRAM}.{}.bad", trial.version));
+        let _ = fs::remove_file(&bad);
+        fs::rename(&program, &bad)?;
+        if let Err(error) = fs::rename(&aside, &program) {
+            let _ = fs::rename(&bad, &program);
+            return Err(error);
+        }
+        Ok(program)
+    }
+
+    /// macOS: the bundle `fill` leaves in `.quill.app.{version}.{pid}/` is checked and moved to
+    /// `.quill.app.{version}`, beside `quill.app`.
     #[cfg(target_os = "macos")]
-    fn place(
+    pub fn stage_with(
         &self,
         version: &Version,
         fill: impl FnOnce(&Path) -> io::Result<()>,
@@ -341,6 +447,7 @@ impl Install {
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir(&staging)?;
         let new = staging.join(BUNDLE);
+        let target = staged_path("macos", &self.root, version);
         let staged = fill(&staging)
             .and_then(|()| {
                 native(
@@ -348,20 +455,282 @@ impl Install {
                     "the release is not a macOS program",
                 )
             })
-            .and_then(|()| sync_tree(&staging));
+            .and_then(|()| sync_tree(&staging))
+            .and_then(|()| {
+                let _ = fs::remove_dir_all(&target);
+                fs::rename(&new, &target)
+            });
+        let _ = fs::remove_dir_all(&staging);
+        staged.map(|()| target)
+    }
+
+    /// macOS: `quill.app` is renamed to `.quill.app.old` (deleted by the next update) and the
+    /// staged bundle takes its name.
+    #[cfg(target_os = "macos")]
+    pub fn activate(&self, version: &Version) -> io::Result<PathBuf> {
+        let new = staged_path("macos", &self.root, version);
+        if !new.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{version} is not staged"),
+            ));
+        }
         let bundle = self.root.join(BUNDLE);
         let aside = self.root.join(format!(".{BUNDLE}.old"));
-        let moved = staged.and_then(|()| {
-            let _ = fs::remove_dir_all(&aside);
-            if bundle.exists() {
-                fs::rename(&bundle, &aside)?;
+        let _ = fs::remove_dir_all(&aside);
+        if bundle.exists() {
+            fs::rename(&bundle, &aside)?;
+        }
+        fs::rename(&new, &bundle).inspect_err(|_| {
+            let _ = fs::rename(&aside, &bundle);
+        })?;
+        self.sweep(
+            &format!(".{BUNDLE}."),
+            &[&format!(".{BUNDLE}.old"), &format!(".{BUNDLE}.update")],
+        );
+        Ok(self.program())
+    }
+
+    /// macOS: the bundle on trial is renamed aside as `.quill.app.{version}.bad` and
+    /// `.quill.app.old`, the one before, takes its name again.
+    #[cfg(target_os = "macos")]
+    fn roll_back(&self, trial: &Trial) -> io::Result<PathBuf> {
+        let bundle = self.root.join(BUNDLE);
+        let aside = self.root.join(format!(".{BUNDLE}.old"));
+        if !aside.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the version before is no longer here",
+            ));
+        }
+        let bad = self.root.join(format!(".{BUNDLE}.{}.bad", trial.version));
+        let _ = fs::remove_dir_all(&bad);
+        fs::rename(&bundle, &bad)?;
+        fs::rename(&aside, &bundle).inspect_err(|_| {
+            let _ = fs::rename(&bad, &bundle);
+        })?;
+        Ok(self.program())
+    }
+
+    /// Windows and macOS: delete what earlier stages and rollbacks left beside the program,
+    /// every entry named `{prefix}…` but `keep`. One in use stays.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn sweep(&self, prefix: &str, keep: &[&str]) {
+        for entry in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with(prefix) || keep.contains(&name.as_ref()) {
+                continue;
             }
-            fs::rename(&new, &bundle).inspect_err(|_| {
-                let _ = fs::rename(&aside, &bundle);
+            let _ = if entry.path().is_dir() {
+                fs::remove_dir_all(entry.path())
+            } else {
+                fs::remove_file(entry.path())
+            };
+        }
+    }
+}
+
+/// Where [`Install::stage_with`] leaves `version` on `os` (`std::env::consts::OS`) under the
+/// installation `root`: what [`Install::activate`] switches to.
+pub fn staged_path(os: &str, root: &Path, version: &Version) -> PathBuf {
+    match os {
+        "windows" => root.join(format!("quill.exe.{version}.new")),
+        "macos" => root.join(format!(".{BUNDLE}.{version}")),
+        _ => root.join("versions").join(version.to_string()),
+    }
+}
+
+/// A version staged: unpacked in its place and checked, not yet the one that starts. Kept in
+/// the installation ([`Install::keep_staged`]) so the next start activates it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Staged {
+    pub version: Version,
+    /// The SHA-256 of the artifact it came from.
+    pub sha256: String,
+    /// [`staged_path`].
+    pub path: PathBuf,
+    /// When it was staged, in seconds since 1970.
+    pub since: u64,
+}
+
+/// A version just activated, on trial until it has run a minute ([`Install::healthy`]):
+/// `attempts` counts its starts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trial {
+    pub version: Version,
+    /// The version it replaced, which a rollback returns to.
+    pub previous: Version,
+    pub attempts: u32,
+}
+
+/// A version on trial that started this many times without running a minute is rolled back.
+pub const ATTEMPTS: u32 = 2;
+
+/// What a start did before its window ([`Install::launch`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// Nothing to change: this program goes on.
+    Go,
+    /// The staged `version` is now the one that starts: start `program` in place of this one.
+    Activated { version: Version, program: PathBuf },
+    /// `version` failed to start [`ATTEMPTS`] times: `previous` is back, start `program`.
+    RolledBack {
+        version: Version,
+        previous: Version,
+        program: PathBuf,
+    },
+}
+
+/// What a start of `running` does, given the trial and the staged version kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Step {
+    Go,
+    /// This start of the version on trial is counted.
+    Count(Trial),
+    /// The version on trial has failed its starts.
+    RollBack(Trial),
+    Activate(Staged),
+    /// Staged, but not newer than what runs: it goes.
+    Forget,
+}
+
+pub(crate) fn step(running: &Version, trial: Option<&Trial>, staged: Option<&Staged>) -> Step {
+    if let Some(trial) = trial.filter(|trial| trial.version == *running) {
+        return if trial.attempts >= ATTEMPTS {
+            Step::RollBack(trial.clone())
+        } else {
+            Step::Count(Trial {
+                attempts: trial.attempts + 1,
+                ..trial.clone()
             })
-        });
-        let _ = fs::remove_dir_all(&staging);
-        moved.map(|()| self.program())
+        };
+    }
+    match staged {
+        Some(staged) if staged.version > *running => Step::Activate(staged.clone()),
+        Some(_) => Step::Forget,
+        None => Step::Go,
+    }
+}
+
+const STAGED: &str = "staged.json";
+const TRIAL: &str = "trial.json";
+const BAD: &str = "bad-version";
+
+impl Install {
+    /// Where the installation keeps what is staged, on trial and refused: the installation
+    /// itself; on macOS, whose installation is the Applications folder, a hidden folder there.
+    fn marks(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.root.join(format!(".{BUNDLE}.update"))
+        } else {
+            self.root.clone()
+        }
+    }
+
+    fn read<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
+        serde_json::from_slice(&fs::read(self.marks().join(name)).ok()?).ok()
+    }
+
+    /// `value` kept as `name`, written beside it and renamed, on the disk before it returns.
+    fn keep(&self, name: &str, value: &impl Serialize) -> io::Result<()> {
+        let marks = self.marks();
+        fs::create_dir_all(&marks)?;
+        let next = marks.join(format!("{name}.new"));
+        let mut file = fs::File::create(&next)?;
+        io::Write::write_all(&mut file, &serde_json::to_vec_pretty(value)?)?;
+        file.sync_all()?;
+        fs::rename(&next, marks.join(name))
+    }
+
+    fn forget(&self, name: &str) {
+        let _ = fs::remove_file(self.marks().join(name));
+    }
+
+    /// The version staged for the next start, if any.
+    pub fn staged(&self) -> Option<Staged> {
+        self.read(STAGED)
+    }
+
+    /// Keep `staged` as the version the next start activates; it replaces any other.
+    pub fn keep_staged(&self, staged: &Staged) -> io::Result<()> {
+        self.keep(STAGED, staged)
+    }
+
+    /// The version on trial, if any.
+    pub fn trial(&self) -> Option<Trial> {
+        self.read(TRIAL)
+    }
+
+    /// The newest version that was rolled back: no release up to it is installed again.
+    pub fn bad(&self) -> Option<Version> {
+        Version::parse(fs::read_to_string(self.marks().join(BAD)).ok()?.trim()).ok()
+    }
+
+    /// Activate the staged `staged` in place of `running`, on trial: the trial is kept before
+    /// the switch, and the staged mark goes after it. Returns [`Self::program`].
+    pub fn activate_staged(&self, staged: &Staged, running: &Version) -> io::Result<PathBuf> {
+        self.keep(
+            TRIAL,
+            &Trial {
+                version: staged.version.clone(),
+                previous: running.clone(),
+                attempts: 0,
+            },
+        )?;
+        match self.activate(&staged.version) {
+            Ok(program) => {
+                self.forget(STAGED);
+                Ok(program)
+            }
+            Err(error) => {
+                self.forget(TRIAL);
+                Err(error)
+            }
+        }
+    }
+
+    /// What a start of `running` does first, before its window: count a start of the version
+    /// on trial and roll it back after [`ATTEMPTS`] failed ones (it is then refused for good,
+    /// [`Self::bad`]), or activate a newer staged version.
+    pub fn launch(&self, running: &Version) -> io::Result<Launch> {
+        match step(running, self.trial().as_ref(), self.staged().as_ref()) {
+            Step::Go => Ok(Launch::Go),
+            Step::Forget => {
+                self.forget(STAGED);
+                Ok(Launch::Go)
+            }
+            Step::Count(trial) => self.keep(TRIAL, &trial).map(|()| Launch::Go),
+            Step::Activate(staged) => {
+                let program = self.activate_staged(&staged, running)?;
+                Ok(Launch::Activated {
+                    version: staged.version,
+                    program,
+                })
+            }
+            Step::RollBack(trial) => {
+                // Whatever happens, this trial is over: a rollback that cannot be done is not
+                // tried at every start.
+                self.forget(TRIAL);
+                let program = self.roll_back(&trial)?;
+                let refused = self
+                    .bad()
+                    .map_or(trial.version.clone(), |bad| bad.max(trial.version.clone()));
+                fs::write(self.marks().join(BAD), refused.to_string())?;
+                Ok(Launch::RolledBack {
+                    version: trial.version,
+                    previous: trial.previous,
+                    program,
+                })
+            }
+        }
+    }
+
+    /// `running` has run a minute with its window up: its trial is over.
+    pub fn healthy(&self, running: &Version) {
+        if self.trial().is_some_and(|trial| trial.version == *running) {
+            self.forget(TRIAL);
+        }
     }
 }
 

@@ -810,6 +810,14 @@ pub enum Intent {
     /// Install the downloaded quill and start it in place of this one; answered by
     /// `Event::Update` with `Installed`, then the host restarts.
     InstallUpdate,
+    /// Never offer the optional version found again (a newer one is offered); answered by
+    /// `Event::Update`. A mandatory one cannot be skipped.
+    SkipUpdate,
+    /// The window gained or lost the focus: a check long due is made, and a ready update
+    /// is announced by the system only while the window is away.
+    WindowFocused {
+        focused: bool,
+    },
     /// The person opened the release notes: this version's "What's new" button goes; answered
     /// by `Event::WhatsNew` once that is kept.
     WhatsNewOpened,
@@ -1492,6 +1500,12 @@ pub enum Event {
     },
     /// Where quill's own update stands; not stored.
     Update(UpdateState),
+    /// A check for quill's updates ended at `at` (seconds since 1970), with `error` when it
+    /// failed; not stored.
+    UpdateChecked {
+        at: u64,
+        error: Option<String>,
+    },
     /// The release notes quill keeps, and whether to announce this version; not stored.
     WhatsNew(WhatsNew),
     /// Where the video codec stands on this computer; not stored.
@@ -1673,6 +1687,7 @@ impl Event {
             | Event::Storage { .. }
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::UpdateChecked { .. }
             | Event::WhatsNew(_)
             | Event::Codec(_)
             | Event::Extensions { .. }

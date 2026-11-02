@@ -81,6 +81,7 @@ impl Store {
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::UpdateChecked { .. }
             | Event::WhatsNew(_)
             | Event::Codec(_)
             | Event::Extensions { .. }
