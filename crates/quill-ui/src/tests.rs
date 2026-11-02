@@ -7585,14 +7585,13 @@ fn skills_show_one_section_per_agent_and_one_with_no_scopes_does_not_wait_foreve
     );
     assert!(!drawn(&store, &ui, "Looking for skills"));
     assert!(drawn(&store, &ui, "imagegen") && drawn(&store, &ui, "System"));
-    // A skill both have is marked with both agents, one only Codex has with Codex alone.
-    let on = |name: &str| -> Vec<String> {
-        view::marked_agents(&ui, |a| view::skill_on_in(&ui, a, name))
-            .map(|a| a.id.clone())
-            .collect()
-    };
-    assert_eq!(on("review"), ["claude", "codex"]);
-    assert_eq!(on("imagegen"), ["codex"]);
+    // A skill both have is marked with both agents in each row; one only Codex has, not.
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    for marks in ["cz:marks:claude:review:1", "cz:marks:codex:review:1"] {
+        assert!(region(&frame, marks).is_some(), "{marks}");
+    }
+    assert!(region(&frame, "cz:marks:codex:imagegen:0").is_none());
     // Codex keeps a skill's state for the person: no project folder is asked for.
     ui.cwd = std::path::PathBuf::new();
     click(&store, &mut ui, "cz:more:codex:review");
@@ -11346,4 +11345,72 @@ fn connectors_have_one_row_of_tools_and_discover_leads_back() {
     assert!(region(&frame, "srv:tab:yours").is_some(), "the way back");
     click(&store, &mut ui, "srv:tab:yours");
     assert!(!ui.connectors.discover);
+}
+
+/// Customize with 300 connectors and 300 skills for each agent: a frame builds and lays out
+/// about the rows in view, not all of them, in a bounded time.
+#[test]
+fn a_long_customize_page_lays_out_only_the_rows_in_view() {
+    use quill_model::McpStatus;
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    for agent in ["claude", "codex"] {
+        ui.applied(&Event::Servers {
+            agent: agent.into(),
+            folder: "/work".into(),
+            servers: (0..300)
+                .map(|n| {
+                    let status = if n % 7 == 0 {
+                        McpStatus::NeedsAuth
+                    } else {
+                        McpStatus::Connected
+                    };
+                    configured(&format!("conn-{agent}-{n:03}"), "npx -y x", status)
+                })
+                .collect(),
+            scopes: vec![],
+            error: None,
+        });
+        heard_extensions(
+            &mut ui,
+            agent,
+            skills_list(
+                (0..300)
+                    .map(|n| skill(&format!("skill-{agent}-{n:03}"), "user", "on"))
+                    .collect(),
+            ),
+        );
+    }
+    let window = limn::Size::new(1408.0, 844.0);
+    // A frame as the app makes one: the view built, then laid out with real text.
+    let rows = |store: &Store, ui: &Ui| {
+        let mut tree = UiTree::new(view(store, ui, window));
+        tree.set_text_layout(true);
+        tree.layout(window);
+        let started = std::time::Instant::now();
+        customize::BUILT.with(|b| b.set(0));
+        for _ in 0..5 {
+            tree.set_root(view(store, ui, window));
+            tree.layout(window);
+        }
+        (
+            customize::BUILT.with(|b| b.get()) / 5,
+            started.elapsed() / 5,
+        )
+    };
+    let (connectors, connectors_time) = rows(&store, &ui);
+    click(
+        &store,
+        &mut ui,
+        &format!("czp:tab:{}", view::SETTINGS_SKILLS),
+    );
+    let (skills, skills_time) = rows(&store, &ui);
+    eprintln!("connectors: {connectors} blocks built a frame, in {connectors_time:?}");
+    eprintln!("skills: {skills} blocks built a frame, in {skills_time:?}");
+    // Of more than 600 rows, the 15 or so that fit in 844, with the headings among them.
+    assert!((5..=40).contains(&connectors), "{connectors} built");
+    assert!((5..=40).contains(&skills), "{skills} built");
+    // Before the page built only what shows, a frame took about 25 ms here, unoptimized.
+    let most = std::time::Duration::from_millis(if cfg!(debug_assertions) { 25 } else { 10 });
+    assert!(connectors_time < most, "{connectors_time:?} a frame");
+    assert!(skills_time < most, "{skills_time:?} a frame");
 }

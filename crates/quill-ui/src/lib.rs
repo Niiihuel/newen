@@ -2316,10 +2316,14 @@ impl Ui {
                 .values()
                 .flat_map(|l| l.servers.iter().flatten())
             {
-                let name = server_logo_name(self, &server.name, &server.label);
+                // Its own label, as its row looks it up: no scan of every list for each.
+                let key = customize::logo_key(&server.name, &server.label);
+                if self.logo_asked.contains(&key) {
+                    continue;
+                }
                 wanted.push(LogoWanted {
-                    key: format!("mcp:{name}"),
-                    name,
+                    name: key["mcp:".len()..].to_owned(),
+                    key,
                     url: https_address(&server.target),
                 });
             }
