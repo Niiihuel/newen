@@ -185,6 +185,7 @@ impl Native {
             // bootstrap executable, macOS a sandboxed helper); add them to sandbox pages there.
             no_sandbox: i32::from(
                 !cfg!(target_os = "linux")
+                    || std::env::var_os("NEWEN_NO_SANDBOX").is_some()
                     || std::env::var_os("QUILL_NO_SANDBOX").is_some()
                     || userns_restricted(),
             ),
@@ -480,11 +481,13 @@ fn copy(
     );
 }
 
-/// Where CEF's files are: `QUILL_CEF_DIR`; else a release's, beside the program or, in a
+/// Where CEF's files are: `NEWEN_CEF_DIR`; else a release's, beside the program or, in a
 /// Windows installation, in `versions\{version}` beside it (docs/UPDATES.md); else the CEF quill
 /// was built with. `None` in a macOS bundle, whose framework holds them.
 fn cef_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("QUILL_CEF_DIR").filter(|dir| !dir.is_empty()) {
+    // quill's name for it too, which a person's launcher may set (a NixOS wrapper, say).
+    let set = std::env::var_os("NEWEN_CEF_DIR").or_else(|| std::env::var_os("QUILL_CEF_DIR"));
+    if let Some(dir) = set.filter(|dir| !dir.is_empty()) {
         return Some(PathBuf::from(dir));
     }
     let program = std::env::current_exe().ok();
@@ -503,9 +506,9 @@ fn cef_dir() -> Option<PathBuf> {
         ]
     });
     candidates
-        .chain([PathBuf::from(env!("QUILL_CEF_DIR"))])
+        .chain([PathBuf::from(env!("NEWEN_CEF_DIR"))])
         .find(|dir| dir.join("icudtl.dat").is_file())
-        .or_else(|| Some(PathBuf::from(env!("QUILL_CEF_DIR"))))
+        .or_else(|| Some(PathBuf::from(env!("NEWEN_CEF_DIR"))))
 }
 
 /// Whether AppArmor keeps unprivileged programs from making user namespaces (Ubuntu 23.10 and

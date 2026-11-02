@@ -358,10 +358,10 @@ impl Updates {
     }
 
     /// The latest release's manifest. The highest sequence and the keys a rotation names are kept before it returns,
-    /// except for a test feed of `QUILL_UPDATE_FEED`, which neither reads nor changes them.
+    /// except for a test feed of `NEWEN_UPDATE_FEED`, which neither reads nor changes them.
     fn fetch(&self) -> Result<Manifest, Error> {
-        let test_feed =
-            std::env::var("QUILL_UPDATE_FEED").is_ok_and(|base| !base.trim().is_empty());
+        let test_feed = newen_files::env("UPDATE_FEED")
+            .is_some_and(|base| !base.to_string_lossy().trim().is_empty());
         let sequence = (self.marked(SEQUENCE))
             .filter(|_| !test_feed)
             .and_then(|kept| kept.parse().ok());
@@ -907,9 +907,9 @@ fn cut(text: &str, most: usize) -> String {
 }
 
 /// Why this copy is not one quill updates: built from source (under a `target` folder, or with
-/// `QUILL_NO_UPDATE` set), or never placed by `quill --install`.
+/// `NEWEN_NO_UPDATE` set), or never placed by `quill --install`.
 fn unmanaged() -> Option<UpdateState> {
-    if std::env::var_os("QUILL_NO_UPDATE").is_some_and(|value| !value.is_empty()) {
+    if newen_files::env("NO_UPDATE").is_some_and(|value| !value.is_empty()) {
         return Some(UpdateState::FromSource);
     }
     let program = std::env::current_exe().ok()?;

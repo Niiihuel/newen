@@ -287,7 +287,7 @@ pub struct Settings {
     /// Sites the agents may use in the built-in browser without asking; local addresses
     /// never ask (docs/browser.md §5).
     pub browser_sites: Vec<String>,
-    /// The Chromium the built-in browser runs; `None` takes `QUILL_CHROME` or the first on
+    /// The Chromium the built-in browser runs; `None` takes `NEWEN_CHROME` or the first on
     /// `PATH`.
     pub browser_program: Option<String>,
     /// Draw the browser's pages with Chromium in quill's own process, without the headless
@@ -1212,7 +1212,7 @@ pub enum UpdateState {
     Failed {
         reason: String,
     },
-    /// Built from source (under `target/`, or `QUILL_NO_UPDATE` set): updated with `git pull`.
+    /// Built from source (under `target/`, or `NEWEN_NO_UPDATE` set): updated with `git pull`.
     FromSource,
     /// A binary that `quill --install` never placed: nothing to update in place.
     NotInstalled,

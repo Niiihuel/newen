@@ -4,7 +4,7 @@
 //! it did live and the engine attribution can be tested.
 //! Prints each line the real CLI sent, and where quill sent a line in the capture it
 //! waits for one on stdin, so the engine's writes pace the replay as they did live.
-//! `QUILL_FAKE_PACE=<factor>` also keeps the capture's time between lines, scaled, so a
+//! `NEWEN_FAKE_PACE=<factor>` also keeps the capture's time between lines, scaled, so a
 //! person can watch a turn run.
 //!
 //! It also answers what quill asks of a program outside a session (`mod ext`): `mcp` and
@@ -23,7 +23,7 @@ fn main() {
         Some("plugin") => return ext::plugin(),
         _ => {}
     }
-    if std::env::var_os("QUILL_FAKE_APP_SERVER").is_some() {
+    if std::env::var_os("NEWEN_FAKE_APP_SERVER").is_some() {
         return app_server();
     }
     let stdin = std::io::stdin();
@@ -40,16 +40,16 @@ fn main() {
     };
     let path = path.trim();
     // What the engine launched it with, for tests: its arguments, then the variables the
-    // "All agents" layer sets (`QUILL_MCP_…` and the like) as `NAME=value`.
+    // "All agents" layer sets (`NEWEN_MCP_…` and the like) as `NAME=value`.
     let launched = std::env::args().skip(1).collect::<Vec<_>>().join("\n");
     let vars: String = std::env::vars()
-        .filter(|(k, _)| k.starts_with("QUILL_MCP_") || k == "GITHUB_TOKEN")
+        .filter(|(k, _)| k.starts_with("NEWEN_MCP_") || k == "GITHUB_TOKEN")
         .map(|(k, v)| format!("\n{k}={v}"))
         .collect();
     let _ = std::fs::write(".fake-launch", launched + &vars);
     let text = std::fs::read_to_string(path).expect("fixture");
     let mut out = std::io::stdout().lock();
-    let pace: Option<f64> = std::env::var("QUILL_FAKE_PACE")
+    let pace: Option<f64> = std::env::var("NEWEN_FAKE_PACE")
         .ok()
         .and_then(|p| p.parse().ok());
     let mut last = 0u64;
@@ -80,7 +80,7 @@ fn main() {
     }
 }
 
-/// `QUILL_FAKE_APP_SERVER`: a Codex app-server for any number of threads, as the one quill's
+/// `NEWEN_FAKE_APP_SERVER`: a Codex app-server for any number of threads, as the one quill's
 /// Codex sessions share (docs/remote-control.md §3). Each turn answers "echo: <its text>".
 fn app_server() {
     use serde_json::json;
@@ -146,13 +146,13 @@ fn next_line(input: &mut impl Iterator<Item = std::io::Result<String>>) -> Optio
 }
 
 /// `auth status|login|logout` as Claude Code 2.1.312 answers them. The
-/// account starts as `QUILL_FAKE_AUTH` says (`signed-in`, the default, or `signed-out`); a login
-/// or a logout flips it through a marker file (`QUILL_FAKE_AUTH_MARKER`, else `.fake-auth` in the
+/// account starts as `NEWEN_FAKE_AUTH` says (`signed-in`, the default, or `signed-out`); a login
+/// or a logout flips it through a marker file (`NEWEN_FAKE_AUTH_MARKER`, else `.fake-auth` in the
 /// working directory), so the next `status` agrees.
 fn auth() {
     let args: Vec<String> = std::env::args().collect();
-    let marker = std::env::var("QUILL_FAKE_AUTH_MARKER").unwrap_or_else(|_| ".fake-auth".into());
-    let base = std::env::var("QUILL_FAKE_AUTH").as_deref() != Ok("signed-out");
+    let marker = std::env::var("NEWEN_FAKE_AUTH_MARKER").unwrap_or_else(|_| ".fake-auth".into());
+    let base = std::env::var("NEWEN_FAKE_AUTH").as_deref() != Ok("signed-out");
     let set = |signed_in: bool| {
         if signed_in == base {
             let _ = std::fs::remove_file(&marker);
@@ -204,16 +204,16 @@ fn auth() {
 
 /// `login status|(none)` and `logout` as Codex 0.163.0 answers them (docs/codex.md "Fase 1" 6-8,
 /// from `codex-rs/cli/src/login.rs`; `login` and `logout` were not run live): all on stderr.
-/// The account state is `auth()`'s, so `QUILL_FAKE_AUTH` and the marker work the same
-/// (`QUILL_FAKE_AUTH_CODEX` sets Codex's alone). `login`
-/// prints the address like the real one, waits `QUILL_FAKE_LOGIN_MS` (the browser coming back to
+/// The account state is `auth()`'s, so `NEWEN_FAKE_AUTH` and the marker work the same
+/// (`NEWEN_FAKE_AUTH_CODEX` sets Codex's alone). `login`
+/// prints the address like the real one, waits `NEWEN_FAKE_LOGIN_MS` (the browser coming back to
 /// Codex's local server, 1500 by default) and signs in, or ends early when stdin closes (a
 /// cancel).
 fn codex_auth() {
     let args: Vec<String> = std::env::args().collect();
-    let marker = std::env::var("QUILL_FAKE_AUTH_MARKER").unwrap_or_else(|_| ".fake-auth".into());
-    let base = std::env::var("QUILL_FAKE_AUTH_CODEX")
-        .or_else(|_| std::env::var("QUILL_FAKE_AUTH"))
+    let marker = std::env::var("NEWEN_FAKE_AUTH_MARKER").unwrap_or_else(|_| ".fake-auth".into());
+    let base = std::env::var("NEWEN_FAKE_AUTH_CODEX")
+        .or_else(|_| std::env::var("NEWEN_FAKE_AUTH"))
         .as_deref()
         != Ok("signed-out");
     let set = |signed_in: bool| {
@@ -237,7 +237,7 @@ fn codex_auth() {
             eprintln!("https://auth.openai.com/oauth/authorize?response_type=code&client_id=fake&state=fake");
             eprintln!();
             eprintln!("On a remote or headless machine? Use `codex login --device-auth` instead.");
-            let wait = std::env::var("QUILL_FAKE_LOGIN_MS")
+            let wait = std::env::var("NEWEN_FAKE_LOGIN_MS")
                 .ok()
                 .and_then(|ms| ms.parse().ok())
                 .unwrap_or(1500);
@@ -295,7 +295,7 @@ fn run_tools(msg: &serde_json::Value) {
 
 /// What the two CLIs answer outside a session, with made-up content: the shapes are those the
 /// adapters read (`codex mcp list --json`, `claude mcp list`, `plugin list --json --available`,
-/// `skills/list`, `mcpServerStatus/list`). `QUILL_FAKE_EXT=<dir>` keeps what is added and
+/// `skills/list`, `mcpServerStatus/list`). `NEWEN_FAKE_EXT=<dir>` keeps what is added and
 /// removed there, so the next list shows it.
 mod ext {
     use serde_json::{json, Value};
@@ -308,10 +308,10 @@ mod ext {
             .is_some_and(|n| n.contains("codex"))
     }
 
-    /// Where this agent keeps what was added: `QUILL_FAKE_EXT`, else beside the program as run
+    /// Where this agent keeps what was added: `NEWEN_FAKE_EXT`, else beside the program as run
     /// (each test links its own).
     fn kept() -> Option<std::path::PathBuf> {
-        let dir = match std::env::var("QUILL_FAKE_EXT") {
+        let dir = match std::env::var("NEWEN_FAKE_EXT") {
             Ok(dir) => std::path::PathBuf::from(dir),
             Err(_) => {
                 let program = std::path::PathBuf::from(std::env::args().next()?);

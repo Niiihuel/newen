@@ -10374,7 +10374,7 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
         ),
         None => setting(
             "Chromium",
-            "QUILL_CHROME, else the first chromium or google-chrome on PATH. A new choice runs from the browser's next start.",
+            "NEWEN_CHROME, else the first chromium or google-chrome on PATH. A new choice runs from the browser's next start.",
             setting_button(BROWSER_PROGRAM_CHOOSE, "Choose\u{2026}"),
         ),
     };

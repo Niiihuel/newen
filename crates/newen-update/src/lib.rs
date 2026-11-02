@@ -11,7 +11,7 @@
 //!
 //! A check reads the latest release of [`REPOSITORIES`], which are public, at their download
 //! addresses (not GitHub's API, so no token and no API rate limit); a feed at a base address
-//! (`QUILL_UPDATE_FEED`, for the tests) the same way. quill's releases, `quill-update.json` from
+//! (`NEWEN_UPDATE_FEED`, for the tests) the same way. quill's releases, `quill-update.json` from
 //! `Niiihuel/quill`, are looked for after Newen's (docs/UPDATES.md, «Venir de quill»). The
 //! signature is verified before the JSON is read, and an artifact is installed only once its size and digest match
 //! what was signed ([`install`]). Network, disk and every wait run on the caller's thread:
@@ -228,12 +228,12 @@ pub fn platform() -> String {
 }
 
 /// The keys releases are checked with: `stored`, the ones a rotation left, else the ones
-/// compiled in; in a debug build, `QUILL_UPDATE_KEY` instead when set, for a test feed signed
+/// compiled in; in a debug build, `NEWEN_UPDATE_KEY` instead when set, for a test feed signed
 /// with a throwaway key. A release build never reads it.
 pub fn trusted_keys(stored: &[VerifyingKey]) -> Vec<VerifyingKey> {
     #[cfg(debug_assertions)]
-    if let Ok(key) = std::env::var("QUILL_UPDATE_KEY") {
-        return parse_key(&key).into_iter().collect();
+    if let Some(key) = newen_files::env("UPDATE_KEY") {
+        return parse_key(&key.to_string_lossy()).into_iter().collect();
     }
     if stored.is_empty() {
         compiled_keys()
@@ -482,10 +482,10 @@ pub struct Source {
 }
 
 impl Source {
-    /// Where this copy looks: `QUILL_UPDATE_FEED` when set (a test feed), else the latest
+    /// Where this copy looks: `NEWEN_UPDATE_FEED` when set (a test feed), else the latest
     /// release of each of [`REPOSITORIES`], at its public addresses, with no token.
     pub fn locate() -> Self {
-        Self::from_feed(std::env::var("QUILL_UPDATE_FEED").ok())
+        Self::from_feed(newen_files::env("UPDATE_FEED").and_then(|feed| feed.into_string().ok()))
     }
 
     /// The release at `base` alone.

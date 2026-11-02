@@ -4178,8 +4178,8 @@ fn notifier(title: &str, body: &str) -> (&'static str, Vec<String>, Vec<(&'stati
         let script = "[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
              $x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);\
              $t=$x.GetElementsByTagName('text');\
-             [void]$t.Item(0).AppendChild($x.CreateTextNode($env:QUILL_TITLE));\
-             [void]$t.Item(1).AppendChild($x.CreateTextNode($env:QUILL_BODY));\
+             [void]$t.Item(0).AppendChild($x.CreateTextNode($env:NEWEN_TITLE));\
+             [void]$t.Item(1).AppendChild($x.CreateTextNode($env:NEWEN_BODY));\
              $a=$x.CreateElement('audio');$a.SetAttribute('silent','true');[void]$x.DocumentElement.AppendChild($a);\
              $n=[Windows.UI.Notifications.ToastNotification]::new($x);\
              [void](Register-ObjectEvent -InputObject $n -EventName Activated -SourceIdentifier quill);\
@@ -4193,7 +4193,7 @@ fn notifier(title: &str, body: &str) -> (&'static str, Vec<String>, Vec<(&'stati
                 "-Command".into(),
                 script.into(),
             ],
-            vec![("QUILL_TITLE", title.into()), ("QUILL_BODY", body.into())],
+            vec![("NEWEN_TITLE", title.into()), ("NEWEN_BODY", body.into())],
         )
     } else {
         // Linux and the BSDs: the desktop's notification server, through `notify-send`, which
@@ -5618,8 +5618,8 @@ mod tests {
         assert_eq!(
             env,
             [
-                ("QUILL_TITLE", "Fix'; calc".to_owned()),
-                ("QUILL_BODY", "Body".to_owned())
+                ("NEWEN_TITLE", "Fix'; calc".to_owned()),
+                ("NEWEN_BODY", "Body".to_owned())
             ]
         );
     }

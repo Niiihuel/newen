@@ -420,7 +420,7 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
                 headers: vec![("X-Team".into(), "core".into())],
                 header_vars: vec![(
                     "Authorization".into(),
-                    "QUILL_MCP_LINEAR_H_AUTHORIZATION".into(),
+                    "NEWEN_MCP_LINEAR_H_AUTHORIZATION".into(),
                 )],
                 ..Default::default()
             },
@@ -457,7 +457,7 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
     assert_eq!(servers["linear"]["http_headers"]["X-Team"], "core");
     assert_eq!(
         servers["linear"]["env_http_headers"]["Authorization"],
-        "QUILL_MCP_LINEAR_H_AUTHORIZATION"
+        "NEWEN_MCP_LINEAR_H_AUTHORIZATION"
     );
     // The answer to the roots is not an event.
     assert!(codex

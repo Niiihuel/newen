@@ -370,6 +370,13 @@ pub fn config_dir() -> Option<PathBuf> {
     app_dir("XDG_CONFIG_HOME", ".config", "APPDATA")
 }
 
+/// The environment variable `NEWEN_<name>`, else `QUILL_<name>`, its name before Newen: for
+/// those a person may have set themselves, or a copy of quill hands on (docs/UPDATES.md, «Venir
+/// de quill»). Newen sets only its own.
+pub fn env(name: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(format!("NEWEN_{name}")).or_else(|| std::env::var_os(format!("QUILL_{name}")))
+}
+
 /// Newen's own folder in `base`, its [`data_dir`] or [`config_dir`]: `newen/`, or `quill/`,
 /// the name it had, while that is there and `newen/` is not ([`named_dir`]).
 pub fn own_dir(base: &Path) -> PathBuf {
@@ -473,6 +480,17 @@ fn find_program(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Newen's variable first, quill's when Newen's is not set.
+    #[test]
+    fn newen_s_variable_is_read_and_quill_s_when_it_is_not_set() {
+        let name = format!("ENV_TEST_{}", std::process::id());
+        assert_eq!(env(&name), None);
+        std::env::set_var(format!("QUILL_{name}"), "quill's");
+        assert_eq!(env(&name).as_deref(), Some("quill's".as_ref()));
+        std::env::set_var(format!("NEWEN_{name}"), "newen's");
+        assert_eq!(env(&name).as_deref(), Some("newen's".as_ref()));
+    }
 
     /// A folder is Newen's own once it is there; before, quill's while quill's is there: never
     /// an empty one beside the person's data. A link left in quill's place changes nothing.

@@ -62,7 +62,7 @@ const DEFAULT_VIEW: (u32, u32) = (1280, 800);
 const KEPT: usize = 300;
 
 pub struct Options {
-    /// The Chromium Settings names; `QUILL_CHROME` and `PATH` otherwise.
+    /// The Chromium Settings names; `NEWEN_CHROME` and `PATH` otherwise.
     pub program: Option<PathBuf>,
     /// Chromium's profile: what it keeps between launches, which is not cookies (they live in
     /// each session's browser context, in memory).

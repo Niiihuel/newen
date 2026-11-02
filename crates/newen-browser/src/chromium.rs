@@ -20,9 +20,11 @@ const NAMES: [&str; 5] = [
     "chrome",
 ];
 
-/// The Chromium to run: `QUILL_CHROME`, else the one Settings names, else the first on `PATH`.
+/// The Chromium to run: `NEWEN_CHROME` (or quill's `QUILL_CHROME`), else the one Settings
+/// names, else the first on `PATH`.
 pub fn find(configured: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("QUILL_CHROME").filter(|p| !p.is_empty()) {
+    let set = std::env::var_os("NEWEN_CHROME").or_else(|| std::env::var_os("QUILL_CHROME"));
+    if let Some(path) = set.filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
     if let Some(path) = configured {

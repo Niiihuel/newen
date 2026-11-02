@@ -29,7 +29,7 @@ struct App {
     inbox: Arc<Mutex<Vec<ide::Loaded>>>,
     ctx: egui::Context,
     fonts_attached: bool,
-    /// `QUILL_THEME` pins the theme over the system's, for demos and captures.
+    /// `NEWEN_THEME` pins the theme over the system's, for demos and captures.
     pinned_theme: bool,
     /// When the disk was last looked at for files and folders changed by others.
     polled: std::time::Instant,
@@ -724,10 +724,13 @@ fn main() -> eframe::Result {
         Box::new(move |creation| {
             limn::set_fonts(newen_components::fonts(true, ""));
             limn_egui::install_fonts(&creation.egui_ctx);
-            // `QUILL_THEME=dark|light`, else the system's, else dark, as quill.
-            let dark = match std::env::var("QUILL_THEME").as_deref() {
-                Ok("light") => false,
-                Ok("dark") => true,
+            // `NEWEN_THEME=dark|light`, else the system's, else dark, as quill.
+            let dark = match newen_files::env("THEME")
+                .as_deref()
+                .and_then(|v| v.to_str())
+            {
+                Some("light") => false,
+                Some("dark") => true,
                 _ => creation.egui_ctx.system_theme() != Some(egui::Theme::Light),
             };
             creation.egui_ctx.set_theme(if dark {
@@ -762,7 +765,7 @@ fn main() -> eframe::Result {
                 inbox: Arc::default(),
                 ctx: creation.egui_ctx.clone(),
                 fonts_attached: false,
-                pinned_theme: std::env::var_os("QUILL_THEME").is_some(),
+                pinned_theme: newen_files::env("THEME").is_some(),
                 polled: std::time::Instant::now(),
                 picked: Arc::default(),
                 kept,

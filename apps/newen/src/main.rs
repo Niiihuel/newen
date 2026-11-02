@@ -104,7 +104,7 @@ struct App {
     applied: Option<newen_model::Motion>,
     /// The theme the window's icon was last drawn for.
     icon_dark: Option<bool>,
-    /// `QUILL_THEME` pins the theme over Settings, for demos and captures.
+    /// `NEWEN_THEME` pins the theme over Settings, for demos and captures.
     pinned_theme: bool,
     /// Where the browser leaves its pages' frames, presented each frame.
     frames: newen_engine::Frames,
@@ -1618,7 +1618,7 @@ fn open_external(target: impl AsRef<std::ffi::OsStr>) {
 /// on (quill-update's install.rs). Returns where it is.
 fn install_self() -> Result<String, String> {
     let install = newen_update::install::Install::locate()
-        .ok_or("no folder to install quill in (set HOME or QUILL_UPDATE_ROOT)")?;
+        .ok_or("no folder to install Newen in (set HOME or NEWEN_UPDATE_ROOT)")?;
     let program = std::env::current_exe().map_err(|error| error.to_string())?;
     let version = newen_update::Version::parse(newen_update::VERSION).map_err(|e| e.to_string())?;
     let placed = install
@@ -1633,7 +1633,7 @@ fn install_self() -> Result<String, String> {
 /// this one. Returns the version on trial, to end it once this start proves healthy.
 fn launch_update() -> Option<(newen_update::install::Install, newen_update::Version)> {
     use newen_update::install::{Install, Launch, ATTEMPTS};
-    if std::env::var_os("QUILL_NO_UPDATE").is_some_and(|value| !value.is_empty()) {
+    if newen_files::env("NO_UPDATE").is_some_and(|value| !value.is_empty()) {
         return None;
     }
     let install = Install::locate()?;
@@ -1687,9 +1687,10 @@ fn update_log(line: String) {
     }
 }
 
-/// Where a restart names the process the program it starts waits for: quill's variable, and
-/// Newen's, which Newen (quill's next name) reads and sets when it goes back to quill.
-const RESTART_AFTER: [&str; 2] = ["QUILL_RESTART_AFTER", "NEWEN_RESTART_AFTER"];
+/// Where a restart names the process the program it starts waits for, `NEWEN_RESTART_AFTER`:
+/// quill 0.1.9 reads it too when Newen goes back to it, and quill sets `QUILL_RESTART_AFTER`
+/// when it starts Newen ([`newen_files::env`]).
+const RESTART_AFTER: &str = "RESTART_AFTER";
 
 /// Starts the installed program with this one's arguments. It waits for this process to go
 /// (`wait_for_restarter`): the link socket is this window's until then.
@@ -1700,27 +1701,26 @@ fn restart(program: &std::path::Path) -> std::io::Result<()> {
 fn restart_command(program: &std::path::Path) -> std::process::Command {
     let mut command = newen_files::command(program);
     command.args(std::env::args_os().skip(1));
-    for name in RESTART_AFTER {
-        command.env(name, std::process::id().to_string());
-    }
+    command.env(
+        format!("NEWEN_{RESTART_AFTER}"),
+        std::process::id().to_string(),
+    );
     command
 }
 
-/// The process a restart said to wait for, in either variable `var` reads.
-fn restarter(var: impl Fn(&str) -> Option<String>) -> Option<u32> {
-    RESTART_AFTER
-        .iter()
-        .find_map(|name| var(name)?.parse().ok())
+/// The process a restart said to wait for.
+fn restarter(var: Option<std::ffi::OsString>) -> Option<u32> {
+    var?.to_str()?.parse().ok()
 }
 
 /// When a restarted copy starts, waits (up to ten seconds) for the process that restarted it
 /// to exit, so the window and the link socket are free.
 fn wait_for_restarter() {
-    let Some(pid) = restarter(|name| std::env::var(name).ok()) else {
+    let Some(pid) = restarter(newen_files::env(RESTART_AFTER)) else {
         return;
     };
-    for name in RESTART_AFTER {
-        std::env::remove_var(name);
+    for prefix in ["NEWEN", "QUILL"] {
+        std::env::remove_var(format!("{prefix}_{RESTART_AFTER}"));
     }
     // shortcut: only Linux can ask whether a pid lives without FFI; elsewhere a moment's grace.
     if !std::path::Path::new("/proc/self").exists() {
@@ -1740,8 +1740,8 @@ fn open_url(url: &str) -> bool {
     #[cfg(unix)]
     let handed = (|| -> Option<bool> {
         use std::io::{BufRead, Write};
-        let socket = std::env::var_os("QUILL_BROWSER_BRIDGE")?;
-        let key = std::env::var("QUILL_BROWSER_KEY").ok()?;
+        let socket = std::env::var_os("NEWEN_BROWSER_BRIDGE")?;
+        let key = std::env::var("NEWEN_BROWSER_KEY").ok()?;
         let mut stream = std::os::unix::net::UnixStream::connect(socket).ok()?;
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(3)))
@@ -1931,10 +1931,13 @@ fn main() -> eframe::Result {
         Box::new(move |creation| {
             limn::set_fonts(newen_components::fonts(true, ""));
             limn_egui::install_fonts(&creation.egui_ctx);
-            // `QUILL_THEME=dark|light`, else the system's, else dark.
-            let dark = match std::env::var("QUILL_THEME").as_deref() {
-                Ok("light") => false,
-                Ok("dark") => true,
+            // `NEWEN_THEME=dark|light`, else the system's, else dark.
+            let dark = match newen_files::env("THEME")
+                .as_deref()
+                .and_then(|v| v.to_str())
+            {
+                Some("light") => false,
+                Some("dark") => true,
                 _ => creation.egui_ctx.system_theme() != Some(egui::Theme::Light),
             };
             creation.egui_ctx.set_theme(if dark {
@@ -1950,7 +1953,7 @@ fn main() -> eframe::Result {
                 events.lock().unwrap().push(event);
                 ctx.request_repaint();
             };
-            // `QUILL_PROGRAMS=claude=/path/fake-agent` runs another program for an agent, as
+            // `NEWEN_PROGRAMS=claude=/path/fake-agent` runs another program for an agent, as
             // the engine's tests do, with sessions kept in memory only: a replay to look at.
             // The browser's frames wake the window too.
             let frames = newen_engine::Frames::default();
@@ -1970,9 +1973,9 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .and_then(|native| start_direct(creation, native));
             // A stand-in agent keeps no settings: the welcome would show at every start.
-            let skip_welcome = std::env::var_os("QUILL_PROGRAMS").is_some()
-                && std::env::var_os("QUILL_WELCOME").is_none();
-            let engine = match std::env::var("QUILL_PROGRAMS") {
+            let skip_welcome = std::env::var_os("NEWEN_PROGRAMS").is_some()
+                && std::env::var_os("NEWEN_WELCOME").is_none();
+            let engine = match std::env::var("NEWEN_PROGRAMS") {
                 Ok(programs) => Engine::start_with(
                     sink,
                     newen_engine::Config {
@@ -2048,7 +2051,7 @@ fn main() -> eframe::Result {
                 store: Store::default(),
                 ui: Ui {
                     // Tests and demos pin a cheap model; the picker changes it per session.
-                    model: std::env::var("QUILL_MODEL").ok(),
+                    model: std::env::var("NEWEN_MODEL").ok(),
                     name: first_name(),
                     utc_offset: utc_offset(),
                     skip_welcome,
@@ -2079,7 +2082,7 @@ fn main() -> eframe::Result {
                 helper: None,
                 applied: None,
                 icon_dark: None,
-                pinned_theme: std::env::var_os("QUILL_THEME").is_some(),
+                pinned_theme: newen_files::env("THEME").is_some(),
                 frames,
                 textures: HashMap::new(),
                 direct,
@@ -2169,12 +2172,15 @@ fn start_direct(
 }
 
 /// Whether the browser's pages are drawn by Chromium in quill's own process, rather than by
-/// a headless one's screencast: when Settings asks. `QUILL_BROWSER=native` or `headless`
+/// a headless one's screencast: when Settings asks. `NEWEN_BROWSER=native` or `headless`
 /// decides instead.
 fn native_browser(settings: &newen_model::Settings) -> bool {
-    match std::env::var("QUILL_BROWSER").as_deref() {
-        Ok("native") => true,
-        Ok("headless") => false,
+    match newen_files::env("BROWSER")
+        .as_deref()
+        .and_then(|v| v.to_str())
+    {
+        Some("native") => true,
+        Some("headless") => false,
         // Windows has no headless Chromium to drive (chromium.rs) and both it and macOS ship
         // CEF in the bundle: there it is the browser.
         _ => settings.browser_native || !cfg!(target_os = "linux"),
@@ -2213,23 +2219,22 @@ fn start_native(
 mod tests {
     use super::*;
 
-    /// A restart names this process in quill's variable and in Newen's, and a start waits for
-    /// the one named in either (Newen sets only its own when it goes back to quill).
+    /// A restart names this process in Newen's variable alone (quill 0.1.9 reads it too); the
+    /// pid read is the variable's, from Newen's or from quill's when quill started this one.
     #[test]
-    fn a_restart_is_waited_for_by_quill_s_variable_or_newen_s() {
-        let command = restart_command(std::path::Path::new("/nowhere/quill"));
+    fn a_restart_names_this_process_in_newen_s_variable() {
+        let command = restart_command(std::path::Path::new("/nowhere/newen"));
         let pid = std::process::id().to_string();
         let envs: Vec<_> = command.get_envs().collect();
-        for name in RESTART_AFTER {
-            assert!(
-                envs.contains(&(name.as_ref(), Some(pid.as_ref()))),
-                "{name} in {envs:?}"
-            );
-        }
-        let only = |set: &'static str| move |name: &str| (name == set).then(|| "42".to_owned());
-        assert_eq!(restarter(only("QUILL_RESTART_AFTER")), Some(42));
-        assert_eq!(restarter(only("NEWEN_RESTART_AFTER")), Some(42));
-        assert_eq!(restarter(only("OTHER")), None);
-        assert_eq!(restarter(|_| Some("not a pid".into())), None);
+        assert_eq!(
+            envs,
+            [(
+                std::ffi::OsStr::new("NEWEN_RESTART_AFTER"),
+                Some(std::ffi::OsStr::new(&pid))
+            )]
+        );
+        assert_eq!(restarter(Some("42".into())), Some(42));
+        assert_eq!(restarter(None), None);
+        assert_eq!(restarter(Some("not a pid".into())), None);
     }
 }

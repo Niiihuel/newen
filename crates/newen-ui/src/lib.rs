@@ -1312,7 +1312,7 @@ pub struct Ui {
     /// When the welcome was first drawn: what comes in under its word is timed from it.
     pub welcome_since: std::cell::OnceCell<std::time::Instant>,
     /// The host runs quill with a stand-in agent and no settings kept (tests, captures): the
-    /// welcome is not shown, unless `QUILL_WELCOME` asks for it.
+    /// welcome is not shown, unless `NEWEN_WELCOME` asks for it.
     pub skip_welcome: bool,
     /// The tour's step, from zero, while it runs (`tour`).
     pub tour: Option<usize>,

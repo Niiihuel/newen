@@ -188,7 +188,7 @@ fn account(server: &str, header: bool, key: &str) -> String {
     )
 }
 
-/// `QUILL_MCP_<SERVER>_<KEY>`: the variable of the agent's process that holds a secret.
+/// `NEWEN_MCP_<SERVER>_<KEY>`: the variable of the agent's process that holds a secret.
 fn variable(server: &str, header: bool, key: &str) -> String {
     let up = |s: &str| {
         s.chars()
@@ -202,7 +202,7 @@ fn variable(server: &str, header: bool, key: &str) -> String {
             .collect::<String>()
     };
     format!(
-        "QUILL_MCP_{}_{}{}",
+        "NEWEN_MCP_{}_{}{}",
         up(server),
         if header { "H_" } else { "" },
         up(key)
@@ -890,13 +890,13 @@ mod tests {
             plan.servers[0].env_vars,
             [(
                 "GITHUB_TOKEN".to_owned(),
-                "QUILL_MCP_GITHUB_GITHUB_TOKEN".to_owned()
+                "NEWEN_MCP_GITHUB_GITHUB_TOKEN".to_owned()
             )]
         );
         assert_eq!(
             plan.env,
             [(
-                "QUILL_MCP_GITHUB_GITHUB_TOKEN".to_owned(),
+                "NEWEN_MCP_GITHUB_GITHUB_TOKEN".to_owned(),
                 "ghp_secret".to_owned()
             )]
         );

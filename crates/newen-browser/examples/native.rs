@@ -2,7 +2,7 @@
 //! run in a program of its own (its processes are this one run again), so it is an example.
 //! `cargo run -p quill-browser --example native [out-dir]` from shell.nix; it saves the frames
 //! it saw as PPM in `out-dir` when given one. The frames stay on a GPU device of its own, as
-//! they do on the window's, where its driver allows; `QUILL_NO_GPU=1` checks the CPU's path.
+//! they do on the window's, where its driver allows; `NEWEN_NO_GPU=1` checks the CPU's path.
 
 use newen_browser::{Browser, Frame, Frames, Grant, Native, Options, Permit, Pixels};
 use newen_model::{BrowserInput, BrowserOp, BrowserUpdate, BrowserView, Modifiers, PointerButton};
@@ -24,7 +24,7 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("quill-native-{}", std::process::id()));
     let frames = Frames::default();
     frames.set_scale(2.0);
-    let gpu = std::env::var_os("QUILL_NO_GPU")
+    let gpu = std::env::var_os("NEWEN_NO_GPU")
         .is_none()
         .then(gpu)
         .flatten();

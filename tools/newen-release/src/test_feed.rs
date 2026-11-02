@@ -7,7 +7,7 @@
 //!     [--platform windows-x86_64] [--tree <folder>]
 //! ```
 //!
-//! It prints the `QUILL_UPDATE_FEED` and `QUILL_UPDATE_KEY` a debug build of
+//! It prints the `NEWEN_UPDATE_FEED` and `NEWEN_UPDATE_KEY` a debug build of
 //! quill needs to use it, and serves until it is stopped. `--artifact` is
 //! what the release installs, made as the release workflow makes it (Linux's
 //! bundle as a `.tar.gz`, Windows' and macOS' as a `.zip`) from a build of
@@ -117,9 +117,9 @@ fn main() {
     if slow {
         server.configure(|files| files.pace = Some(Duration::from_millis(150)));
     }
-    println!("QUILL_UPDATE_FEED={}", server.base());
+    println!("NEWEN_UPDATE_FEED={}", server.base());
     println!(
-        "QUILL_UPDATE_KEY={}",
+        "NEWEN_UPDATE_KEY={}",
         base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes())
     );
     loop {

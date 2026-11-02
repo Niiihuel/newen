@@ -730,7 +730,7 @@ fn a_session_started_with_another_agent_runs_that_agent() {
     // Codex's defaults, and the fake answering as Codex's app-server.
     let settings = dir.join("settings.json");
     let chosen = serde_json::json!({ "agents": { "codex": {
-        "model": "gpt-6-luna", "effort": "low", "env": ["QUILL_FAKE_APP_SERVER=1"] } } });
+        "model": "gpt-6-luna", "effort": "low", "env": ["NEWEN_FAKE_APP_SERVER=1"] } } });
     std::fs::write(&settings, chosen.to_string()).unwrap();
     let fake = env!("CARGO_BIN_EXE_fake-agent").to_string();
     let programs = HashMap::from([
@@ -1141,8 +1141,8 @@ fn signed_out_engine(name: &str) -> (Engine, Receiver<Event>, std::path::PathBuf
         "claude".into(),
         newen_model::AgentSettings {
             env: vec![
-                "QUILL_FAKE_AUTH=signed-out".into(),
-                format!("QUILL_FAKE_AUTH_MARKER={}", marker.display()),
+                "NEWEN_FAKE_AUTH=signed-out".into(),
+                format!("NEWEN_FAKE_AUTH_MARKER={}", marker.display()),
             ],
             ..Default::default()
         },
@@ -1247,9 +1247,9 @@ fn codex_signs_in_and_out_through_its_own_commands() {
         "codex".into(),
         newen_model::AgentSettings {
             env: vec![
-                "QUILL_FAKE_AUTH=signed-out".into(),
-                "QUILL_FAKE_LOGIN_MS=100".into(),
-                format!("QUILL_FAKE_AUTH_MARKER={}", marker.display()),
+                "NEWEN_FAKE_AUTH=signed-out".into(),
+                "NEWEN_FAKE_LOGIN_MS=100".into(),
+                format!("NEWEN_FAKE_AUTH_MARKER={}", marker.display()),
             ],
             ..Default::default()
         },
@@ -1723,13 +1723,13 @@ fn global_servers_are_kept_then_injected_per_session_with_secrets_only_in_the_en
         .skip_while(|l| *l != "--mcp-config")
         .nth(1)
         .unwrap();
-    assert!(config.contains("${QUILL_MCP_EXTRA_GITHUB_TOKEN}") && !config.contains("\"github\""));
+    assert!(config.contains("${NEWEN_MCP_EXTRA_GITHUB_TOKEN}") && !config.contains("\"github\""));
     assert!(!launched
         .lines()
         .any(|l| l.starts_with("--") && l.contains("topsecret")));
     assert!(!config.contains("topsecret"));
     assert!(
-        launched.contains("QUILL_MCP_EXTRA_GITHUB_TOKEN=ghp_topsecret"),
+        launched.contains("NEWEN_MCP_EXTRA_GITHUB_TOKEN=ghp_topsecret"),
         "{launched}"
     );
     let _ = std::fs::remove_dir_all(config_dir);
@@ -1955,7 +1955,7 @@ fn codex_sessions_share_one_app_server_a_phone_can_reach() {
     let dir = workdir("simple");
     let settings = dir.join("settings.json");
     let chosen = serde_json::json!({ "agents": { "codex": {
-        "options": { "remote": "true" }, "env": ["QUILL_FAKE_APP_SERVER=1"] } } });
+        "options": { "remote": "true" }, "env": ["NEWEN_FAKE_APP_SERVER=1"] } } });
     std::fs::write(&settings, chosen.to_string()).unwrap();
     let programs = HashMap::from([(
         "codex".to_string(),

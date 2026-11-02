@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 /// What the agent's process is told: the script, the socket and the session's key.
-pub const SHIM_ENV: [&str; 3] = ["BROWSER", "QUILL_BROWSER_BRIDGE", "QUILL_BROWSER_KEY"];
+pub const SHIM_ENV: [&str; 3] = ["BROWSER", "NEWEN_BROWSER_BRIDGE", "NEWEN_BROWSER_KEY"];
 
 pub struct Bridge {
     socket: PathBuf,

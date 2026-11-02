@@ -1289,7 +1289,7 @@ fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
                 env: vec![("LOG".into(), "warn".into())],
                 env_vars: vec![(
                     "GITHUB_TOKEN".into(),
-                    "QUILL_MCP_GITHUB_GITHUB_TOKEN".into(),
+                    "NEWEN_MCP_GITHUB_GITHUB_TOKEN".into(),
                 )],
                 ..Default::default()
             },
@@ -1300,7 +1300,7 @@ fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
                 sse: true,
                 header_vars: vec![(
                     "Authorization".into(),
-                    "QUILL_MCP_LINEAR_H_AUTHORIZATION".into(),
+                    "NEWEN_MCP_LINEAR_H_AUTHORIZATION".into(),
                 )],
                 ..Default::default()
             },
@@ -1314,14 +1314,14 @@ fn global_servers_ride_in_mcp_config_with_only_the_names_of_their_secrets() {
     assert_eq!(github["type"], "stdio");
     assert_eq!(
         github["env"]["GITHUB_TOKEN"],
-        "${QUILL_MCP_GITHUB_GITHUB_TOKEN}"
+        "${NEWEN_MCP_GITHUB_GITHUB_TOKEN}"
     );
     assert_eq!(github["env"]["LOG"], "warn");
     let linear = &config["mcpServers"]["linear"];
     assert_eq!(linear["type"], "sse");
     assert_eq!(
         linear["headers"]["Authorization"],
-        "${QUILL_MCP_LINEAR_H_AUTHORIZATION}"
+        "${NEWEN_MCP_LINEAR_H_AUTHORIZATION}"
     );
     // The generated plugin the skills come in.
     let plugin = plan.args.iter().position(|a| a == "--plugin-dir").unwrap();

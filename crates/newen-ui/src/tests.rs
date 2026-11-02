@@ -776,7 +776,7 @@ fn running_clock_reads_as_desktop_writes_it() {
 
 #[test]
 fn every_icon_is_a_complete_svg_on_the_20_grid() {
-    let sheet = std::env::var_os("QUILL_ICON_SHEET");
+    let sheet = std::env::var_os("NEWEN_ICON_SHEET");
     for (name, svg) in icons::ALL {
         assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"), "{name}");
         assert!(svg.contains("viewBox='0 0 20 20'"), "{name}");

@@ -75,7 +75,7 @@ pub(crate) fn players(wav: &[u8], path: &std::path::Path) -> Vec<Run> {
         vec![("afplay", vec![path.display().to_string()], vec![])]
     } else if cfg!(windows) {
         use base64::Engine;
-        let script = "$b=[Convert]::FromBase64String($env:QUILL_SOUND);\
+        let script = "$b=[Convert]::FromBase64String($env:NEWEN_SOUND);\
                       (New-Object Media.SoundPlayer([IO.MemoryStream]::new($b))).PlaySync()";
         vec![(
             "powershell",
@@ -83,7 +83,7 @@ pub(crate) fn players(wav: &[u8], path: &std::path::Path) -> Vec<Run> {
                 .map(String::from)
                 .to_vec(),
             vec![(
-                "QUILL_SOUND",
+                "NEWEN_SOUND",
                 base64::engine::general_purpose::STANDARD.encode(wav),
             )],
         )]

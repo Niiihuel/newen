@@ -82,12 +82,12 @@ pub struct Install {
 }
 
 impl Install {
-    /// `QUILL_UPDATE_ROOT` when set (a test installation), or this person's:
+    /// `NEWEN_UPDATE_ROOT` when set (a test installation), or this person's:
     /// `$XDG_DATA_HOME/newen/app` on Linux ([`app_root`]), `%LOCALAPPDATA%\Programs\newen` on
     /// Windows (quill's `Programs\quill` while that is there and Newen's is not), and on macOS
     /// the folder holding the `Newen.app` this program runs from, else `~/Applications`.
     pub fn locate() -> Option<Self> {
-        if let Some(root) = std::env::var_os("QUILL_UPDATE_ROOT").filter(|root| !root.is_empty()) {
+        if let Some(root) = newen_files::env("UPDATE_ROOT").filter(|root| !root.is_empty()) {
             return Some(Self::at(root));
         }
         #[cfg(windows)]
