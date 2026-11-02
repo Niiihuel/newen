@@ -10823,3 +10823,131 @@ fn skills_list(skills: Vec<quill_model::Skill>) -> quill_model::Extensions {
         ..Default::default()
     }
 }
+
+/// A new session's page holds the greeting and the composer as one block, centered across
+/// the column with the greeting a little over its middle, its "+" and send inside the card
+/// and the chips and pickers under it; once the session exists the composer glides down to
+/// its dock.
+#[test]
+fn a_new_page_centers_the_greeting_over_the_card_then_the_composer_docks() {
+    use std::time::{Duration, Instant};
+    let store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    ui.name = Some("Ana".into());
+    assert!(ui.sidebar.open);
+    for (width, height) in [(2000.0, 1200.0), (900.0, 600.0)] {
+        let window = limn::Size::new(width, height);
+        let at = format!("{width}×{height}");
+        let (left, top) = (view::sidebar_width(&ui), look::TOP_BAR + 1.0);
+        let middle = (left + width) / 2.0;
+        for laid_out in [false, true] {
+            let mut tree = UiTree::new(view(&store, &ui, window));
+            tree.set_text_layout(laid_out);
+            tree.set_reduced_motion(true);
+            let frame = tree.layout(window);
+            let spans: Vec<_> = drawn_spans(&frame)
+                .into_iter()
+                .filter(|s| s.1 >= left)
+                .collect();
+            assert_apart(&spans, &at);
+            let greeting = spans
+                .iter()
+                .find(|s| s.0.contains(", Ana"))
+                .unwrap_or_else(|| panic!("{at}: no greeting in {spans:?}"));
+            // The line is the pen, 12 px, then the words: centered as one.
+            let line = (greeting.1 - 56.0, greeting.3);
+            assert!(
+                ((line.0 + line.1) / 2.0 - middle).abs() < 2.0,
+                "{at}: greeting {line:?} not centered on {middle}"
+            );
+            let share = (greeting.2 + greeting.4 - top) / (height - top);
+            assert!(
+                (0.36..=0.48).contains(&share),
+                "{at}: greeting at {share} of the column"
+            );
+            assert!(greeting.2 > top + 20.0, "{at}: greeting at the top");
+            let get = |id: &str| region(&frame, id).unwrap_or_else(|| panic!("{at}: no {id}"));
+            let editor = get(view::COMPOSER);
+            let card = editor.x + editor.width / 2.0;
+            assert!((card - middle).abs() < 12.0, "{at}: card at {card}");
+            assert!(
+                editor.y >= greeting.2 + greeting.4 + 20.0,
+                "{at}: card under the greeting"
+            );
+            assert!(
+                editor.height >= 44.0,
+                "{at}: editor {editor:?} under two lines"
+            );
+            let (plus, send) = (get(view::PLUS_MENU), get(view::SEND));
+            for button in [plus, send] {
+                assert!(
+                    button.y >= editor.y + editor.height,
+                    "{at}: {button:?} beside the editor"
+                );
+            }
+            assert!(
+                plus.x < editor.x + 20.0 && send.x + send.width > editor.x + editor.width - 20.0
+            );
+            for id in [
+                view::FOLDER_MENU,
+                view::MODE_MENU,
+                view::MODEL_MENU,
+                view::USAGE_MENU,
+            ] {
+                let r = get(id);
+                assert!(
+                    r.y >= send.y + send.height,
+                    "{at}: {id} {r:?} not under the card"
+                );
+                assert!(
+                    r.x >= left && r.x + r.width <= width + 0.5,
+                    "{at}: {id} {r:?} outside"
+                );
+                assert!(
+                    r.y + r.height <= height,
+                    "{at}: {id} {r:?} below the window"
+                );
+            }
+            let (folder, model) = (get(view::FOLDER_MENU), get(view::MODEL_MENU));
+            assert!(folder.x < model.x, "{at}: chips not on the left");
+        }
+    }
+
+    // The first message: the session starts and the composer docks at the bottom, gliding.
+    let window = limn::Size::new(2000.0, 1200.0);
+    let start = Instant::now();
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    let centered = region(&tree.layout_at(window, start), view::COMPOSER)
+        .unwrap()
+        .y;
+    update(
+        &store,
+        &mut ui,
+        &UiAction::Submitted {
+            id: view::COMPOSER.into(),
+            value: "hi".into(),
+        },
+    );
+    let mut store = store;
+    let created = Event::SessionCreated {
+        session: 7,
+        agent: "claude".into(),
+        cwd: "/work".into(),
+    };
+    store.apply(created.clone());
+    ui.applied(&created);
+    tree.set_root(view(&store, &ui, window));
+    let at = |tree: &mut UiTree, ms| {
+        let frame = tree.layout_at(window, start + Duration::from_millis(ms));
+        region(&frame, view::COMPOSER).unwrap().y
+    };
+    assert_eq!(at(&mut tree, 0), centered);
+    let midway = at(&mut tree, 60);
+    let docked = at(&mut tree, 2000);
+    assert!(
+        centered < midway && midway < docked,
+        "{centered} {midway} {docked}"
+    );
+    assert!(docked > 1200.0 - 140.0, "composer not docked: {docked}");
+}
