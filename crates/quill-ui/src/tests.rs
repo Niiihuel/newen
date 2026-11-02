@@ -8529,3 +8529,517 @@ fn a_waiting_session_nests_under_the_one_it_waits_for_with_an_hourglass() {
     assert_eq!(listed[0].1.x, listed[1].1.x);
     assert!(hourglass.is_none());
 }
+
+/// A running helper's Stop sits at its row's right edge, clear of the row's words, which
+/// fade before it; a running command's the same.
+#[test]
+fn a_running_tasks_stop_sits_at_the_right_edge_clear_of_its_words() {
+    let (mut store, mut ui) = store_with_session();
+    for (id, kind, description) in [
+        ("t1", "agent", "Extract Discord icons for each glyph"),
+        ("t2", "command", "Watch the build"),
+    ] {
+        agent(
+            &mut store,
+            AgentEvent::TaskStarted {
+                id: id.into(),
+                call: Some(format!("c{id}")),
+                description: description.into(),
+                kind: kind.into(),
+            },
+        );
+        agent(
+            &mut store,
+            AgentEvent::TaskProgress {
+                id: id.into(),
+                usage: quill_model::TaskUsage {
+                    tokens: 134_500,
+                    tool_uses: 25,
+                    duration_ms: 484_000,
+                },
+            },
+        );
+    }
+    // More than the pane holds, so its list scrolls.
+    for i in 0..16 {
+        agent(
+            &mut store,
+            AgentEvent::TaskStarted {
+                id: format!("more{i}"),
+                call: None,
+                description: format!("Watch the build {i}"),
+                kind: "command".into(),
+            },
+        );
+    }
+    click(&store, &mut ui, view::TASKS_OPEN);
+    settle(&store, &mut ui);
+    for width in [1408.0, 2000.0, 2600.0] {
+        let window = limn::Size::new(width, 900.0);
+        let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+        let rect = |id: &str| frame.regions.iter().find(|r| r.id == id).unwrap().rect;
+        let pane = rect("tasks:scroll");
+        let last = text_spans(&frame)
+            .into_iter()
+            .find(|s| s.0 == "Watch the build 15");
+        assert!(
+            last.is_none_or(|s| s.2 > pane.y + pane.height),
+            "{width}: the list scrolls"
+        );
+        for (id, words) in [("t1", "Extract Discord"), ("t2", "Watch the build")] {
+            let stop = rect(&format!("task:stop:{id}"));
+            assert!(
+                (stop.x + stop.width - (pane.x + pane.width - 16.0)).abs() < 1.0,
+                "{width}: {id}'s Stop at {stop:?} in {pane:?}"
+            );
+            let spans = text_spans(&frame);
+            let title = spans.iter().find(|s| s.0.starts_with(words)).unwrap();
+            for s in spans
+                .iter()
+                .filter(|s| s.2 >= title.2 && s.2 < title.2 + 40.0)
+            {
+                assert!(s.3 <= stop.x + 0.5, "{width}: {s:?} runs under {stop:?}");
+            }
+        }
+    }
+}
+
+/// A running helper's transcript, opened under Background tasks in a narrow pane: a command
+/// whose output is one long listing with no spaces, then a paragraph, then another step.
+#[test]
+fn a_helpers_transcript_keeps_its_rows_apart_in_a_narrow_pane() {
+    let (mut store, mut ui) = store_with_session();
+    let description = "Extract Discord icons for each glyph";
+    tool(
+        &mut store,
+        "h1",
+        "Agent",
+        serde_json::json!({ "description": description, "prompt": "Extract the icons." }),
+        None,
+    );
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "k1".into(),
+            call: Some("h1".into()),
+            description: description.into(),
+            kind: "agent".into(),
+        },
+    );
+    let names: String = (0..60).map(|i| format!("Icon{i}Neutral")).collect();
+    let listing = format!(
+        "{names}YoutubeNeutralIcon\n/run/current-system/sw/bin/convert\nModuleNotFoundError: No module named 'cairosvg'\n{}",
+        (0..40).map(|i| format!("line {i}\n")).collect::<String>()
+    );
+    let bash =
+        serde_json::json!({ "command": "python3 extract.py", "description": "List the icons" });
+    tool(&mut store, "hb1", "Bash", bash, Some("h1"));
+    result(&mut store, "hb1", &listing);
+    agent(
+        &mut store,
+        AgentEvent::Text {
+            text: "ImageMagick is available for contact-sheet checks. Next I'll look at the raw module source for `fillRule`, secondary colours, and local-function icons.".into(),
+            parent: Some("h1".into()),
+            id: None,
+            at: None,
+        },
+    );
+    let read = serde_json::json!({ "file_path": "/work/discord/icons.js" });
+    tool(&mut store, "hr1", "Read", read, Some("h1"));
+    result(&mut store, "hr1", "export const a = 1;");
+    let long = "a-path/that/never/ends/".repeat(12);
+    let edit = serde_json::json!({ "file_path": "/work/extract.py", "old_string": "a", "new_string": "b" });
+    tool(&mut store, "he1", "Edit", edit, Some("h1"));
+    agent(
+        &mut store,
+        AgentEvent::ToolResult {
+            call: "he1".into(),
+            output: "ok".into(),
+            is_error: false,
+            files: vec![quill_model::FileChange {
+                path: "/work/extract.py".into(),
+                before: Some("import os\n".into()),
+                after: Some(format!("import os\nprint(os.listdir('{long}'))\n")),
+            }],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        },
+    );
+    click(&store, &mut ui, view::TASKS_OPEN);
+    click(&store, &mut ui, "agent:h1");
+    settle(&store, &mut ui);
+    for open in [false, true] {
+        if open {
+            for key in ["steps:hb1", "hb1", "steps:hr1", "hr1", "he1"] {
+                ui.expanded.push(key.into());
+            }
+            settle(&store, &mut ui);
+        }
+        for width in [1408.0, 2000.0, 2600.0] {
+            let window = limn::Size::new(width, 1200.0);
+            let at = format!("{open} {width}");
+            let seen = assert_rows_apart(&store, &ui, window, "agent:h1:scroll", &at);
+            let mut words = vec!["ImageMagick", "icons.js"];
+            if open {
+                words.extend(["ModuleNotFoundError", "line 39", "listdir"]);
+            }
+            for words in words {
+                assert!(seen.iter().any(|s| s.contains(words)), "{at}: no {words}");
+            }
+        }
+    }
+}
+
+/// [`text_spans`], and the lines the tree lays out itself and draws as glyphs.
+fn drawn_spans(frame: &limn::Frame) -> Vec<(String, f32, f32, f32, f32)> {
+    let mut spans = text_spans(frame);
+    for block in frame.text_layouts() {
+        for run in block.runs {
+            // Text painted by the backend has a run of its own for selection.
+            let at = run.rect;
+            let painted = |s: &(String, f32, f32, f32, f32)| {
+                s.0 == run.text && (s.1 - at.x).abs() < 0.5 && (s.2 - at.y).abs() < 4.0
+            };
+            let r = run.visible.unwrap_or(at);
+            if r.width > 0.0 && r.height > 0.0 && !spans.iter().any(painted) {
+                spans.push((run.text, r.x, r.y, r.x + r.width, r.height));
+            }
+        }
+    }
+    spans
+}
+
+/// No line drawn over another; a fading or shimmering line is drawn as bands of the same words.
+fn assert_apart(spans: &[(String, f32, f32, f32, f32)], at: &str) {
+    for (i, a) in spans.iter().enumerate() {
+        for b in &spans[i + 1..] {
+            if a.0 == b.0 && a.2 == b.2 {
+                continue;
+            }
+            let across = a.1 < b.3 - 0.5 && b.1 < a.3 - 0.5;
+            let down = a.2 < b.2 + b.4 - 0.5 && b.2 < a.2 + a.4 - 0.5;
+            assert!(!(across && down), "{at}: {a:?} over {b:?}");
+        }
+    }
+}
+
+/// A helper's transcript opens at its end and follows what it says while the person stays
+/// there; scrolled up, it holds still, and back at the end it follows again. The app keeps
+/// the scroll area `helper_scroll` names at its end as it does the session's.
+#[test]
+fn a_helpers_transcript_follows_its_end_while_the_person_is_there() {
+    let (mut store, mut ui) = store_with_session();
+    tool(
+        &mut store,
+        "h1",
+        "Agent",
+        serde_json::json!({ "description": "Extract icons" }),
+        None,
+    );
+    let mut said = 0;
+    let mut say = |store: &mut Store| {
+        for _ in 0..12 {
+            said += 1;
+            agent(
+                store,
+                AgentEvent::Text {
+                    text: format!("Step {said}: looked at another module of icons."),
+                    parent: Some("h1".into()),
+                    id: Some(format!("m{said}")),
+                    at: None,
+                },
+            );
+        }
+    };
+    say(&mut store);
+    assert_eq!(ui.helper_scroll(), None);
+    click(&store, &mut ui, "agent:h1");
+    settle(&store, &mut ui);
+    let scroll = ui.helper_scroll().unwrap();
+    let window = limn::Size::new(1408.0, 900.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    // The frame it opens on goes to the end.
+    tree.layout(window);
+    tree.scroll_to_end(&scroll);
+    tree.layout(window);
+    assert!(region(&tree.layout(window), &scroll).is_some());
+    // One frame as the app has it: kept at the end while it is there.
+    let frame = |tree: &mut UiTree, store: &Store| {
+        let kept = tree.is_scroll_at_end(&scroll, 0.5);
+        tree.set_root(view(store, &ui, window));
+        if kept {
+            tree.scroll_to_end(&scroll);
+        }
+        tree.layout(window);
+    };
+    say(&mut store);
+    frame(&mut tree, &store);
+    assert!(tree.is_scroll_at_end(&scroll, 0.5), "it follows");
+    tree.set_scroll_offset(&scroll, 0.0);
+    tree.layout(window);
+    say(&mut store);
+    frame(&mut tree, &store);
+    assert!(
+        !tree.is_scroll_at_end(&scroll, 8.0),
+        "scrolled up, it holds"
+    );
+    tree.scroll_to_end(&scroll);
+    tree.layout(window);
+    say(&mut store);
+    frame(&mut tree, &store);
+    assert!(
+        tree.is_scroll_at_end(&scroll, 0.5),
+        "back at the end, it follows"
+    );
+}
+
+/// What a transcript holds that grows: an answered question with long options, a group of
+/// steps with a long command, its output with a line that never breaks, an edit's diff and a
+/// reply's code block, then `pending`, the card that waits on the person.
+fn growing_turn(pending: &str) -> (Store, Ui) {
+    let (mut store, ui) = store_with_session();
+    let long = "a-path/that/never/ends/".repeat(12);
+    let question = "Which of these ways of extracting the icons should the helper agent use for every glyph in the set?";
+    let options: Vec<_> = (0..3)
+        .map(|i| {
+            serde_json::json!({
+                "label": format!("Option {i}: render each glyph through the module source and keep its fill rule"),
+                "description": format!("Longer account {i} of what this choice does to every icon, its colours and its local functions."),
+            })
+        })
+        .collect();
+    let questions =
+        serde_json::json!({ "questions": [{ "question": question, "options": options }] });
+    tool(&mut store, "q1", "AskUserQuestion", questions.clone(), None);
+    result(
+        &mut store,
+        "q1",
+        &format!("The user answered: \"{question}\"=\"Option 1: render each glyph through the module source and keep its fill rule\"."),
+    );
+    let bash = serde_json::json!({
+        "command": format!("python3 extract.py --out /work/{long} && ls -la /work/{long}"),
+        "description": "Extract every icon of the set into its own folder",
+    });
+    tool(&mut store, "b1", "Bash", bash, None);
+    let names: String = (0..60).map(|i| format!("Icon{i}Neutral")).collect();
+    result(
+        &mut store,
+        "b1",
+        &format!("{names}\nModuleNotFoundError: No module named 'cairosvg'"),
+    );
+    let edit = serde_json::json!({ "file_path": "/work/extract.py", "old_string": "a", "new_string": "b" });
+    tool(&mut store, "e1", "Edit", edit, None);
+    agent(
+        &mut store,
+        AgentEvent::ToolResult {
+            call: "e1".into(),
+            output: "ok".into(),
+            is_error: false,
+            files: vec![quill_model::FileChange {
+                path: "/work/extract.py".into(),
+                before: Some("import os\nprint(os.listdir('.'))\n".into()),
+                after: Some(format!("import os\nprint(os.listdir('{long}'))\n")),
+            }],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        },
+    );
+    agent(
+        &mut store,
+        AgentEvent::Text {
+            text: format!("Ran it. The listing:\n\n```\n{names}\n```\n\nand the error is above."),
+            parent: None,
+            id: None,
+            at: None,
+        },
+    );
+    let (tool_name, input) = match pending {
+        "question" => ("AskUserQuestion", questions),
+        "plan" => (
+            "ExitPlanMode",
+            serde_json::json!({ "plan": format!("# Plan\n\n1. Extract the icons into `{long}`.\n\n```\n{names}\n```") }),
+        ),
+        _ => (
+            "Bash",
+            serde_json::json!({ "command": format!("rm -rf /work/{long} && python3 extract.py"), "description": "Clear the folder and extract again" }),
+        ),
+    };
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Awaiting,
+    });
+    agent(
+        &mut store,
+        AgentEvent::PermissionRequest {
+            id: "p9".into(),
+            call: Some("x9".into()),
+            tool: tool_name.into(),
+            input,
+            title: None,
+            interactive: true,
+            suggestions: vec![],
+        },
+    );
+    (store, ui)
+}
+
+/// Every line in the scroll area `scroll` keeps to it and none is drawn over another, from
+/// its top to its end, in the stand-in measure and in the fonts the app lays text out in.
+/// What it drew is given back.
+fn assert_rows_apart(
+    store: &Store,
+    ui: &Ui,
+    window: limn::Size,
+    scroll: &str,
+    at: &str,
+) -> Vec<String> {
+    let mut seen = vec![];
+    for laid_out in [false, true] {
+        let mut tree = UiTree::new(view(store, ui, window));
+        tree.set_text_layout(laid_out);
+        tree.set_reduced_motion(true);
+        for step in 0..40 {
+            tree.set_scroll_offset(scroll, step as f32 * 180.0);
+            let frame = tree.layout(window);
+            let Some(pane) = region(&frame, scroll) else {
+                panic!("{at}: no {scroll}");
+            };
+            let spans: Vec<_> = drawn_spans(&frame)
+                .into_iter()
+                .filter(|s| s.1 >= pane.x && s.1 < pane.x + pane.width)
+                .filter(|s| s.2 + s.4 > pane.y && s.2 < pane.y + pane.height)
+                .collect();
+            if std::env::var_os("SPANS").is_some() {
+                eprintln!("{at} {laid_out} {step}: {pane:?}");
+                for s in &spans {
+                    eprintln!("{s:?}");
+                }
+            }
+            for s in &spans {
+                assert!(
+                    s.3 <= pane.x + pane.width + 0.5,
+                    "{at} {laid_out}: {s:?} runs past {pane:?}"
+                );
+            }
+            assert_apart(&spans, &format!("{at} {laid_out} {step}"));
+            seen.extend(spans.into_iter().map(|s| s.0));
+            if tree.is_scroll_at_end(scroll, 0.5) {
+                break;
+            }
+        }
+    }
+    seen
+}
+
+/// The question card with long options, the answered one, a plan's card and a command's,
+/// a group of steps folded and open with its command, output and diff, and a reply's code
+/// block: no line over another, in the transcript and in a helper's pane, narrow and wide.
+#[test]
+fn cards_that_grow_keep_their_rows_apart_open_and_folded() {
+    // The crowded turn too, all the way down rather than its first screen.
+    let (store, mut ui) = crowded_turn();
+    ui.expanded.extend(["steps:a8".into(), "steps:r1".into()]);
+    settle(&store, &mut ui);
+    for width in [648.0, 1600.0] {
+        let window = limn::Size::new(width, 900.0);
+        assert_rows_apart(
+            &store,
+            &ui,
+            window,
+            "transcript:1",
+            &format!("crowded {width}"),
+        );
+    }
+    for pending in ["question", "plan", "command"] {
+        for open in [false, true] {
+            let (store, mut ui) = growing_turn(pending);
+            if open {
+                for key in ["steps:b1", "b1", "e1"] {
+                    ui.expanded.push(key.into());
+                }
+            }
+            settle(&store, &mut ui);
+            for width in [648.0, 1000.0, 1600.0, 2400.0] {
+                let window = limn::Size::new(width, 900.0);
+                let at = format!("{pending} {open} {width}");
+                let seen = assert_rows_apart(&store, &ui, window, "transcript:1", &at);
+                let mut words = vec!["Which of these", "Ran it", "Icon59Neutral"];
+                words.push(match pending {
+                    "question" => "Option 2",
+                    "plan" => "proposed a plan",
+                    _ => "rm -rf",
+                });
+                if open {
+                    words.extend(["ModuleNotFoundError", "listdir"]);
+                }
+                for words in words {
+                    assert!(seen.iter().any(|s| s.contains(words)), "{at}: no {words}");
+                }
+            }
+            // The plan in its own pane, beside.
+            if pending == "plan" {
+                ui.plan = Some("p9".into());
+                ui.open_pane(Pane::Plan);
+                settle(&store, &mut ui);
+                for width in [1408.0, 2000.0] {
+                    let window = limn::Size::new(width, 900.0);
+                    let at = format!("plan pane {open} {width}");
+                    let seen = assert_rows_apart(&store, &ui, window, "plan:scroll", &at);
+                    assert!(seen.iter().any(|s| s.contains("Icon59")), "{at}: no plan");
+                }
+            }
+        }
+    }
+}
+
+/// An open group of steps folds from its end as from its header: a chevron at the box's
+/// bottom right, painted while the pointer is on the box, named "Collapse" and in the Tab
+/// order. Verbose holds the group open and has none.
+#[test]
+fn an_open_group_folds_from_a_chevron_at_its_end() {
+    let (mut store, mut ui) = store_with_session();
+    for call in ["b1", "b2"] {
+        let input = serde_json::json!({ "command": "ls", "description": "List the icons" });
+        tool(&mut store, call, "Bash", input, None);
+        result(&mut store, call, "ok");
+    }
+    click(&store, &mut ui, "steps:b1");
+    settle(&store, &mut ui);
+    let fold = format!("{}steps:b1", view::GROUP_FOLD);
+    let window = limn::Size::new(1408.0, 900.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let button = region(&frame, &fold).expect("the chevron");
+    let last = drawn_spans(&frame)
+        .into_iter()
+        .filter(|s| s.0.contains("List the icons") || s.0 == "ls")
+        .map(|s| s.2)
+        .fold(0.0, f32::max);
+    assert!(button.y > last, "under the last row: {button:?}");
+    let shows = |frame: &limn::Frame| {
+        frame.commands.iter().any(|c| {
+            matches!(c, limn::DrawCommand::Icon { rect, tint, .. }
+                if tint.a > 0 && rect.x >= button.x && rect.x < button.x + button.width
+                    && rect.y >= button.y && rect.y < button.y + button.height)
+        })
+    };
+    assert!(!shows(&frame), "hidden at rest");
+    let center = limn::Point::new(button.x + button.width / 2.0, button.y - 20.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(shows(&tree.layout(window)), "shown on the box");
+    let frame = tree.layout(window);
+    assert!(
+        frame.access.iter().any(|node| node.name == "Collapse"),
+        "named for the keys"
+    );
+    assert!(click(&store, &mut ui, &fold).is_empty());
+    assert!(!ui.expanded.iter().any(|k| k == "steps:b1"), "folded");
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert!(region(&frame, &fold).is_none());
+}

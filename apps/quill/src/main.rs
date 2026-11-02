@@ -93,6 +93,8 @@ struct App {
     transcript: Option<(SessionId, usize, usize)>,
     /// The same of the session beside it, in the side pane.
     beside: Option<(SessionId, usize, usize)>,
+    /// The scroll area of the helper agent's transcript shown last frame.
+    helper: Option<String>,
     /// The motion Settings asked for that is in force.
     applied: Option<quill_model::Motion>,
     /// The theme the window's icon was last drawn for.
@@ -949,6 +951,7 @@ impl eframe::App for App {
         let scrolls = [
             self.transcript.map(|(id, ..)| format!("transcript:{id}")),
             self.beside.map(|(id, ..)| format!("side:{id}:scroll")),
+            self.helper.clone(),
         ];
         for scroll in scrolls.iter().flatten() {
             if !pressed && self.tree.is_scroll_at_end(scroll, 0.5) {
@@ -1426,6 +1429,14 @@ impl eframe::App for App {
             }
         }
         self.beside = mark;
+        // A helper agent's transcript opens at its end and follows it the same way.
+        let scroll = self.ui.helper_scroll();
+        if let Some(id) = &scroll {
+            if scroll != self.helper || kept(&self.tree, id) {
+                self.tree.scroll_to_end(id);
+            }
+        }
+        self.helper = scroll;
         self.sync_address();
         self.ui.tick(&self.store);
         self.tree
@@ -1899,6 +1910,7 @@ fn main() -> eframe::Result {
                 terminals: HashMap::new(),
                 transcript: None,
                 beside: None,
+                helper: None,
                 applied: None,
                 icon_dark: None,
                 pinned_theme: std::env::var_os("QUILL_THEME").is_some(),

@@ -2475,6 +2475,16 @@ impl Ui {
         self.panes.contains(&pane)
     }
 
+    /// The scroll area of the helper agent's transcript on screen, which follows its end
+    /// as the session's own does.
+    pub fn helper_scroll(&self) -> Option<String> {
+        let call = self
+            .helper
+            .as_deref()
+            .filter(|_| self.pane_open(Pane::Agent))?;
+        Some(format!("agent:{call}:scroll"))
+    }
+
     pub fn open_pane(&mut self, pane: Pane) {
         if !self.pane_open(pane) {
             self.panes.push(pane);
@@ -4171,6 +4181,10 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if let Some(plan) = id.strip_prefix("plan:") {
         ui.plan = Some(plan.to_owned());
         ui.open_pane(Pane::Plan);
+        return vec![];
+    }
+    if let Some(key) = id.strip_prefix(view::GROUP_FOLD) {
+        ui.expanded.retain(|k| k != key);
         return vec![];
     }
     if id.starts_with("steps:") || id.starts_with("panel:") {

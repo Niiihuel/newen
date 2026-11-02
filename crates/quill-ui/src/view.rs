@@ -295,6 +295,8 @@ pub const BROWSER_TOGGLE: &str = "browser:toggle";
 pub const TASKS_OPEN: &str = "tasks:open";
 pub const TASKS_TOGGLE: &str = "tasks:toggle";
 pub const TASKS_CLEAR: &str = "tasks:clear";
+/// Before a group's key: the chevron at the end of an open group, which folds it.
+pub const GROUP_FOLD: &str = "fold:";
 /// The Files pane: the session's folder as a tree, and the tree's filter.
 pub const FILES_TOGGLE: &str = "files:toggle";
 pub use crate::files::{FILTER_CLEAR, FILTER_FIELD};
@@ -1094,15 +1096,15 @@ fn tasks_pane(
                 .max_width(wide),
             meta,
         ])
-        .gap(4.0)
-        .flex(1.0);
+        .gap(4.0);
         // A helper agent's row opens its transcript.
         let lines = match (&task.call, task.kind.as_str()) {
             (Some(call), "agent") => Element::clickable(format!("agent:{call}"), lines)
                 .accessibility_label(format!("View transcript of {}", task.description)),
             _ => lines,
         };
-        let mut items = vec![lines];
+        // The row's flexible child is what it holds, so Stop keeps to the right edge.
+        let mut items = vec![lines.flex(1.0)];
         if task.running {
             items.push(icon_tool(
                 &format!("task:stop:{}", task.id),
@@ -1145,12 +1147,14 @@ fn tasks_pane(
             column.extend(group.into_iter().map(|t| row(t)));
         }
     }
+    // Its bar over the padding, so a long list keeps Stop at the right edge.
     let body = Element::scroll(
         "tasks:scroll",
         Element::column(column)
             .padding(16.0)
             .size(Some(width), None),
     )
+    .scrollbar_appearance(limn::ScrollbarAppearance::overlay())
     .size(Some(width), Some(below));
     Element::column(vec![header, body]).size(Some(width), Some(height))
 }
@@ -5608,7 +5612,7 @@ fn step_group(
     let body_id = format!("{key}:body");
     let head = fold(
         view,
-        key,
+        key.clone(),
         Element::row(head).gap(8.0).size(None, Some(24.0)),
     )
     .shrink_to_fit();
@@ -5634,11 +5638,28 @@ fn step_group(
             }
             rows.push(step_row(step, &run, ui, view, column, palette));
         }
+        // A long group folds from its end too, by a chevron that shows while the pointer is
+        // on the box; Verbose holds it open, so there is none.
+        if view != TranscriptView::Verbose {
+            let fold = icon_tool(
+                &format!("{GROUP_FOLD}{key}"),
+                icons::of(icons::CARET_UP),
+                "Collapse",
+                24.0,
+                palette,
+            )
+            .reveal_on_hover(format!("{key}:fold"));
+            rows.push(
+                Element::row(vec![Element::spacer().flex(1.0), fold, hgap(4.0)])
+                    .size(Some(column), Some(28.0)),
+            );
+        }
         let card = Element::panel(Element::column(rows))
             .background(palette.surface)
             .border(look::card_border(), 1.0)
             .radius(8.0)
-            .size(Some(column), None);
+            .size(Some(column), None)
+            .hover_region();
         Element::column(vec![Element::spacer().size(None, Some(8.0)), card])
     });
     Element::column(vec![
@@ -8680,10 +8701,12 @@ fn question_card(
         .width(width - 74.0)
         .render()
     };
+    // The question takes the band but the pager's room, and as many lines as it needs.
+    let pager = if count > 1 { 140.0 } else { 26.0 };
     let mut band = vec![
         text(question["question"].as_str().unwrap_or_default().to_owned())
             .font_size(BODY)
-            .size(Some(width - 140.0), None)
+            .size(Some(width - pager), None)
             .centered_y(),
         Element::spacer().flex(1.0),
     ];
@@ -8715,7 +8738,7 @@ fn question_card(
         band.push(arrow("next", icons::CARET_RIGHT, "Next", page + 1 < count));
     }
     let mut rows = vec![
-        Element::panel(Element::row(band).gap(6.0).size(None, Some(24.0)))
+        Element::panel(Element::row(band).gap(6.0).min_size(0.0, 24.0))
             .background(look::user_bubble())
             // Inside the card's rounded edge.
             .corner_radii(limn::CornerRadii {
@@ -9498,7 +9521,10 @@ fn agent_pane(
         body.push(working_words("agent:working", "Working".into()));
     }
     let content = Element::column(body).gap(12.0).padding(24.0);
-    let scroll = Element::scroll(format!("agent:{call}:scroll"), content);
+    // Its bar over the padding: a rail taken from the width would put the rows, laid out
+    // `inner` wide, in less room than they were measured in, and their lines over the next.
+    let scroll = Element::scroll(format!("agent:{call}:scroll"), content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     Element::column(vec![header, scroll.flex(1.0)]).size(Some(width), Some(height))
 }
 
@@ -9522,7 +9548,9 @@ fn plan_pane(session: Option<&Session>, ui: &Ui, width: f32, height: f32) -> Ele
         .render()
         .element
         .padding(24.0);
-    let scroll = Element::scroll("plan:scroll", content);
+    // Its bar over the padding, as the agent pane's.
+    let scroll = Element::scroll("plan:scroll", content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     Element::column(vec![header, scroll.flex(1.0)]).size(Some(width), Some(height))
 }
 
@@ -9850,7 +9878,9 @@ fn side_pane(
         body.push(line);
     }
     let content = Element::column(body).gap(12.0).padding(16.0);
-    let scroll = Element::scroll(format!("side:{}:scroll", side.id), content);
+    // Its bar over the padding, as the agent pane's.
+    let scroll = Element::scroll(format!("side:{}:scroll", side.id), content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     let reply = limn::TextField::new(
         SIDE_FIELD,
         ui.side_reply.as_str(),
