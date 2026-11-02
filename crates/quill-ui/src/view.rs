@@ -208,7 +208,7 @@ const TERMINAL_FONT: f32 = 12.0;
 const TERMINAL_PADDING: [f32; 2] = [12.0, 8.0];
 
 /// The last part of a path, as Desktop names a session's folder.
-fn folder_name(path: &std::path::Path) -> String {
+pub(crate) fn folder_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
@@ -569,11 +569,19 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
             .clip_children(),
         );
     }
-    let content = Element::column(vec![
-        top_bar(session, ui, layout.main, layout.shown + layout.panel),
-        hline(rest, look::theme().background),
-        Element::row(row).size(Some(rest), Some(below)),
-    ])
+    // Customize takes the conversation's place, and the panes beside it.
+    let content = match &ui.customize {
+        Some(_) => Element::column(vec![
+            top_bar(None, ui, rest, 0.0),
+            hline(rest, look::theme().background),
+            crate::customize::page(store, ui, rest, below),
+        ]),
+        None => Element::column(vec![
+            top_bar(session, ui, layout.main, layout.shown + layout.panel),
+            hline(rest, look::theme().background),
+            Element::row(row).size(Some(rest), Some(below)),
+        ]),
+    }
     .size(Some(rest), Some(window.height));
     let with_line = || {
         Element::row(vec![
@@ -6776,7 +6784,7 @@ fn picture_tile(id: &str, path: &Path, side: f32, ui: &Ui, palette: ComponentPal
 
 /// The logo of the connector or plugin `key`, once the host has decoded it, for the light or
 /// dark theme; `None` while it is not, or logos are off, and the caller shows its icon.
-fn logo_picture<'a>(ui: &'a Ui, key: &str) -> Option<&'a limn::RasterImage> {
+pub(crate) fn logo_picture<'a>(ui: &'a Ui, key: &str) -> Option<&'a limn::RasterImage> {
     if !ui.settings.logos {
         return None;
     }
@@ -10363,7 +10371,6 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
         ),
         None => "Sessions and their file history are kept on this computer.".to_owned(),
     };
-    pages.extend(customize_pages());
     pages.push(SettingsPage {
         key: "system".into(),
         title: "System".into(),
@@ -10399,247 +10406,23 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
             ),
         ],
     });
-    pages
-}
-
-/// Customize's pages in Settings' column, Desktop's Skills and Plugins; each draws
-/// itself ([`customize_own`]).
-fn customize_pages() -> Vec<SettingsPage> {
-    vec![
-        SettingsPage {
-            key: SETTINGS_SKILLS.into(),
-            title: "Skills".into(),
-            icon: icons::FILE,
-            groups: vec![],
-        },
-        SettingsPage {
-            key: SETTINGS_PLUGINS.into(),
-            title: "Plugins".into(),
-            icon: icons::PLUG,
-            groups: vec![],
-        },
-        SettingsPage {
-            key: SETTINGS_CONNECTORS.into(),
-            title: "Connectors".into(),
-            icon: icons::CONNECTORS,
-            groups: vec![],
-        },
-    ]
-}
-
-/// Customize's pages as Desktop's own: Skills and Plugins,
-/// each a bold title with its search and buttons, then what each agent's program lists for
-/// the folder a new session starts in, read when the page opens. quill's agents may be
-/// several: the header's buttons act for the first that lists them (shortcut: one agent
-/// has them today, Claude Code; a menu of agents when a second one does).
-fn customize_own(ui: &Ui, window: Size) -> Vec<(String, Element)> {
-    vec![
-        (SETTINGS_SKILLS.into(), skills_page(ui, window)),
-        (SETTINGS_PLUGINS.into(), plugins_page(ui, window)),
-        (SETTINGS_CONNECTORS.into(), connectors_page(ui, window)),
-    ]
-}
-
-/// Customize's Yours | Discover, as Desktop's tabs beside a page's title: the one shown on the tab's fill.
-fn customize_tabs(tabs: &[(&str, &str, bool)]) -> Element {
-    let tab = |id: &str, label: &str, on: bool| {
-        let row = Element::row(vec![
-            hgap(10.0),
-            text(label).font_size(BODY).centered_y(),
-            hgap(10.0),
-        ])
-        .size(None, Some(28.0));
-        let tab = Element::clickable(id, row).radius(8.0);
-        if on {
-            tab.background(look::customize_tab())
-                .border(look::customize_tab_edge(), 1.0)
-        } else {
-            tab.hover_background(look::tool_hover())
-        }
-    };
-    Element::row(
-        tabs.iter()
-            .map(|(id, label, on)| tab(id, label, *on))
-            .collect(),
-    )
-    .gap(4.0)
-}
-
-/// Customize › Connectors, the MCP servers agents work with. Yours: each agent's own, as its
-/// program lists them, each but a plugin's or an account's removable. Discover: the public MCP
-/// registry, any server added through "Add custom connector" filled in from it. Desktop's own
-/// lists claude.ai's directory, which a program on this computer cannot reach.
-fn connectors_page(ui: &Ui, window: Size) -> Element {
-    use quill_components::customize;
-    use quill_model::{McpSource, McpStatus};
-    let width = settings::own_page_width(window);
-    let c = &ui.connectors;
-    let tabs = customize_tabs(&[
-        ("srv:tab:yours", "Yours", !c.discover),
-        ("srv:tab:discover", "Discover", c.discover),
-    ]);
-    let mut tools = vec![];
-    if c.discover {
-        tools.push(customize::search(
-            SRV_SEARCH,
-            &c.query,
-            "Search the MCP registry",
+    // Customize is a page of its own; Settings keeps the way there.
+    if let Some(general) = pages.iter_mut().find(|p| p.key == SETTINGS_FIRST) {
+        general.groups.push((
+            "Customize".into(),
+            vec![setting(
+                "Skills, connectors and plugins",
+                "What each agent can use, on a page of its own.",
+                setting_button(CUSTOMIZE_OPEN, "Customize\u{2026}"),
+            )],
         ));
     }
-    // The dialog asks for which agents (one or several) it adds.
-    tools.push(customize::button(
-        "srv:add:",
-        "Add",
-        Some(icons::ADD),
-        false,
-        true,
-    ));
-    let header = customize::header("Connectors", vec![tabs], tools, width);
-    let mut column = vec![header, Element::spacer().size(None, Some(13.0))];
-    let failed = |words: String| text(words).font_size(BODY).foreground(look::failed());
-    if !c.discover {
-        column.extend(global_section(ui, false, width));
-        for agent in ui.agents.iter() {
-            column.push(Element::spacer().size(None, Some(16.0)));
-            let listed = c.listed.get(&agent.id);
-            let servers = listed.and_then(|l| l.servers.as_ref());
-            column.push(customize::agent_heading(
-                icons::agent(agent.icon.as_deref()),
-                &agent.name,
-                servers.map(Vec::len),
-                width,
-            ));
-            let Some(servers) = servers else {
-                column.push(customize::loading(
-                    "srv:loading",
-                    "Checking connectors\u{2026}",
-                ));
-                continue;
-            };
-            let listed = listed.expect("listed");
-            if listed.working {
-                column.push(customize::loading("srv:loading", "Reading again\u{2026}"));
-            }
-            column.extend(
-                listed
-                    .error
-                    .clone()
-                    .map(|e| failed(format!("Couldn\u{2019}t do that. {e}"))),
-            );
-            if servers.is_empty() {
-                column.push(customize::empty(
-                    icons::PLUG,
-                    &format!(
-                        "No connectors in {} yet. Add one, or find one in Discover.",
-                        agent.name
-                    ),
-                    width,
-                ));
-            }
-            for server in servers {
-                let status = match (server.status, server.checked) {
-                    (McpStatus::Connected, true) => "Connected",
-                    (McpStatus::Connected, false) => "On",
-                    (McpStatus::NeedsAuth, _) => "Needs authentication",
-                    (McpStatus::Pending, _) => "Pending approval",
-                    (McpStatus::Disabled, _) => "Off",
-                    (McpStatus::Failed, _) => "Failed to connect",
-                };
-                let from = match server.source {
-                    McpSource::Plugin => " \u{b7} from a plugin",
-                    McpSource::Account => " \u{b7} from your account",
-                    _ => "",
-                };
-                let words = format!("{status}{from} \u{b7} {}", server.target);
-                // A plugin's goes with its plugin, an account's with the account.
-                let more = matches!(server.source, McpSource::Other).then(|| {
-                    let menu = format!("cz:more:srv:{}:{}", agent.id, server.name);
-                    let entries = vec![limn::DropdownMenuItem::new(
-                        format!("srv:remove:{}:{}", agent.id, server.name),
-                        "Remove",
-                    )
-                    .icon(icons::of(icons::CLOSE))
-                    .destructive(look::failed())
-                    .into()];
-                    customize::more(
-                        &menu,
-                        entries,
-                        ui.settings_menu.as_deref() == Some(menu.as_str()),
-                    )
-                });
-                // The agents it is on in, by its name.
-                let end = agent_marks(
-                    ui,
-                    &format!("srv:marks:{}:{}", agent.id, server.name),
-                    |other| server_on_in(ui, other, &server.label),
-                );
-                let logo = logo_picture(
-                    ui,
-                    &format!(
-                        "mcp:{}",
-                        crate::server_logo_name(ui, &server.name, &server.label)
-                    ),
-                );
-                column.push(match logo {
-                    Some(logo) => {
-                        customize::item_logo(logo, &server.name, &words, end, more, width)
-                    }
-                    None => customize::item(icons::PLUG, &server.name, &words, end, more, width),
-                });
-            }
-        }
-    } else {
-        column.push(
-            muted("Servers listed in the public MCP registry. Make sure you trust one before you add it: it runs on this computer.")
-                .font_size(BODY),
-        );
-        column.push(Element::spacer().size(None, Some(8.0)));
-        match &c.found {
-            None => column.push(customize::loading(
-                "srv:finding",
-                "Searching the MCP registry\u{2026}",
-            )),
-            Some((_, _, Some(error))) => column.push(failed(format!(
-                "Couldn\u{2019}t reach the MCP registry. {error}"
-            ))),
-            Some((_, offers, None)) if offers.is_empty() => column.push(customize::empty(
-                icons::CONNECTORS,
-                "No servers match.",
-                width,
-            )),
-            Some((_, offers, None)) => {
-                for (at, offer) in offers.iter().enumerate() {
-                    let kind = if offer.remote {
-                        "Remote"
-                    } else {
-                        offer.target.as_str()
-                    };
-                    let words = format!(
-                        "{} \u{b7} {kind} \u{b7} {}",
-                        cut(&offer.description, 140),
-                        offer.version
-                    );
-                    let add =
-                        customize::button(&format!("srv:offer:{at}"), "Add", None, false, false);
-                    let name = offer.title.clone().unwrap_or_else(|| offer.name.clone());
-                    column.push(customize::item(
-                        icons::CONNECTORS,
-                        &name,
-                        &words,
-                        Some(add),
-                        None,
-                        width,
-                    ));
-                }
-            }
-        }
-    }
-    Element::column(column).gap(4.0)
+    pages
 }
 
 /// "Add custom connector": its name, the address it is reached at or the command that starts
 /// it, its environment and headers, and where it goes, as the agent's program adds it.
-fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
+pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
     let Some(adding) = &ui.connectors.adding else {
         return base;
     };
@@ -10690,20 +10473,83 @@ fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
     body.extend(vec![
         label("Name"),
         field("name", &adding.name, "my-server"),
-        label("Address or command"),
+        note("Shown in the connectors list."),
+        label("MCP server URL, or command"),
         field(
             "target",
             &adding.target,
             "https://\u{2026}/mcp, or npx -y package",
         ),
-        note("An https:// address, or the command that starts it with its arguments."),
-        label("Environment variables"),
-        area("env", &adding.env, "KEY=value, one a line"),
+        note("The HTTPS address where the server accepts MCP requests, or the command that starts it on this computer with its arguments."),
     ]);
+    // What to look at twice before adding it, and why it cannot be added as it is.
+    let warn = |words: String, ink: limn::Color, icon: &'static str| {
+        Element::row(vec![
+            Element::icon(icons::of(icon))
+                .foreground(ink)
+                .size(Some(14.0), Some(14.0)),
+            text(words).font_size(SMALL).foreground(ink).flex(1.0),
+        ])
+        .gap(6.0)
+        .size(Some(460.0), None)
+    };
+    body.extend(
+        crate::url_warnings(&adding.name, &adding.target)
+            .into_iter()
+            .map(|w| warn(w, look::awaiting(), icons::WARNING)),
+    );
+    body.extend((adding.refused()).map(|w| warn(w.to_owned(), look::failed(), icons::ERROR)));
+    body.push(label("Environment variables"));
+    body.push(area("env", &adding.env, "KEY=value, one a line"));
     let remote = adding.target.trim_start().starts_with("http");
     if remote {
         body.push(label("Headers"));
         body.push(area("headers", &adding.headers, "Name: value, one a line"));
+    }
+    // "Advanced settings": an OAuth client of the person's own, for the agents that take one.
+    if remote {
+        body.push(Element::row(vec![keyed_button(
+            "srv:advanced",
+            "Advanced settings",
+            "",
+            adding.advanced,
+            true,
+            palette,
+        )]));
+    }
+    if remote && adding.advanced {
+        let cannot: Vec<&str> = (ui.agents.iter())
+            .filter(|a| adding.all || adding.agents.contains(&a.id))
+            .filter(|a| adding.all || !a.customize.oauth_client)
+            .map(|a| a.name.as_str())
+            .collect();
+        if adding.all || !cannot.is_empty() {
+            body.push(warn(
+                if adding.all {
+                    "quill\u{2019}s own layer can\u{2019}t take an OAuth client: each agent signs in by itself.".to_owned()
+                } else {
+                    format!("{} can\u{2019}t take an OAuth client of your own: it signs in by itself.", cannot.join(" and "))
+                },
+                look::muted(),
+                icons::LOCK,
+            ));
+        } else {
+            body.push(label("OAuth Client ID"));
+            body.push(field("client-id", &adding.client_id, "Optional"));
+            body.push(label("OAuth Client Secret"));
+            body.push(
+                limn::TextField::new(
+                    format!("{SRV_FIELD}client-secret"),
+                    &adding.client_secret,
+                    "Optional",
+                    palette,
+                )
+                .password(true)
+                .render()
+                .size(Some(460.0), Some(32.0)),
+            );
+            body.push(note("For a server that wants a client registered for it. The secret goes to the agent's program, never into its arguments."));
+        }
     }
     // A secret is kept in the system's keychain and reaches the agent only as a variable of
     // its process: only quill's own layer has them.
@@ -10785,7 +10631,7 @@ fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
             "Add",
             "",
             true,
-            adding.server().is_some(),
+            adding.server().is_some() && adding.refused().is_none(),
             palette,
         ),
     ])
@@ -10809,7 +10655,7 @@ fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
 /// The "All agents" section of Connectors (`skills` false) or Skills: quill's own items, with
 /// how each agent treats each (docs/agents.md "All agents"). Nothing while there are none and
 /// only one agent: it would say nothing the agent's own section does not.
-fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Element> {
+pub(crate) fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Element> {
     use quill_components::customize::{self, Standing};
     use quill_model::Applies;
     let g = &ui.global;
@@ -10841,7 +10687,7 @@ fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Element> {
     }
     if names.is_empty() {
         column.push(customize::empty(
-            if skills { icons::FILE } else { icons::PLUG },
+            if skills { icons::SKILL } else { icons::PLUG },
             if skills {
                 "No skills for all agents yet. quill adds them to each session."
             } else {
@@ -10893,26 +10739,27 @@ fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Element> {
         );
         let menu = format!("cz:more:glob:{kind}:{name}");
         let open = ui.settings_menu.as_deref() == Some(menu.as_str());
+        let opens = crate::customize::opener(if skills { "skill" } else { "srv" }, "", name);
         let mut said = format!("from quill \u{b7} {words}");
         if !notes.is_empty() {
             said = format!("{} \u{b7} {}", capital(&notes.join(", ")), said);
         }
         column.push(customize::item(
-            if skills { icons::FILE } else { icons::PLUG },
+            if skills { icons::SKILL } else { icons::PLUG },
             name,
             &said,
             Some(customize::agent_standing(
                 &format!("glob:marks:{kind}:{name}"),
                 &marks,
             )),
-            Some(customize::more(&menu, entries, open)),
+            ends(Some(customize::more(&menu, entries, open)), Some(opens)),
             width,
         ));
     }
     Some(Element::column(column))
 }
 
-fn capital(words: &str) -> String {
+pub(crate) fn capital(words: &str) -> String {
     let mut chars = words.chars();
     chars
         .next()
@@ -10921,7 +10768,7 @@ fn capital(words: &str) -> String {
 }
 
 /// "New skill" and "Import skill" for "All agents".
-fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
+pub(crate) fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
     use crate::SkillDialog;
     let Some(dialog) = &ui.skill_dialog else {
         return base;
@@ -10934,8 +10781,12 @@ fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
     let label = |words: &str| text(words).font_size(BODY);
     let note = |words: &str| muted(words).font_size(SMALL);
     let (title, body, ready) = match dialog {
-        SkillDialog::New { name, description } => (
-            "New skill",
+        SkillDialog::New {
+            name,
+            description,
+            instructions,
+        } => (
+            "Write a skill",
             vec![
                 label("Name"),
                 field("name", name, "my-skill"),
@@ -10946,6 +10797,17 @@ fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
                     description,
                     "What it does, and when to use it",
                 ),
+                label("Instructions"),
+                Element::text_area(
+                    format!("{GSK_FIELD}instructions"),
+                    instructions,
+                    "What the agent should do when this skill applies",
+                )
+                .size(Some(460.0), Some(120.0))
+                .background(look::palette().raised)
+                .border(look::settings_field_edge(), 1.0)
+                .radius(8.0),
+                note("quill keeps it for all agents and adds it to each session."),
             ],
             !name.trim().is_empty(),
         ),
@@ -10976,7 +10838,7 @@ fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
 
 /// The agents an item is on, as logos at its end, when it is on in several: those where `on`
 /// says it is. `None` otherwise: one agent's section already says it.
-fn agent_marks(ui: &Ui, id: &str, on: impl Fn(&str) -> bool) -> Option<Element> {
+pub(crate) fn agent_marks(ui: &Ui, id: &str, on: impl Fn(&str) -> bool) -> Option<Element> {
     let who: Vec<(&'static str, String)> = marked_agents(ui, on)
         .map(|a| (icons::agent(a.icon.as_deref()), a.name.clone()))
         .collect();
@@ -11020,7 +10882,7 @@ pub(crate) fn plugin_on_in(ui: &Ui, agent: &str, name: &str) -> bool {
 }
 
 /// `first` and `then` side by side at an item's end.
-fn ends(first: Option<Element>, then: Option<Element>) -> Option<Element> {
+pub(crate) fn ends(first: Option<Element>, then: Option<Element>) -> Option<Element> {
     match (first, then) {
         (Some(a), Some(b)) => Some(Element::row(vec![a, b]).gap(12.0).centered_y()),
         (a, b) => a.or(b),
@@ -11028,7 +10890,7 @@ fn ends(first: Option<Element>, then: Option<Element>) -> Option<Element> {
 }
 
 /// What a Customize page says over its lists: why the last change failed, or what it did.
-fn customize_said(known: &crate::Extensions) -> Option<Element> {
+pub(crate) fn customize_said(known: &crate::Extensions) -> Option<Element> {
     let (words, color) = match (&known.error, &known.notice) {
         (Some(error), _) => (
             format!("Couldn\u{2019}t make that change. {error}"),
@@ -11040,7 +10902,7 @@ fn customize_said(known: &crate::Extensions) -> Option<Element> {
     Some(text(words).font_size(BODY).foreground(color))
 }
 
-fn cut(words: &str, most: usize) -> String {
+pub(crate) fn cut(words: &str, most: usize) -> String {
     let mut cut: String = words.chars().take(most).collect();
     if words.chars().count() > most {
         cut.push('\u{2026}');
@@ -11050,39 +10912,17 @@ fn cut(words: &str, most: usize) -> String {
 
 /// Skills: by where they come from, each with its state; its "⋯" changes the state, in a
 /// project folder (the header's chip), or says why it cannot.
-fn skills_page(ui: &Ui, window: Size) -> Element {
+pub(crate) fn skills_page(ui: &Ui, width: f32) -> Element {
     use quill_components::customize;
-    let width = settings::own_page_width(window);
     let folder = crate::customize_folder(ui);
     let project = crate::is_project(&folder);
     let query = ui.customize_query.trim().to_lowercase();
-    let add_menu = format!("cz:add:{SETTINGS_SKILLS}");
-    let add = customize::menu_button(
-        customize::button(&add_menu, "Add", Some(icons::ADD), true, true),
-        &add_menu,
-        vec![
-            limn::DropdownMenuItem::new("glob:skill-new", "New skill for all agents")
-                .icon(icons::of(icons::ADD))
-                .into(),
-            limn::DropdownMenuItem::new("glob:skill-import", "Import a folder for all agents")
-                .icon(icons::of(icons::FILE))
-                .into(),
-        ],
-        ui.settings_menu.as_deref() == Some(add_menu.as_str()),
-    );
-    let header = customize::header(
-        "Skills",
-        vec![],
-        vec![
-            customize::search(CZ_SEARCH, &ui.customize_query, "Search"),
-            customize::folder_chip(PICK_FOLDER, &folder_name(&folder)),
-            add,
-        ],
-        width,
-    );
-    let mut column = vec![header, Element::spacer().size(None, Some(13.0))];
-    column.extend(global_section(ui, true, width));
-    for agent in ui.agents.iter() {
+    let page = ui.customize.clone().unwrap_or_default();
+    let mut column = vec![];
+    if page.layer.is_none() {
+        column.extend(global_section(ui, true, width));
+    }
+    for agent in crate::customize::agents(ui) {
         column.push(Element::spacer().size(None, Some(16.0)));
         let known = ui.extensions.get(&agent.id).filter(|k| k.loaded);
         column.push(customize::agent_heading(
@@ -11105,23 +10945,34 @@ fn skills_page(ui: &Ui, window: Size) -> Element {
             ));
         }
         column.extend(customize_said(known));
-        let found: Vec<&quill_model::Skill> = (known.list.skills.iter())
+        let mut found: Vec<&quill_model::Skill> = (known.list.skills.iter())
+            .filter(|s| page.source.as_ref().is_none_or(|from| &s.source == from))
             .filter(|s| {
                 query.is_empty()
                     || s.name.to_lowercase().contains(&query)
                     || s.description.to_lowercase().contains(&query)
             })
             .collect();
+        // By name, one list; else a section for each place they come from.
         let mut sources: Vec<&str> = vec![];
-        for skill in &found {
+        if page.by_name {
+            found.sort_by_key(|s| s.name.to_lowercase());
+            sources.extend((!found.is_empty()).then_some(""));
+        }
+        for skill in found.iter().filter(|_| !page.by_name) {
             if !sources.contains(&skill.source.as_str()) {
                 sources.push(&skill.source);
             }
         }
         for source in sources {
-            let group: Vec<&&quill_model::Skill> =
-                found.iter().filter(|s| s.source == source).collect();
-            let mut title = source.to_owned();
+            let group: Vec<&&quill_model::Skill> = (found.iter())
+                .filter(|s| page.by_name || s.source == source)
+                .collect();
+            let mut title = if page.by_name {
+                "By name".to_owned()
+            } else {
+                source.to_owned()
+            };
             if let Some(first) = title.get_mut(..1) {
                 first.make_ascii_uppercase();
             }
@@ -11178,12 +11029,28 @@ fn skills_page(ui: &Ui, window: Size) -> Element {
                 }
                 let menu = format!("cz:more:{}:{}", agent.id, skill.name);
                 let open = ui.settings_menu.as_deref() == Some(menu.as_str());
+                // On or off from its row; its other states in its "⋯".
+                let first = known.list.skill_states.first().map(|(s, _)| s.as_str());
+                let switch = limn::Switch::new(
+                    format!("czp:skill-switch:{}:{}", agent.id, skill.name),
+                    Some(skill.state.as_str()) == first,
+                    look::palette(),
+                )
+                .size(limn::ControlSize::Dense)
+                .accessibility_label(format!("{} on", skill.name))
+                .enabled(why.is_none() && known.list.skill_states.len() > 1)
+                .render();
+                let opens = crate::customize::opener("skill", &agent.id, &skill.name);
                 column.push(customize::item(
-                    icons::FILE,
+                    icons::SKILL,
                     &skill.name,
-                    &format!("from {source} \u{b7} {}", cut(&skill.description, 200)),
-                    ends(marks, end),
-                    Some(customize::more(&menu, entries, open)),
+                    &format!(
+                        "from {} \u{b7} {}",
+                        skill.source,
+                        cut(&skill.description, 200)
+                    ),
+                    ends(ends(marks, end), Some(switch)),
+                    ends(Some(customize::more(&menu, entries, open)), Some(opens)),
                     width,
                 ));
             }
@@ -11194,7 +11061,7 @@ fn skills_page(ui: &Ui, window: Size) -> Element {
             } else {
                 "No skills found.".to_owned()
             };
-            column.push(customize::empty(icons::FILE, &words, width));
+            column.push(customize::empty(icons::SKILL, &words, width));
         }
     }
     Element::column(column).size(Some(width), None)
@@ -11203,46 +11070,13 @@ fn skills_page(ui: &Ui, window: Size) -> Element {
 /// Plugins: Desktop's header (search, Discover, + Add ▾ for the marketplaces), its card while
 /// none is installed, then the project's plugins under its folder and the person's own, each
 /// with its "⋯" (update, turn off or on, remove).
-fn plugins_page(ui: &Ui, window: Size) -> Element {
+pub(crate) fn plugins_page(ui: &Ui, width: f32) -> Element {
     use quill_components::customize;
-    let width = settings::own_page_width(window);
     let folder = crate::customize_folder(ui);
     let project = crate::is_project(&folder);
     let query = ui.customize_query.trim().to_lowercase();
-    // The header acts for the agent a new session runs; the dialogs it opens choose others.
-    let first_id = ui.agent.clone();
-    let add_menu = format!("cz:add:{SETTINGS_PLUGINS}");
-    let add = customize::menu_button(
-        customize::button(&add_menu, "Add", Some(icons::ADD), true, true),
-        &add_menu,
-        vec![
-            limn::DropdownMenuItem::new("cz:add-marketplace:", "Add marketplace")
-                .icon(icons::of(icons::GLOBE))
-                .into(),
-            limn::DropdownMenuItem::new("cz:manage:", "Manage marketplaces")
-                .icon(icons::of(icons::LIST))
-                .into(),
-        ],
-        ui.settings_menu.as_deref() == Some(add_menu.as_str()),
-    );
-    let header = customize::header(
-        "Plugins",
-        vec![],
-        vec![
-            customize::search(CZ_SEARCH, &ui.customize_query, "Search plugins"),
-            customize::button(
-                &format!("cz:discover:{first_id}"),
-                "Discover",
-                None,
-                false,
-                false,
-            ),
-            add,
-        ],
-        width,
-    );
-    let mut column = vec![header, Element::spacer().size(None, Some(13.0))];
-    for (at, agent) in ui.agents.iter().enumerate() {
+    let mut column = vec![];
+    for (at, agent) in crate::customize::agents(ui).into_iter().enumerate() {
         if at > 0 {
             column.push(Element::spacer().size(None, Some(16.0)));
         }
@@ -11338,14 +11172,17 @@ fn plugins_page(ui: &Ui, window: Size) -> Element {
             let menu = format!("cz:more:{id}:{}", plugin.id);
             let open = ui.settings_menu.as_deref() == Some(menu.as_str());
             let words = words.join(" \u{b7} ");
-            let more = Some(customize::more(&menu, entries, open));
+            let more = ends(
+                Some(customize::more(&menu, entries, open)),
+                Some(crate::customize::opener("plugin", id, &plugin.id)),
+            );
             let marks = agent_marks(ui, &format!("cz:marks:{id}:{}", plugin.id), |other| {
                 plugin_on_in(ui, other, &plugin.name)
             });
             let end = ends(marks, end);
             match logo_picture(ui, &format!("plugin:{}", plugin.name)) {
                 Some(logo) => customize::item_logo(logo, &plugin.name, &words, end, more, width),
-                None => customize::item(icons::PLUG, &plugin.name, &words, end, more, width),
+                None => customize::item(icons::PLUGIN, &plugin.name, &words, end, more, width),
             }
         };
         let here: Vec<&quill_model::Plugin> = (known.list.plugins.iter())
@@ -11480,7 +11317,6 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
     });
     let mut cards = vec![];
     if let Some(known) = known {
-        let installed: Vec<&str> = known.list.plugins.iter().map(|p| p.id.as_str()).collect();
         let mut offers: Vec<&quill_model::PluginOffer> = (known.list.offers.iter())
             .filter(|o| {
                 ui.directory_market
@@ -11501,11 +11337,24 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
         {
             let mut meta = offer.marketplace.clone();
             if let Some(n) = offer.installs {
-                meta.push_str(&format!(" \u{b7} {} installs", human_count(n)));
+                meta.push_str(&format!(" \u{2022} {} installs", human_count(n)));
             }
             let id = format!("ext:install:{agent}:{}", offer.id);
-            let action = if installed.contains(&offer.id.as_str()) {
-                muted("Added").font_size(SMALL)
+            // Installed, its gear opens its page; an older version than offered has a dot.
+            let mine = known.list.plugins.iter().find(|p| p.id == offer.id);
+            let update = mine.is_some_and(|p| {
+                p.version.is_some() && offer.version.is_some() && p.version != offer.version
+            });
+            let action = if mine.is_some() {
+                tool_surface(
+                    &format!("czp:open:plugin:{agent}:{}", offer.id),
+                    icons::of(icons::SETTINGS),
+                    "Configure",
+                    28.0,
+                    None,
+                    look::tool_hover(),
+                    None,
+                )
             } else if known.working.as_deref() == Some(offer.id.as_str()) {
                 limn::Spinner::new(format!("cz:wait:{}", offer.id), look::muted())
                     .size(14.0)
@@ -11538,32 +11387,21 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
                     None,
                 )
             };
-            let tile = Element::row(vec![Element::icon(icons::of(icons::PLUG))
-                .foreground(look::palette().text)
-                .size(Some(16.0), Some(16.0))
-                .centered()
-                .flex(1.0)])
-            .size(Some(36.0), Some(36.0))
-            .background(look::customize_tile())
-            .radius(8.0);
-            let copy = Element::column(vec![
-                Element::truncated_text(offer.name.clone())
-                    .font_family(FontFamily::SansBold)
-                    .font_size(BODY)
-                    .foreground(look::palette().text),
-                muted(cut(&offer.description, 90)).font_size(SMALL),
-                muted(meta).font_size(SMALL),
-            ])
-            .gap(3.0)
-            .flex(1.0);
-            cards.push(
-                Element::row(vec![tile, copy, action])
-                    .gap(12.0)
-                    .padding(12.0)
-                    .size(Some(card_width), Some(104.0))
-                    .background(look::customize_card())
-                    .radius(10.0),
-            );
+            let picture = match logo_picture(ui, &format!("plugin:{}", offer.name)) {
+                Some(logo) => Element::raster_image(logo.clone()).size(Some(24.0), Some(24.0)),
+                None => Element::icon(icons::of(icons::PLUGIN))
+                    .foreground(look::palette().text)
+                    .size(Some(18.0), Some(18.0)),
+            };
+            cards.push(customize::discover_card(
+                picture,
+                &offer.name,
+                &meta,
+                &offer.description,
+                update,
+                action,
+                card_width,
+            ));
         }
     }
     let mut grid = vec![];
@@ -11761,7 +11599,7 @@ fn marketplace_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Elem
 }
 
 /// 2900 as "2.9K", 1200000 as "1.2M", as Desktop counts installs.
-fn human_count(n: u64) -> String {
+pub(crate) fn human_count(n: u64) -> String {
     match n {
         0..1_000 => n.to_string(),
         1_000..1_000_000 => format!("{:.1}K", n as f64 / 1e3),
@@ -12397,11 +12235,6 @@ fn settings_dialog(
         groups.push(("Agents", agents));
     }
     groups.push(("This computer", owned(&["system"])));
-    // Desktop's Customize group, with what quill's agents offer.
-    groups.push((
-        "Customize",
-        owned(&[SETTINGS_SKILLS, SETTINGS_PLUGINS, SETTINGS_CONNECTORS]),
-    ));
     settings::dialog(
         base,
         pages,
@@ -12409,7 +12242,6 @@ fn settings_dialog(
         current,
         &ui.settings_query,
         ui.settings_error.as_deref(),
-        customize_own(ui, window),
         window,
     )
 }

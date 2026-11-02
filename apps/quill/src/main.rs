@@ -57,6 +57,8 @@ struct App {
     picked: Arc<Mutex<Option<PathBuf>>>,
     /// The Chromium chosen in Settings › Browser, kept on the next frame.
     chromium: Arc<Mutex<Option<PathBuf>>>,
+    /// A skill's file chosen in Customize, for what it was asked for, sent on the next frame.
+    skill_file: Arc<Mutex<Option<(String, PathBuf)>>>,
     /// Files chosen for a page's file field, sent on the next frame.
     chosen: Arc<Mutex<Option<(SessionId, quill_model::BrowserOp)>>>,
     /// Files or a folder chosen from "+", to go into the message as @-mentions.
@@ -84,7 +86,7 @@ struct App {
     /// Annotated copies made off the window's thread, each with the picture it replaces; `None`
     /// when the copy could not be written.
     annotated: Arc<Mutex<Vec<AnnotatedCopy>>>,
-    /// The terminal tabs of each folder, kept while the window lives (features/terminal.md).
+    /// The terminal tabs of each folder, kept while the window lives.
     terminals: HashMap<PathBuf, quill_pty::Tabs>,
     fonts_attached: bool,
     /// The interface font and code font in force, as Settings chose them.
@@ -923,6 +925,11 @@ impl eframe::App for App {
         if let Some((session, op)) = self.chosen.lock().unwrap().take() {
             self.engine.send(Intent::Browser { session, op });
         }
+        let skill_file = self.skill_file.lock().unwrap().take();
+        if let Some((purpose, path)) = skill_file {
+            let intents = quill_ui::customize::file_chosen(&mut self.ui, &purpose, path);
+            self.dispatch(intents);
+        }
         let chromium = self.chromium.lock().unwrap().take();
         if let Some(program) = chromium {
             let mut settings = self.ui.settings.clone();
@@ -1303,6 +1310,26 @@ impl eframe::App for App {
                             line.parse().ok(),
                         ),
                     }
+                }
+                // Customize: a skill's file to add or put in another's place, or where to
+                // save one, from the platform's dialog.
+                if let Some(rest) = id.strip_prefix("czp:file:") {
+                    let (skill_file, ctx, purpose) =
+                        (self.skill_file.clone(), ctx.clone(), id.clone());
+                    let saving = rest.strip_prefix("download:").map(|n| format!("{n}.zip"));
+                    std::thread::spawn(move || {
+                        let dialog = rfd::FileDialog::new();
+                        let path = match saving {
+                            Some(name) => dialog.set_file_name(name).save_file(),
+                            None => dialog
+                                .add_filter("Skill", &["skill", "zip", "md"])
+                                .pick_file(),
+                        };
+                        if let Some(path) = path {
+                            *skill_file.lock().unwrap() = Some((purpose, path));
+                            ctx.request_repaint();
+                        }
+                    });
                 }
                 // Settings › Browser: the Chromium to run, from the platform's dialog.
                 if id == quill_ui::view::BROWSER_PROGRAM_CHOOSE {
@@ -1942,6 +1969,7 @@ fn main() -> eframe::Result {
                 picked: Arc::default(),
                 chosen: Arc::default(),
                 chromium: Arc::default(),
+                skill_file: Arc::default(),
                 attached: Arc::default(),
                 pasted: Arc::default(),
                 v_down: false,

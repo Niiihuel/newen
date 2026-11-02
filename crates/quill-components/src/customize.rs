@@ -1,42 +1,12 @@
-//! Customize's pages as Desktop draws them (Skills and Plugins, measured dark at 1×): a header of a bold title and its tools, a card that says what the page is
-//! for, sections titled with their count, and items on an icon's tile with their menu. The
-//! app says what each holds; these only lay it out.
+//! Customize's page as Desktop draws its parts (measured dark at 1×): a card that says what a
+//! list is for, sections titled with their count, items on an icon's tile with their menu,
+//! lists, Discover's cards and a tool's choices. The app says what each holds; these only lay
+//! it out.
 
 use crate::icons;
 use crate::look::{self, BODY, SMALL};
 use crate::pieces::{hgap, menu, muted, text};
-use limn::{Component, ComponentPalette, Element, FontFamily};
-
-/// The header: the page's bold 22 px title, then `lead` beside it (tabs), and `tools` at the
-/// end (a search, buttons), 28 high, as Desktop's.
-pub fn header(title: &str, lead: Vec<Element>, tools: Vec<Element>, width: f32) -> Element {
-    let mut row = vec![text(title)
-        .font_family(FontFamily::SansBold)
-        .font_size(22.0)
-        .centered_y()];
-    row.extend(lead.into_iter().map(|e| e.centered_y()));
-    row.push(Element::spacer().flex(1.0));
-    row.extend(tools.into_iter().map(|e| e.centered_y()));
-    Element::row(row).gap(12.0).size(Some(width), Some(28.0))
-}
-
-/// The page's own search, 256 wide on the field's fill.
-pub fn search(id: &str, value: &str, placeholder: &str) -> Element {
-    limn::SearchField::new(
-        id,
-        value,
-        placeholder,
-        ComponentPalette {
-            surface: look::customize_card(),
-            raised: look::customize_card(),
-            border: look::settings_field_edge(),
-            ..look::palette()
-        },
-    )
-    .size(limn::ControlSize::Compact)
-    .width(256.0)
-    .render()
-}
+use limn::{Component, Element, FontFamily};
 
 /// A button of the header: filled ("Discover") or, `primary`, in the text's ink ("+ Add"),
 /// 28 high, radius 6, with an optional icon before its label and chevron after it.
@@ -359,4 +329,282 @@ pub fn empty(icon: &'static str, words: &str, width: f32) -> Element {
     Element::row(vec![tile, muted(words).font_size(BODY).centered_y()])
         .gap(16.0)
         .size(Some(width), Some(48.0))
+}
+
+/// The page's tabs (Skills, Connectors, Plugins) or a list's own (Your connectors, Discover):
+/// each its label on the tab's fill when shown, under the pointer's when not; one that cannot
+/// be used is muted and says why in its tooltip, and reports nothing.
+pub fn tabs(tabs: &[(&str, &str, bool, Option<String>)]) -> Element {
+    let tab = |id: &str, label: &str, on: bool, off: &Option<String>| {
+        let ink = if off.is_some() {
+            look::muted()
+        } else {
+            look::palette().text
+        };
+        let row = Element::row(vec![
+            hgap(10.0),
+            text(label).font_size(BODY).foreground(ink).centered_y(),
+            hgap(10.0),
+        ])
+        .size(None, Some(28.0));
+        if let Some(why) = off {
+            return limn::Tooltip::new(row, format!("{id}:why"), why.as_str(), look::palette())
+                .render();
+        }
+        let tab = Element::clickable(id, row).radius(8.0);
+        if on {
+            tab.background(look::customize_tab())
+                .border(look::customize_tab_edge(), 1.0)
+        } else {
+            tab.hover_background(look::tool_hover())
+        }
+    };
+    Element::row(
+        tabs.iter()
+            .map(|(id, label, on, off)| tab(id, label, *on, off))
+            .collect(),
+    )
+    .gap(4.0)
+}
+
+/// The width of a list's Status column, as Desktop's.
+pub const STATUS_WIDTH: f32 = 160.0;
+/// The width of its Type column, which a list narrower than [`TYPED_FROM`] leaves out.
+pub const TYPE_WIDTH: f32 = 120.0;
+pub const TYPED_FROM: f32 = 560.0;
+
+/// A list's column titles: the first takes what the others leave, muted and small, over a
+/// hairline.
+pub fn table_head(first: &str, kind: &str, status: &str, width: f32) -> Element {
+    let cell = |words: &str, w: Option<f32>| {
+        let cell = muted(words).font_size(SMALL).centered_y();
+        match w {
+            Some(w) => Element::row(vec![cell]).size(Some(w), Some(32.0)),
+            None => Element::row(vec![cell]).size(None, Some(32.0)).flex(1.0),
+        }
+    };
+    let mut row = vec![cell(first, None)];
+    if width >= TYPED_FROM {
+        row.push(cell(kind, Some(TYPE_WIDTH)));
+    }
+    row.extend([cell(status, Some(STATUS_WIDTH)), hgap(28.0)]);
+    Element::column(vec![
+        Element::row(row).gap(12.0).size(Some(width), Some(32.0)),
+        Element::spacer()
+            .background(look::customize_line())
+            .size(Some(width), Some(1.0)),
+    ])
+}
+
+/// One row of a list, 44 high over a hairline: `picture` (a logo or an icon, 16) on a 24 tile
+/// and the name, which opens it (`open`); its type; its status; and what goes at the end (its
+/// "⋯").
+pub fn table_row(
+    open: &str,
+    picture: Element,
+    name: &str,
+    kind: &str,
+    status: Element,
+    end: Option<Element>,
+    width: f32,
+) -> Element {
+    let tile = Element::row(vec![picture.centered().flex(1.0)])
+        .size(Some(24.0), Some(24.0))
+        .background(look::customize_tile())
+        .radius(6.0)
+        .centered_y();
+    let name = Element::clickable(
+        open,
+        Element::row(vec![
+            tile,
+            Element::truncated_text(name.to_owned())
+                .font_family(FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(look::palette().text)
+                .centered_y()
+                .flex(1.0),
+        ])
+        .gap(10.0)
+        .size(None, Some(44.0)),
+    )
+    .accessibility_label(format!("Open {name}"))
+    .flex(1.0);
+    let end = end.unwrap_or_else(|| hgap(28.0));
+    let mut row = vec![name];
+    if width >= TYPED_FROM {
+        row.push(
+            Element::row(vec![muted(kind).font_size(SMALL).centered_y()])
+                .size(Some(TYPE_WIDTH), Some(44.0)),
+        );
+    }
+    row.extend([
+        Element::row(vec![status.centered_y()]).size(Some(STATUS_WIDTH), Some(44.0)),
+        end.centered_y(),
+    ]);
+    Element::column(vec![
+        Element::row(row).gap(12.0).size(Some(width), Some(44.0)),
+        Element::spacer()
+            .background(look::customize_line())
+            .size(Some(width), Some(1.0)),
+    ])
+}
+
+/// A status in a list: its icon, 14, beside its words, both in `ink`.
+pub fn status(icon: &'static str, words: &str, ink: limn::Color) -> Element {
+    Element::row(vec![
+        Element::icon(icons::of(icon))
+            .foreground(ink)
+            .size(Some(14.0), Some(14.0))
+            .centered_y(),
+        Element::truncated_text(words.to_owned())
+            .font_size(SMALL)
+            .foreground(ink)
+            .centered_y(),
+    ])
+    .gap(6.0)
+}
+
+/// The strip over a list when some of it needs the person: a warning, what is wrong, and the
+/// action that mends it all, on the waiting ink's pale fill.
+pub fn attention(words: &str, action: Element, width: f32) -> Element {
+    Element::row(vec![
+        Element::icon(icons::of(icons::WARNING))
+            .foreground(look::awaiting())
+            .size(Some(16.0), Some(16.0))
+            .centered_y(),
+        text(words).font_size(BODY).centered_y().flex(1.0),
+        action.centered_y(),
+    ])
+    .gap(10.0)
+    .padding(12.0)
+    .size(Some(width), None)
+    .background(look::customize_card())
+    .border(look::awaiting_edge(), 1.0)
+    .radius(10.0)
+}
+
+/// A card of Discover, as Desktop's: radius `tile` (16), 16 in, 12 between its parts; a 40
+/// tile with `picture`; the name in 14 medium on up to two lines, an 8 px dot after it when
+/// there is an update; `meta` ("author • 12k installs") and `words` in 12 muted, two lines at
+/// most; and `action`, a ghost icon button, at its top end.
+#[allow(clippy::too_many_arguments)]
+pub fn discover_card(
+    picture: Element,
+    name: &str,
+    meta: &str,
+    words: &str,
+    update: bool,
+    action: Element,
+    width: f32,
+) -> Element {
+    let tile = Element::row(vec![picture.centered().flex(1.0)])
+        .size(Some(40.0), Some(40.0))
+        .background(look::customize_tile())
+        .radius(10.0);
+    let mut title = vec![Element::text(name.to_owned())
+        .font_family(FontFamily::SansBold)
+        .font_size(BODY)
+        .foreground(look::palette().text)
+        .max_lines(2)
+        .flex(1.0)];
+    if update {
+        title.push(
+            Element::spacer()
+                .size(Some(8.0), Some(8.0))
+                .background(look::handle())
+                .radius(4.0),
+        );
+    }
+    let mut copy = vec![Element::row(title).gap(6.0)];
+    if !meta.is_empty() {
+        copy.push(
+            Element::truncated_text(meta.to_owned())
+                .font_size(12.0)
+                .foreground(look::muted()),
+        );
+    }
+    let head = Element::row(vec![tile, Element::column(copy).gap(2.0).flex(1.0), action]).gap(12.0);
+    let mut column = vec![head];
+    if !words.is_empty() {
+        column.push(
+            Element::text(words.to_owned())
+                .font_size(12.0)
+                .foreground(look::muted())
+                .max_lines(2),
+        );
+    }
+    Element::column(column)
+        .gap(12.0)
+        .padding(16.0)
+        .size(Some(width), Some(132.0))
+        .background(look::customize_card())
+        .border(look::customize_line(), 1.0)
+        .hover_background(look::customize_card())
+        .radius(limn::RadiusRole::Tile.px())
+}
+
+/// One fact of a detail page: its icon (12) on a 20 tile, then its words, small and muted, and
+/// an (i) whose tooltip says more when there is more.
+pub fn fact(id: &str, icon: &'static str, words: &str, more: Option<&str>) -> Element {
+    let tile = Element::row(vec![Element::icon(icons::of(icon))
+        .foreground(look::muted())
+        .size(Some(12.0), Some(12.0))
+        .centered()
+        .flex(1.0)])
+    .size(Some(20.0), Some(20.0))
+    .background(look::customize_tile())
+    .radius(5.0)
+    .centered_y();
+    let mut row = vec![tile, muted(words).font_size(SMALL).centered_y()];
+    if let Some(more) = more {
+        let info = Element::icon(icons::of(icons::INFO))
+            .foreground(look::muted())
+            .size(Some(12.0), Some(12.0))
+            .centered_y();
+        row.push(limn::Tooltip::new(info, format!("{id}:info"), more, look::palette()).render());
+    }
+    Element::row(row).gap(8.0).size(None, Some(24.0))
+}
+
+/// The three choices of when a tool may be used (Always allow, Needs approval, Blocked), each
+/// an icon with its name for a tooltip, the chosen one on the tab's fill; a choice the agent
+/// cannot say is muted and reports nothing, its tooltip saying why. `ids` and `chosen` are in
+/// that order.
+pub fn policy_control(ids: [&str; 3], chosen: Option<usize>, off: [Option<&str>; 3]) -> Element {
+    let names = ["Always allow", "Needs approval", "Blocked"];
+    let glyphs = [icons::CHECK_CIRCLE, icons::HAND, icons::BLOCKED];
+    let cells = (0..3).map(|at| {
+        let ink = if off[at].is_some() {
+            look::customize_edge()
+        } else {
+            look::palette().text
+        };
+        let glyph = Element::icon(icons::of(glyphs[at]))
+            .foreground(ink)
+            .size(Some(14.0), Some(14.0))
+            .centered();
+        let cell = Element::row(vec![glyph.flex(1.0)]).size(Some(28.0), Some(24.0));
+        let (cell, tip) = match off[at] {
+            Some(why) => (cell, format!("{}: {why}", names[at])),
+            None => {
+                let cell = Element::clickable(ids[at], cell)
+                    .accessibility_label(names[at])
+                    .radius(6.0)
+                    .hover_background(look::tool_hover());
+                let cell = if chosen == Some(at) {
+                    cell.background(look::customize_tab())
+                        .border(look::customize_tab_edge(), 1.0)
+                } else {
+                    cell
+                };
+                (cell, names[at].to_owned())
+            }
+        };
+        limn::Tooltip::new(cell, format!("{}:tip", ids[at]), tip, look::palette()).render()
+    });
+    Element::row(cells.collect())
+        .gap(2.0)
+        .padding(2.0)
+        .background(look::customize_card())
+        .radius(8.0)
 }

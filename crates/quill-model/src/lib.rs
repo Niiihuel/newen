@@ -8,7 +8,8 @@ pub use quill_agent::{
     ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
     ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
-    TaskUsage, Todo, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource,
+    TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage, UsageWindow, WebSearchRun,
+    WebSource,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
@@ -68,12 +69,26 @@ pub struct AppliedTo {
     pub applies: Applies,
 }
 
+/// When one tool of one connector may be used, as the person chose on its page: for one
+/// agent's own server (`agent` its id) or for an "All agents" server (`agent` empty).
+/// `policy` `None` leaves it to the agent's own settings again.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolChoice {
+    pub agent: String,
+    pub server: String,
+    pub tool: String,
+    pub policy: Option<ToolPolicy>,
+}
+
 /// Everything the "All agents" layer holds and how each agent treats it.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalState {
     pub servers: Vec<GlobalServer>,
     pub skills: Vec<GlobalSkill>,
     pub applied: Vec<AppliedTo>,
+    /// The tool permissions the person chose, for every agent's connectors.
+    #[serde(default)]
+    pub tools: Vec<ToolChoice>,
     /// Why the last change failed, or why the layer could not be read.
     pub error: Option<String>,
     /// The system keychain answers; without it a secret cannot be kept.
@@ -99,8 +114,24 @@ pub enum GlobalOp {
     NewSkill {
         name: String,
         description: String,
+        /// What the agent reads when the skill applies; a placeholder when empty.
+        #[serde(default)]
+        instructions: String,
     },
     RemoveSkill(String),
+    /// A skill from a file: a `SKILL.md`-like `.md`, or a `.zip` / `.skill` of its folder.
+    /// With `replace`, it takes the place of that skill.
+    UploadSkill {
+        path: PathBuf,
+        replace: Option<String>,
+    },
+    /// A skill's folder written as a `.zip` at `to`.
+    ExportSkill {
+        name: String,
+        to: PathBuf,
+    },
+    /// Tool permissions chosen, each replacing the one before for the same tool.
+    Tools(Vec<ToolChoice>),
 }
 
 /// quill's own id of a session.
@@ -422,9 +453,31 @@ pub enum Motion {
     Full,
 }
 
+/// What of Customize an agent takes part in, as its adapter declares it: a tab it has no part
+/// in shows off, with why, and a tool permission it cannot say is not offered.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CustomizeSupport {
+    pub plugins: bool,
+    pub connectors: bool,
+    pub tool_policies: Vec<ToolPolicy>,
+    /// A server can be added with an OAuth client of the person's own.
+    pub oauth_client: bool,
+}
+
+impl Default for CustomizeSupport {
+    fn default() -> Self {
+        Self {
+            plugins: true,
+            connectors: true,
+            tool_policies: ToolPolicy::ALL.to_vec(),
+            oauth_client: false,
+        }
+    }
+}
+
 /// An agent quill can run: its id, its name for people, and the versions of its program
 /// quill was tested with.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentInfo {
     pub id: String,
     pub name: String,
@@ -448,6 +501,8 @@ pub struct AgentInfo {
     /// The mode a new session starts in.
     #[serde(default)]
     pub default_mode: String,
+    #[serde(default)]
+    pub customize: CustomizeSupport,
 }
 
 /// Where a message sent while a turn runs goes.
@@ -758,6 +813,12 @@ pub enum Intent {
     /// The person opened the release notes: this version's "What's new" button goes; answered
     /// by `Event::WhatsNew` once that is kept.
     WhatsNewOpened,
+    /// The tools of an agent's MCP servers, asked of a short start of its program with no
+    /// session; answered by `Event::ServerTools`.
+    ServerTools {
+        agent: String,
+        folder: PathBuf,
+    },
     /// The MCP servers an agent is set up with for a folder, outside any session; answered by
     /// `Event::Servers`. Listing them can start them, to see how they stand.
     Servers {
@@ -1442,6 +1503,13 @@ pub enum Event {
     },
     /// The "All agents" layer and how each agent treats it; written before it is announced.
     Global(GlobalState),
+    /// The servers an agent's program loaded with their tools, outside any session, or why it
+    /// did not say.
+    ServerTools {
+        agent: String,
+        servers: Vec<McpServer>,
+        error: Option<String>,
+    },
     /// An agent's MCP servers for a folder, where one can be added, or why they could not be
     /// listed.
     Servers {
@@ -1606,6 +1674,7 @@ impl Event {
             | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::Global(_)
+            | Event::ServerTools { .. }
             | Event::Servers { .. }
             | Event::ServersFound { .. }
             | Event::Auth { .. }

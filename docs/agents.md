@@ -74,7 +74,7 @@ El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec
 
 El adaptador declara cómo se conecta la persona; el motor corre esos comandos fuera del hilo de la UI (`quill-engine/src/auth.rs`) y la UI sólo ve `AuthState` y los eventos `Auth`, `SignInUrl` y `SignInFailed`. Opcionales: un agente sin ellos no muestra pantalla de inicio de sesión.
 
-| Concepto | Contrato | Claude Code 2.1.312 (observado, `cli-auth.md`) |
+| Concepto | Contrato | Claude Code 2.1.312 (observado) |
 |---|---|---|
 | Métodos | `sign_in_methods()` → (clave, etiqueta) | `claudeai` "Claude subscription", `console` "Anthropic Console" |
 | Estado | `auth_query()` + `auth_state(stdout, exit)` | `auth status --json`; sale con 1 sin sesión pero imprime el mismo JSON (`loggedIn`, `authMethod`, `email`, `orgName`, `subscriptionType`) |

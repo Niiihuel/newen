@@ -12,7 +12,7 @@ quill follows it on the same versions.
 
 | PR | Branch | What quill uses it for | State |
 |---|---|---|---|
-| — | `feat/modal-headless` | `Modal::headless`: the what's-new card that opens on its picture (`crates/quill-ui/src/whats_new.rs`) | merged into `quill/integration` locally; not pushed, no PR yet |
+| — | — | nothing waiting: every limn change quill uses is in `main` | — |
 
 Keeping it so:
 

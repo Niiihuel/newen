@@ -1637,6 +1637,7 @@ fn global_skills_are_made_and_added_to_the_session() {
         engine.send(Intent::Global(GlobalOp::NewSkill {
             name: name.into(),
             description: format!("The {name} skill"),
+            instructions: String::new(),
         }));
         assert!(global(&rx).error.is_none());
     }
@@ -1644,6 +1645,7 @@ fn global_skills_are_made_and_added_to_the_session() {
     engine.send(Intent::Global(GlobalOp::NewSkill {
         name: "Bad".into(),
         description: String::new(),
+        instructions: String::new(),
     }));
     assert!(global(&rx).error.is_some());
     // Claude lists a "review" of its own.

@@ -50,6 +50,32 @@ pub struct SessionSpec {
     /// process's environment cannot carry them for one session.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// When the agent may use each MCP server tool the person chose for, among the policies
+    /// the adapter declares ([`AgentAdapter::tool_policies`]); the engine keeps them.
+    #[serde(default)]
+    pub tool_rules: Vec<ToolRule>,
+}
+
+/// When an agent may use one tool of an MCP server, as the person chose on the connector's
+/// page: without asking, after asking, or never. Each adapter says it in its agent's own
+/// permission settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ToolPolicy {
+    Allow,
+    Ask,
+    Block,
+}
+
+impl ToolPolicy {
+    pub const ALL: [Self; 3] = [Self::Allow, Self::Ask, Self::Block];
+}
+
+/// One tool's policy: its server by the name the agent knows it by, and the tool's own name.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolRule {
+    pub server: String,
+    pub tool: String,
+    pub policy: ToolPolicy,
 }
 
 /// An "All agents" MCP server as one session gets it. Plain values are written as they are;
@@ -388,6 +414,13 @@ pub struct NewServer {
     pub scope: Option<String>,
     pub env: Vec<String>,
     pub headers: Vec<String>,
+    /// For an address that signs in with OAuth: the client registered for it, when the
+    /// server wants one ([`AgentAdapter::server_oauth_client`]); the secret is never an
+    /// argument of a program.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
 }
 
 /// Whether the person is signed in to an agent, as its own program reports it: the account
@@ -969,6 +1002,16 @@ pub trait AgentAdapter: Send {
     /// to share it among them. The process is the one [`AgentAdapter::launch`] gives for `spec`.
     fn mux(&self, _spec: &SessionSpec) -> Option<Box<dyn Mux>> {
         None
+    }
+    /// The policies the agent can be given for one MCP server tool in a session
+    /// ([`SessionSpec::tool_rules`]); none when it decides for itself.
+    fn tool_policies(&self) -> Vec<ToolPolicy> {
+        vec![]
+    }
+    /// Its program can add a server signed in to with an OAuth client of the person's own
+    /// ([`NewServer::client_id`]).
+    fn server_oauth_client(&self) -> bool {
+        false
     }
     /// The agent's own logo, an SVG drawn in `currentColor`, to name it where quill lists agents (AGENTS.md).
     fn icon(&self) -> Option<&'static str> {
