@@ -1,10 +1,9 @@
 # Actualizaciones
 
-quill se actualiza solo desde las releases de `Niiihuel/quill-releases`, un
-repositorio **público** que sólo tiene releases firmadas (el feed); hasta 0.1.8
-las leía de `Niiihuel/quill` con un token (ver [El feed y el
-token](#el-feed-y-el-token)). Cada tag `v*` publica una release con un
-manifiesto firmado en los dos; una
+quill se actualiza solo desde las releases de `Niiihuel/quill`, un repositorio
+**público** desde el 27-10-2026: se leen sin token (ver [Dónde se
+lee](#dónde-se-lee)). Cada tag `v*` publica una release con un manifiesto
+firmado; una
 versión es **obligatoria** si el mensaje de su tag anotado tiene la palabra
 «mandatory», y entonces quill se actualiza antes de seguir. Si no, la
 actualización es **opcional**: se descarga sola (si Ajustes lo permite), queda
@@ -60,7 +59,7 @@ una opcional.
 
 ### Una búsqueda
 
-1. Se busca la última release (ver [El feed y el token](#el-feed-y-el-token)) y
+1. Se busca la última release (ver [Dónde se lee](#dónde-se-lee)) y
    se bajan `quill-update.json`, su firma y `.sigs` si existe, con tope de
    tamaño.
 2. **La firma se verifica antes de leer el JSON**, con `verify_strict` y las
@@ -102,7 +101,6 @@ Los estados que ve la persona (`quill_model::UpdateState`):
 | Error | el motivo, en una línea discreta, con **Reintentar** |
 | Compilado desde el código | «Compilado desde el código: actualiza con git pull» |
 | Sin instalar | «Ejecuta quill --install para mantenerlo actualizado» |
-| Sin acceso | «Las actualizaciones necesitan acceso al repositorio privado…» |
 
 En Ajustes la línea dice además cuándo terminó la última búsqueda («… ·
 Checked 3 minutes ago»), así que **Buscar actualizaciones** siempre responde:
@@ -184,8 +182,9 @@ plataforma, se intenta primero archivo por archivo:
   lista entera si un camino sale del bundle (`..`, absoluto, `\`, `:`), se
   repite, o un enlace apunta afuera.
 - Un blob que ya publicó una release anterior se nombra con la URL de esa
-  release: cada release sube sólo los archivos que cambiaron. Por eso las
-  releases viejas de `Niiihuel/quill-releases` **no se borran**.
+  release: cada release sube sólo los archivos que cambiaron. Por eso **las
+  releases viejas de `Niiihuel/quill` no se borran** (ni sus assets `f-*.gz`):
+  una release posterior puede seguir nombrándolos.
 - La copia arma la carpeta de la versión nueva con los archivos de la versión
   que corre (Linux `current/`, Windows `quill.exe` y `versions\<la que corre>\`,
   macOS `quill.app/`) cuyo SHA-256 coincide (en Linux un enlace duro si el modo
@@ -247,7 +246,7 @@ anterior tiene que poder abrirla.
 También: `check: up to date`, `check failed: <motivo>`, `download: … failed`,
 `stage: … failed`, `skip: …`, `rollback: …`, `schedule: the computer woke`. Una
 línea nombra versiones, tamaños, tiempos y el motivo de un fallo; **nunca una
-dirección ni el token**.
+dirección**.
 
 ## Novedades («What's new»)
 
@@ -425,48 +424,26 @@ como antes, sin novedades. Para probarlo a mano:
 `cargo run -p quill-release -- whats-new v0.2.0 https://example.org /tmp/wn` (con el tag
 anotado creado).
 
-## El feed y el token
+## Dónde se lee
 
-Desde 0.1.9 una búsqueda lee el feed público, `Niiihuel/quill-releases`, en
-`https://github.com/Niiihuel/quill-releases/releases/latest/download/…`, sin
-token (`FEED` en `crates/quill-update/src/lib.rs`). Ese repositorio no tiene
-código: sólo releases, con los artefactos, los blobs, las listas, los
-manifiestos, sus firmas y las novedades con sus medios.
+Una búsqueda lee la última release de `Niiihuel/quill` (`REPOSITORY` en
+`crates/quill-update/src/lib.rs`) en sus direcciones públicas,
+`https://github.com/Niiihuel/quill/releases/latest/download/<archivo>`, y baja
+los artefactos, las listas y los blobs de las direcciones que nombra el
+manifiesto firmado. No usa la API de GitHub, así que no necesita token ni cuenta
+contra su límite de 60 pedidos por hora sin autenticar: hasta 0.1.8 el
+repositorio era privado y quill pedía un token (`QUILL_UPDATE_TOKEN` o `gh auth
+token`); desde 0.1.9 ese camino ya no existe, tampoco el estado «Sin acceso».
+Las redirecciones de GitHub (al servidor donde guarda los archivos) se siguen a
+mano, cinco como mucho, y cada respuesta tiene tope de tamaño.
 
-Si el feed falla (red, 404, firma…) y hay token, se prueba como antes la última
-release de `Niiihuel/quill` por la API de GitHub (`releases/latest`),
-bajando los archivos por su API con `Authorization: Bearer`; queda en el
-registro. Es lo que leen las copias hasta 0.1.8, y el CI sigue publicando ahí
-cada release (ver [La transición](#la-transición)). El token sale, en orden, de:
-
-1. la variable `QUILL_UPDATE_TOKEN`;
-2. la salida de `gh auth token`, si `gh` está en el `PATH` (espera cinco
-   segundos como mucho, fuera del hilo de la interfaz).
-
-Sin token se queda el error del feed. Si la API responde 401, 403 o 404 con el
-token, el estado es **Sin acceso** y el mensaje lo dice.
-
-El token **no se escribe en logs ni en el estado** (`Source` no implementa
-`Debug`), y solo viaja a `api.github.com`: las redirecciones se siguen a mano y
-sin el token, porque la API manda la descarga a otro servidor. El token no se
-guarda en disco.
+Las copias hasta 0.1.8 siguen leyendo el mismo repositorio por la API con su
+token: encuentran cada archivo de la release por su nombre, así que no hace
+falta publicar en otro lado.
 
 Lo que no cubre: quien controle la red puede ocultar una versión nueva (la
 copia sigue como está, y una obligatoria se descubre al volver la red), salvo
 que el manifiesto tenga `expires`.
-
-### La transición
-
-Las copias hasta 0.1.8 sólo leen `Niiihuel/quill` con un token. Por eso cada
-release se publica en los dos repositorios, primero en el feed y después en
-`Niiihuel/quill`, con el mismo manifiesto: sus URLs nombran el feed, y una copia
-vieja que lee por la API encuentra cada archivo por su nombre entre los de la
-release de `Niiihuel/quill` (artefactos, novedades, medios, listas y firmas; los
-blobs sólo están en el feed, y las copias viejas no los usan). La primera
-release v2 (0.1.9) llega así a todas: las viejas por el repositorio de siempre,
-y desde ella todas leen el feed. Mientras haya copias de 0.1.8 o anteriores en
-uso, el CI tiene que seguir publicando en `Niiihuel/quill`; después se puede
-quitar ese paso (y la vuelta por la API en el cliente).
 
 ## Publicar una release
 
@@ -494,9 +471,9 @@ quitar ese paso (y la vuelta por la API en el cliente).
      sistema abajo);
    - arma las novedades si hay `release/notes/<versión>.toml` (`quill-release
      whats-new`, ver [Novedades](#novedades-whats-new));
-   - baja la release anterior (`quill-update.json`, sus firmas y
-     `files-*.json`) del feed, o de `Niiihuel/quill` mientras el feed no tenga
-     ninguna; `quill-release` la verifica con las claves compiladas;
+   - baja la última release publicada (`quill-update.json`, sus firmas y
+     `files-*.json`; el borrador de ésta no cuenta); `quill-release` la
+     verifica con las claves compiladas;
    - desempaqueta cada artefacto y arma su lista (`quill-release files … --previous
      previous`): un archivo cuyo blob ya publicó una release anterior (o otra
      plataforma de ésta) se nombra con esa URL; para los demás escribe
@@ -508,11 +485,10 @@ quitar ese paso (y la vuelta por la API en el cliente).
      para que ningún build script vea el secreto), lo **verifica con las claves
      compiladas en quill** (`quill-release verify`: un secreto que no coincide
      con `release-key.pub` o `backup-key.pub` corta acá, y también una lista o
-     un blob nuevo que no sea lo que nombra), y recién entonces sube todo y
-     publica: primero en el feed (la release se crea como borrador, se llena y
-     se publica como la última; una pre-release no) y después en
-     `Niiihuel/quill`. El manifiesto se arma sobre los mismos archivos que se
-     suben.
+     un blob nuevo que no sea lo que nombra), y recién entonces sube los
+     artefactos, las novedades, las listas y los blobs nuevos (de a 50), y al
+     final `quill-update.json` y sus firmas, y publica la release. El
+     manifiesto se arma sobre los mismos archivos que se suben.
 
    El job que firma y publica corre en el entorno `release` de GitHub: sólo un
    tag `v*` llega a sus secretos y el dueño tiene que aprobar cada corrida
@@ -552,26 +528,12 @@ obligatoria por error, publicar otra versión.
   usa el `GITHUB_TOKEN` del repositorio de quill, que no alcanza a leer otro
   repositorio privado.
 - **Entorno `release`** (*Settings › Environments*): limitado a tags `v*`, con
-  el dueño como revisor obligatorio. Sus secretos:
-  - **`QUILL_UPDATE_SIGNING_KEY`**: la clave privada (ver [La clave](#la-clave)).
-    Ya está cargada en el entorno; el secreto del mismo nombre a nivel de
-    repositorio sobra y conviene borrarlo, porque lo ve cualquier workflow de
-    cualquier rama: `gh secret delete QUILL_UPDATE_SIGNING_KEY --repo
-    Niiihuel/quill`.
-  - **`QUILL_RELEASES_TOKEN`**: un token que puede escribir releases en
-    `Niiihuel/quill-releases` (el `GITHUB_TOKEN` del workflow sólo alcanza a su
-    propio repositorio). Sin él, la release se corta antes de compilar nada.
-    Cómo crearlo:
-    1. GitHub › *Settings › Developer settings › Personal access tokens ›
-       Fine-grained tokens › Generate new token*.
-    2. *Resource owner*: Niiihuel. *Expiration*: la que se quiera (al vencer,
-       las releases se cortan en ese paso hasta renovarlo).
-    3. *Repository access*: *Only select repositories* › `Niiihuel/quill-releases`.
-    4. *Permissions › Repository permissions › Contents*: **Read and write**
-       (*Metadata: Read* se agrega solo). Nada más.
-    5. Copiarlo y cargarlo sin que quede en el historial de la terminal:
-       `gh secret set QUILL_RELEASES_TOKEN --env release --repo Niiihuel/quill`
-       (lo pide por la entrada).
+  el dueño como revisor obligatorio. Su secreto
+  **`QUILL_UPDATE_SIGNING_KEY`** es la clave privada (ver [La clave](#la-clave)).
+  Ya está cargado en el entorno; el secreto del mismo nombre a nivel de
+  repositorio sobra y conviene borrarlo, porque lo ve cualquier workflow de
+  cualquier rama: `gh secret delete QUILL_UPDATE_SIGNING_KEY --repo
+  Niiihuel/quill`.
 - **Variables `QUILL_WINDOWS_RELEASES` y `QUILL_MACOS_RELEASES`**: en `true`
   para que una release incluya Windows o macOS; apagada, la release sale sin
   ese sistema (Linux siempre va).
@@ -665,10 +627,9 @@ otro lado con variables de entorno:
 
 | Variable | Qué hace | Dónde vale |
 | --- | --- | --- |
-| `QUILL_UPDATE_FEED` | URL base con `quill-update.json` y `.sig` (en vez de la API del repositorio); también hace que una copia sin instalar busque | siempre (igual se verifica con la clave compilada) |
+| `QUILL_UPDATE_FEED` | URL base con `quill-update.json` y `.sig` (en vez de las releases del repositorio); también hace que una copia sin instalar busque | siempre (igual se verifica con la clave compilada) |
 | `QUILL_UPDATE_KEY` | clave pública en base64 en lugar de la compilada | sólo compilaciones de depuración |
 | `QUILL_UPDATE_ROOT` | carpeta de la instalación en vez de `~/.local/share/quill/app` | siempre |
-| `QUILL_UPDATE_TOKEN` | token de la API (ver [Token](#el-feed-y-el-token)) | siempre |
 | `QUILL_NO_UPDATE` | esta copia nunca busca ni se instala sola | siempre |
 
 El feed de prueba firma una release inventada con una clave descartable y la
@@ -692,7 +653,7 @@ tiene `quill.app`; una copia lo prueba antes que el artefacto).
 
 `cargo test -p quill-update` cubre lo mismo sin ventana ni red: firmas,
 manifiestos alterados, obligatoria contra opcional, descargas que no coinciden,
-reanudación y corte, la búsqueda por la API con un token que no alcanza,
+reanudación y corte,
 instalación atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y
 `locales/`), preparar sin cambiar lo que arranca, activar en el próximo
 arranque, y volver atrás tras dos arranques fallidos; el registro y su
@@ -705,7 +666,7 @@ la ruta del bundle sí se prueban en cualquier sistema).
 lo reemplaza; una release con lista de archivos se prepara bajando sólo el blob
 que cambió, y con un blob malo vuelve al archivo entero; saltar una versión; los avisos del sistema (sin foco, a las 24 h,
 nunca dos veces); el calendario con su azar y la búsqueda al volver el foco o
-despertar; y que el registro no tenga el token ni direcciones.
+despertar; y que el registro no tenga direcciones.
 
 ## Linux
 
