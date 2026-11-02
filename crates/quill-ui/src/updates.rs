@@ -1,8 +1,8 @@
 //! quill's own updates in the window: Settings' Updates group, the strip over the account
-//! button once a version is ready, and the dialogs (agents still working, a mandatory
-//! version). The engine checks and downloads; this shows what it reports. Desktop
-//! announces a ready update in the sidebar only (no toast and no menu entry are seen), and
-//! so does quill.
+//! button (a version ready; or found, and downloading, when the person downloads by hand),
+//! the account menu's "Restart to update", and the dialogs (agents still working, a mandatory
+//! version). The engine checks, downloads and announces a ready version by the system when
+//! the window is away; this shows what it reports.
 
 use crate::view::ago;
 use crate::{icons, Store, Ui};
@@ -14,6 +14,11 @@ use quill_model::{Event, Intent, SessionStatus, UpdateState};
 
 pub const UPDATE_CHECK: &str = "update:check";
 pub const UPDATE_DOWNLOAD: &str = "update:download";
+/// The strip's own Download, when the person downloads by hand.
+pub const UPDATE_STRIP_DOWNLOAD: &str = "update:strip:download";
+pub const UPDATE_SKIP: &str = "update:skip";
+/// The account menu's "Restart to update"; it asks first, like the strip.
+pub const UPDATE_MENU: &str = "update:menu";
 pub const UPDATE_RETRY: &str = "update:retry";
 /// The mandatory dialog's button: nothing to wait for, it installs.
 pub const UPDATE_RESTART: &str = "update:restart";
@@ -34,6 +39,9 @@ const UPDATE_HOLD: &str = "update:hold";
 /// Keeps what the engine reports. A wait or a question about a version that is no longer
 /// the ready, optional one has nothing left to ask.
 pub(crate) fn heard(ui: &mut Ui, event: &Event) {
+    if let Event::UpdateChecked { at, error } = event {
+        ui.update_checked = Some((*at, error.clone()));
+    }
     let Event::Update(state) = event else {
         return;
     };
@@ -84,7 +92,12 @@ pub fn settled(store: &Store, ui: &mut Ui) -> Vec<Intent> {
 pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     match id {
         UPDATE_CHECK | UPDATE_RETRY => Some(vec![Intent::CheckUpdates]),
-        UPDATE_DOWNLOAD => Some(vec![Intent::DownloadUpdate]),
+        UPDATE_DOWNLOAD | UPDATE_STRIP_DOWNLOAD => Some(vec![Intent::DownloadUpdate]),
+        UPDATE_SKIP => Some(vec![Intent::SkipUpdate]),
+        UPDATE_MENU => {
+            ui.account_menu = false;
+            Some(restart(store, ui))
+        }
         UPDATE_RESTART => Some(vec![Intent::InstallUpdate]),
         // The strip shows the version's announcement first, when it has one.
         UPDATE_STRIP => {
@@ -121,61 +134,52 @@ pub(crate) fn ready(ui: &Ui) -> Option<&str> {
     }
 }
 
-/// Desktop's "strip" over the account button: 32 px
-/// high, an 8 px radius, a resting fill. Checking and downloading show nothing here; Settings
-/// has them. Waiting for the agents it reads as such, with a cancel.
+/// An optional version found that waits for the person's Download: auto-update is off.
+fn offered(ui: &Ui) -> Option<&str> {
+    match &ui.update {
+        UpdateState::Available {
+            version,
+            mandatory: false,
+            ..
+        } if !ui.settings.auto_update => Some(version),
+        _ => None,
+    }
+}
+
+/// The strip over the account button: 32 px high, an 8 px radius, a resting fill. A ready
+/// version restarts from it ("Relaunch to update"; waiting for the agents it reads as such,
+/// with a cancel). With auto-update off, a version found offers its Download here and its
+/// download shows its progress; otherwise checking and downloading show only in Settings.
 pub(crate) fn sidebar_strip(ui: &Ui, palette: ComponentPalette) -> Option<Element> {
-    let version = ready(ui)?;
-    let waiting = ui.restart_when_idle;
-    let label = if waiting {
-        "Restarting when agents finish"
-    } else {
-        "Relaunch to update"
-    };
-    let mut row = vec![
-        hgap(0.0),
-        // Set as the sidebar's own rows ("New", "Search"): a 16 px icon in the text's color,
-        // the label in the body face, what follows muted at 12.
-        Element::icon(icons::of(icons::RELOAD))
-            .foreground(look::palette().text)
-            .size(Some(16.0), Some(16.0))
-            .centered_y(),
-        text(label).centered_y(),
-        Element::spacer().flex(1.0),
-    ];
-    let strip = if waiting {
-        row.push(icon_tool(
-            UPDATE_WAIT_CANCEL,
-            icons::of(icons::CLOSE),
-            "Stop waiting",
-            22.0,
-            palette,
-        ));
-        row.push(hgap(3.0));
-        Element::row(row)
-            .gap(10.0)
-            .size(None, Some(32.0))
-            .background(look::row_hover())
-            .radius(8.0)
-    } else {
-        row.push(muted(format!("v{version}")).font_size(12.0).centered_y());
-        row.push(hgap(0.0));
-        let row = Element::row(row).gap(10.0).size(None, Some(32.0));
-        let surface = ComponentPalette {
-            hover: look::tool_hover(),
-            ..palette
+    let strip = if let Some(version) = ready(ui) {
+        ready_strip(ui, version, palette)
+    } else if let Some(version) = offered(ui) {
+        let row = strip_row(
+            "Update available",
+            vec![muted(format!("v{version} \u{b7} Download"))
+                .font_size(12.0)
+                .centered_y()],
+        );
+        clickable_strip(UPDATE_STRIP_DOWNLOAD, row, palette)
+    } else if let UpdateState::Downloading {
+        done,
+        total,
+        mandatory: false,
+        ..
+    } = &ui.update
+    {
+        if ui.settings.auto_update {
+            return None;
         }
-        .interactive_surface(Element::clickable(UPDATE_STRIP, row))
-        .background(look::row_hover())
-        .radius(8.0);
-        // Desktop's tooltip: `{detail} · v{version}`.
-        limn::Tooltip::new(
-            surface,
-            UPDATE_STRIP,
-            format!("Relaunch to update \u{b7} v{version}"),
-            look::palette(),
+        let percent = if *total == 0 { 0 } else { done * 100 / total };
+        strip_row(
+            "Downloading update",
+            vec![muted(format!("{percent}%")).font_size(12.0).centered_y()],
         )
-        .render()
+        .background(look::row_hover())
+        .radius(8.0)
+    } else {
+        return None;
     };
     // The same insets as the account button's row; the divider is above, the account's own
     // padding below.
@@ -183,6 +187,75 @@ pub(crate) fn sidebar_strip(ui: &Ui, palette: ComponentPalette) -> Option<Elemen
         Element::spacer().size(None, Some(8.0)),
         Element::row(vec![hgap(8.0), strip.flex(1.0), hgap(8.0)]),
     ]))
+}
+
+/// A strip's row: set as the sidebar's own rows ("New", "Search"), a 16 px icon in the text's
+/// color, the label in the body face, then `end`.
+fn strip_row(label: &str, end: Vec<Element>) -> Element {
+    let mut row = vec![
+        hgap(0.0),
+        Element::icon(icons::of(icons::RELOAD))
+            .foreground(look::palette().text)
+            .size(Some(16.0), Some(16.0))
+            .centered_y(),
+        text(label).centered_y(),
+        Element::spacer().flex(1.0),
+    ];
+    row.extend(end);
+    row.push(hgap(0.0));
+    Element::row(row).gap(10.0).size(None, Some(32.0))
+}
+
+fn clickable_strip(id: &str, row: Element, palette: ComponentPalette) -> Element {
+    ComponentPalette {
+        hover: look::tool_hover(),
+        ..palette
+    }
+    .interactive_surface(Element::clickable(id, row))
+    .background(look::row_hover())
+    .radius(8.0)
+}
+
+fn ready_strip(ui: &Ui, version: &str, palette: ComponentPalette) -> Element {
+    if ui.restart_when_idle {
+        return strip_row(
+            "Restarting when agents finish",
+            vec![
+                icon_tool(
+                    UPDATE_WAIT_CANCEL,
+                    icons::of(icons::CLOSE),
+                    "Stop waiting",
+                    22.0,
+                    palette,
+                ),
+                hgap(3.0),
+            ],
+        )
+        .background(look::row_hover())
+        .radius(8.0);
+    }
+    let row = strip_row(
+        "Relaunch to update",
+        vec![muted(format!("v{version}")).font_size(12.0).centered_y()],
+    );
+    // Desktop's tooltip: `{detail} · v{version}`.
+    limn::Tooltip::new(
+        clickable_strip(UPDATE_STRIP, row, palette),
+        UPDATE_STRIP,
+        format!("Relaunch to update \u{b7} v{version}"),
+        look::palette(),
+    )
+    .render()
+}
+
+/// The account menu's entry while a version waits for a restart.
+pub(crate) fn menu_entry(ui: &Ui) -> Option<limn::DropdownMenuEntry> {
+    ready(ui)?;
+    Some(
+        limn::DropdownMenuItem::new(UPDATE_MENU, "Restart to update")
+            .icon(icons::of(icons::RELOAD))
+            .into(),
+    )
 }
 
 /// The sidebar toggle's dot while the sidebar is hidden and a version waits: Desktop's
@@ -236,6 +309,23 @@ fn state_line(state: &UpdateState) -> String {
     }
 }
 
+/// The state line with when the last check ended, or why it failed while a version stays in
+/// view: what "Check for updates" answers.
+pub(crate) fn description(ui: &Ui) -> String {
+    let line = state_line(&ui.update);
+    match (&ui.update_checked, &ui.update) {
+        // Its own line says so already.
+        (_, UpdateState::UpToDate { .. } | UpdateState::Failed { .. } | UpdateState::Checking) => {
+            line
+        }
+        (Some((_, Some(error))), UpdateState::Downloading { .. } | UpdateState::Ready { .. }) => {
+            format!("{line} \u{b7} Last check failed: {error}")
+        }
+        (Some((at, _)), _) => format!("{line} \u{b7} Checked {}", ago(*at)),
+        (None, _) => line,
+    }
+}
+
 /// Settings' Updates group: the state and its buttons, the release notes when there are any,
 /// and the switch that downloads on its own.
 pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) -> Vec<Setting> {
@@ -251,14 +341,24 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
         )),
         UpdateState::Available {
             mandatory: false, ..
-        } => buttons.push(keyed_button(
-            UPDATE_DOWNLOAD,
-            "Download",
-            "",
-            false,
-            true,
-            palette,
-        )),
+        } => {
+            buttons.push(keyed_button(
+                UPDATE_DOWNLOAD,
+                "Download",
+                "",
+                false,
+                true,
+                palette,
+            ));
+            buttons.push(keyed_button(
+                UPDATE_SKIP,
+                "Skip this version",
+                "",
+                false,
+                true,
+                palette,
+            ));
+        }
         UpdateState::Failed { .. } => buttons.push(keyed_button(
             UPDATE_RETRY,
             "Retry",
@@ -285,7 +385,7 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
     // The version row is the "quill" group's, above.
     let mut out = vec![setting(
         "Updates",
-        &state_line(&ui.update),
+        &description(ui),
         Element::row(buttons).gap(8.0),
     )];
     if let UpdateState::Available { notes, .. } = &ui.update {

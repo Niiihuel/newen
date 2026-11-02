@@ -5774,7 +5774,7 @@ fn drawn_words(store: &Store, ui: &Ui, words: &str) -> bool {
 }
 
 #[test]
-fn the_sidebar_strip_shows_for_an_optional_ready_update_and_there_is_no_toast_or_menu_entry() {
+fn the_sidebar_strip_and_the_account_menu_restart_into_an_optional_ready_update() {
     let (store, mut ui) = store_with_session();
     assert!(!drawn_words(&store, &ui, "Relaunch to update"));
     ready_update(&mut ui, true);
@@ -5783,12 +5783,112 @@ fn the_sidebar_strip_shows_for_an_optional_ready_update_and_there_is_no_toast_or
     assert!(drawn_words(&store, &ui, "Relaunch to update"));
     assert!(drawn_words(&store, &ui, "v0.3.0"));
     assert!(!drawn_words(&store, &ui, "is ready"));
-    click(&store, &mut ui, view::ACCOUNT_MENU);
-    assert!(!drawn_words(&store, &ui, "Restart to update"));
     // Idle agents: the click installs at once.
     assert_eq!(
         click(&store, &mut ui, updates::UPDATE_STRIP),
         vec![Intent::InstallUpdate]
+    );
+    // The account menu has it too, and closes.
+    click(&store, &mut ui, view::ACCOUNT_MENU);
+    assert!(drawn_words(&store, &ui, "Restart to update"));
+    assert_eq!(
+        click(&store, &mut ui, updates::UPDATE_MENU),
+        vec![Intent::InstallUpdate]
+    );
+    assert!(!ui.account_menu);
+    // Nothing ready: no entry.
+    ui.applied(&Event::Update(quill_model::UpdateState::Idle));
+    click(&store, &mut ui, view::ACCOUNT_MENU);
+    assert!(!drawn_words(&store, &ui, "Restart to update"));
+}
+
+/// With auto-update off, an optional version found offers its Download in the strip and
+/// shows its progress there; Settings offers Download and Skip. A mandatory one, or one found
+/// while auto-update is on, shows nothing in the strip.
+#[test]
+fn with_auto_update_off_the_strip_offers_the_download_and_settings_the_skip() {
+    let (store, mut ui) = store_with_session();
+    let available = |mandatory| {
+        Event::Update(quill_model::UpdateState::Available {
+            version: "0.3.0".into(),
+            notes: String::new(),
+            mandatory,
+            size: 10,
+        })
+    };
+    ui.applied(&available(false));
+    assert!(!drawn_words(&store, &ui, "Update available"));
+    ui.settings.auto_update = false;
+    assert!(drawn_words(&store, &ui, "Update available"));
+    assert!(drawn_words(&store, &ui, "v0.3.0 \u{b7} Download"));
+    assert_eq!(
+        click(&store, &mut ui, updates::UPDATE_STRIP_DOWNLOAD),
+        vec![Intent::DownloadUpdate]
+    );
+    ui.applied(&Event::Update(quill_model::UpdateState::Downloading {
+        version: "0.3.0".into(),
+        done: 42,
+        total: 100,
+        mandatory: false,
+    }));
+    assert!(drawn_words(&store, &ui, "Downloading update"));
+    assert!(drawn_words(&store, &ui, "42%"));
+    ui.applied(&available(false));
+    ui.settings_page = Some("system".into());
+    assert!(drawn_words(&store, &ui, "Skip this version"));
+    assert_eq!(
+        click(&store, &mut ui, updates::UPDATE_SKIP),
+        vec![Intent::SkipUpdate]
+    );
+    ui.settings_page = None;
+    ui.applied(&available(true));
+    assert!(!drawn_words(&store, &ui, "Update available"));
+}
+
+/// "Check for updates" always answers: when the last check ended, beside what is on its way,
+/// or why it failed.
+#[test]
+fn the_updates_line_says_when_it_last_checked_or_why_that_failed() {
+    let (_, mut ui) = store_with_session();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    ui.applied(&Event::Update(quill_model::UpdateState::UpToDate {
+        checked_at: now,
+    }));
+    ui.applied(&Event::UpdateChecked {
+        at: now,
+        error: None,
+    });
+    assert_eq!(
+        updates::description(&ui),
+        "quill is up to date \u{b7} Checked just now"
+    );
+    ui.applied(&Event::Update(quill_model::UpdateState::Downloading {
+        version: "0.1.9".into(),
+        done: 42,
+        total: 100,
+        mandatory: false,
+    }));
+    assert_eq!(
+        updates::description(&ui),
+        "Downloading 0.1.9 \u{b7} 42% \u{b7} Checked just now"
+    );
+    ui.applied(&Event::UpdateChecked {
+        at: now,
+        error: Some("Could not reach the update server.".into()),
+    });
+    assert_eq!(
+        updates::description(&ui),
+        "Downloading 0.1.9 \u{b7} 42% \u{b7} Last check failed: Could not reach the update server."
+    );
+    ui.applied(&Event::Update(quill_model::UpdateState::Failed {
+        reason: "Could not reach the update server.".into(),
+    }));
+    assert_eq!(
+        updates::description(&ui),
+        "Could not reach the update server."
     );
 }
 

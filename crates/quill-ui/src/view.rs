@@ -2123,6 +2123,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         crate::github::menu_header(ui),
         limn::DropdownMenuEntry::Separator,
     ];
+    entries.extend(crate::updates::menu_entry(ui));
     entries.push(
         limn::DropdownMenuItem::new(SETTINGS_OPEN, "Settings")
             .icon(icons::of(icons::SETTINGS))

@@ -67,6 +67,8 @@ struct App {
     pasted: Arc<Mutex<Vec<PathBuf>>>,
     /// The engine has retold the kept sessions; events from here on are news.
     restored: bool,
+    /// Whether the window had the focus at the last frame, as the engine was told.
+    focused: Option<bool>,
     /// Thumbnails decoded off the window's thread, and the images asked for so far (each once).
     thumbs_done: Arc<Mutex<Vec<(PathBuf, limn::RasterImage)>>>,
     thumbs_asked: std::collections::HashSet<PathBuf>,
@@ -683,6 +685,11 @@ impl eframe::App for App {
         self.ui.at_end = at_end;
         let events = std::mem::take(&mut *self.inbox.lock().unwrap());
         let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        // The updates check when the window comes back, and announce by the system only away.
+        if self.focused != Some(focused) {
+            self.focused = Some(focused);
+            self.dispatch(vec![Intent::WindowFocused { focused }]);
+        }
         for event in events {
             // A session that needs the person, or finished, while it is not in view shows a
             // banner and flags quill, as Desktop's notifications and "Draw attention on
@@ -1620,6 +1627,66 @@ fn install_self() -> Result<String, String> {
     Ok(placed.display().to_string())
 }
 
+/// Before the window, in an installed copy quill updates: a start of the version on trial is
+/// counted, and after two that never ran a minute it is rolled back to the one before; else a
+/// newer version staged is activated. Either way the installed program then starts in place of
+/// this one. Returns the version on trial, to end it once this start proves healthy.
+fn launch_update() -> Option<(quill_update::install::Install, quill_update::Version)> {
+    use quill_update::install::{Install, Launch, ATTEMPTS};
+    if std::env::var_os("QUILL_NO_UPDATE").is_some_and(|value| !value.is_empty()) {
+        return None;
+    }
+    let install = Install::locate()?;
+    if !install.runs(&std::env::current_exe().ok()?) {
+        return None;
+    }
+    let running = quill_update::Version::parse(quill_update::VERSION).ok()?;
+    let start = |program: &std::path::Path| {
+        if let Err(error) = restart(program) {
+            update_log(format!(
+                "start: could not start {}: {error}",
+                program.display()
+            ));
+            return;
+        }
+        std::process::exit(0);
+    };
+    match install.launch(&running) {
+        Ok(Launch::Go) => {}
+        Ok(Launch::Activated { version, program }) => {
+            update_log(format!(
+                "activate: {version} in place of {running}, at the start"
+            ));
+            start(&program);
+        }
+        Ok(Launch::RolledBack {
+            version,
+            previous,
+            program,
+        }) => {
+            update_log(format!(
+                "rollback: {version} started {ATTEMPTS} times without running a minute; back to {previous}, and {version} is refused"
+            ));
+            start(&program);
+        }
+        Err(error) => update_log(format!("start: {error}")),
+    }
+    let trial = install.trial().filter(|trial| trial.version == running)?;
+    update_log(format!(
+        "start: {running} on trial after {}, start {}",
+        trial.previous, trial.attempts
+    ));
+    Some((install, running))
+}
+
+/// A line in the update log (and on stderr).
+fn update_log(line: String) {
+    eprintln!("quill: update: {line}");
+    if let Some(path) = quill_update::log::path() {
+        quill_update::log::write(&path, &line);
+    }
+}
+
 /// Starts the installed program with this one's arguments. It waits for this process to go
 /// (`wait_for_restarter`): the link socket is this window's until then.
 fn restart(program: &std::path::Path) -> std::io::Result<()> {
@@ -1817,6 +1884,7 @@ fn main() -> eframe::Result {
             });
         }
     }
+    let trial = launch_update();
     let cwd = std::env::args()
         .nth(1)
         .map(std::path::PathBuf::from)
@@ -1923,6 +1991,20 @@ fn main() -> eframe::Result {
                     },
                 ),
             };
+            // A version on trial that ran a minute with its window up and its engine started
+            // is healthy: its trial ends, and no later start rolls it back.
+            if let Some((install, running)) = trial {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    if install
+                        .trial()
+                        .is_some_and(|trial| trial.version == running)
+                    {
+                        install.healthy(&running);
+                        update_log(format!("start: {running} ran a minute, its trial is over"));
+                    }
+                });
+            }
             // quill-ide sends code to ask about; a second quill leaves the socket to the first.
             let linked: Arc<Mutex<Vec<quill_link::Message>>> = Arc::default();
             let link = {
@@ -1966,6 +2048,7 @@ fn main() -> eframe::Result {
                 attached: Arc::default(),
                 pasted: Arc::default(),
                 restored: false,
+                focused: None,
                 thumbs_done: Arc::default(),
                 thumbs_asked: Default::default(),
                 qr_for: None,
