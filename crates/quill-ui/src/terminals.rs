@@ -51,64 +51,53 @@ pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
             .size(Some(16.0), Some(16.0))
             .centered_y()
     };
+    // Each row is a sidebar row (32 px, 10 px in, rounded, lit under the pointer), and its
+    // Stop the composer's.
     let mut rows = vec![];
     for task in session.tasks.iter().filter(|t| t.running) {
-        let words = Element::row(vec![
-            icon(match task.kind.as_str() {
-                "agent" => icons::AGENTS,
-                "command" => icons::TERMINAL,
-                _ => icons::LIST,
-            }),
-            // One line that fades out at its end: a long description never runs into the
-            // next row; the hint has it whole.
-            Element::faded_text(task.description.clone(), 24.0)
-                .font_size(look::SMALL)
-                .foreground(palette.text)
-                .size(Some(width - 96.0), Some(18.0)),
-        ])
-        .gap(10.0);
         let open = format!("{OPEN}{}", task.id);
-        let words = palette
-            .interactive_surface(Element::clickable(open.clone(), words))
-            .radius(6.0);
-        let words = hint(session, task, words, &open);
-        let stop = palette
-            .interactive_surface(Element::clickable(
-                format!("{STOP}{}", task.id),
-                Element::icon(icons::of(icons::STOP))
+        let row = crate::view::side_row(
+            open.clone(),
+            vec![
+                icon(match task.kind.as_str() {
+                    "agent" => icons::AGENTS,
+                    "command" => icons::TERMINAL,
+                    _ => icons::LIST,
+                }),
+                // One line that fades out at its end: a long description never runs into
+                // the time; the hint has it whole.
+                Element::faded_text(task.description.clone(), 24.0)
+                    .font_size(look::SMALL)
                     .foreground(palette.text)
-                    .size(Some(14.0), Some(14.0))
-                    .padding(3.0),
-            ))
-            .radius(6.0)
-            .accessibility_label("Stop");
-        rows.push(
-            Element::row(vec![
-                words,
-                Element::spacer().flex(1.0),
+                    .size(None, Some(18.0))
+                    .flex(1.0)
+                    .centered_y(),
                 muted(ran(task.since.elapsed().as_secs()))
                     .font_size(look::SMALL)
                     .centered_y(),
-                stop.centered_y(),
-            ])
-            .gap(8.0)
-            .size(Some(width), Some(24.0)),
-        );
+                crate::view::stop_button(&format!("{STOP}{}", task.id)).centered_y(),
+            ],
+            false,
+            palette,
+        )
+        .size(Some(width), None);
+        rows.push(hint(session, task, row, &open));
     }
     let finished = session.tasks.iter().filter(|t| !t.running).count();
     if finished > 0 {
-        let words = Element::row(vec![
-            icon(icons::CHECK_CIRCLE),
-            text(format!("{finished} finished"))
-                .font_size(look::SMALL)
-                .centered_y(),
-        ])
-        .gap(10.0);
         rows.push(
-            palette
-                .interactive_surface(Element::clickable(crate::view::TASKS_OPEN, words))
-                .radius(6.0)
-                .size(None, Some(24.0)),
+            crate::view::side_row(
+                crate::view::TASKS_OPEN.into(),
+                vec![
+                    icon(icons::CHECK_CIRCLE),
+                    text(format!("{finished} finished"))
+                        .font_size(look::SMALL)
+                        .centered_y(),
+                ],
+                false,
+                palette,
+            )
+            .size(Some(width), None),
         );
     }
     Some(rows)

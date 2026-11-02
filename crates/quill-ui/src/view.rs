@@ -1106,13 +1106,7 @@ fn tasks_pane(
         // The row's flexible child is what it holds, so Stop keeps to the right edge.
         let mut items = vec![lines.flex(1.0)];
         if task.running {
-            items.push(icon_tool(
-                &format!("task:stop:{}", task.id),
-                icons::of(icons::STOP),
-                "Stop",
-                28.0,
-                palette,
-            ));
+            items.push(stop_button(&format!("task:stop:{}", task.id)));
         }
         // Flush with the group's name, 10 above and below, over a hairline, as Desktop's.
         let gap = || Element::spacer().size(None, Some(10.0));
@@ -2586,8 +2580,9 @@ fn search_dialog(store: &Store, ui: &Ui, base: Element, _palette: ComponentPalet
     )
 }
 
-/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected.
-fn side_row(
+/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected. The rows of the
+/// right panel's cards that open something are these too.
+pub(crate) fn side_row(
     id: String,
     content: Vec<Element>,
     selected: bool,
@@ -6576,7 +6571,7 @@ fn composer(
         )
     });
     let trailing = if running && ui.prompt.trim().is_empty() {
-        composer_button(STOP, icons::of(icons::STOP), "Stop", false, 28.0)
+        stop_button(STOP)
     } else {
         send_button(!ui.prompt.trim().is_empty())
     };
@@ -7147,6 +7142,11 @@ fn composer_button(id: &str, icon: limn::Icon, label: &str, open: bool, side: f3
         button
     };
     limn::Tooltip::new(button, id, label, look::palette()).render()
+}
+
+/// The composer's Stop: its white rounded square. Every Stop of a running thing is this one.
+pub(crate) fn stop_button(id: &str) -> Element {
+    composer_button(id, icons::of(icons::STOP), "Stop", false, 28.0)
 }
 
 /// Send, drawn as Desktop's return arrow; limn has no such icon, so it is the character.
@@ -9022,7 +9022,8 @@ fn right_panel(
             "panel:terminals",
             open("panel:terminals", true),
             vec![],
-            rows,
+            // Packed as the sidebar's rows are, 2 px apart.
+            vec![Element::column(rows).gap(2.0)],
             inner,
         ));
     }

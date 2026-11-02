@@ -8389,6 +8389,91 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
     }
 }
 
+/// A running task's Stop, in the Background tasks card and in its pane, is the composer's:
+/// the same 28 px button with the same square, and the card's row lights as a sidebar row
+/// does, as tall and as round.
+#[test]
+fn a_task_s_stop_is_the_composer_s_and_its_row_lights_as_the_sidebar_s() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "t1".into(),
+            call: None,
+            description: "REA Discord stream".into(),
+            kind: "command".into(),
+        },
+    );
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Running,
+    });
+    settle(&store, &mut ui);
+    let window = limn::Size::new(2000.0, 900.0);
+    // Each Stop's size and the icon drawn in it.
+    let stop = |frame: &limn::Frame, id: &str| {
+        let rect = region(frame, id).unwrap_or_else(|| panic!("no {id}"));
+        let inside = |at: &limn::Rect| {
+            rect.contains(limn::Point::new(
+                at.x + at.width / 2.0,
+                at.y + at.height / 2.0,
+            ))
+        };
+        let icon = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::Icon {
+                rect: at,
+                icon,
+                tint,
+            } if inside(at) => Some((at.width, at.height, *icon, *tint)),
+            _ => None,
+        });
+        ((rect.width, rect.height), icon.expect("its square"))
+    };
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let composer = stop(&frame, view::STOP);
+    assert_eq!(composer.0, (28.0, 28.0));
+    assert_eq!(stop(&frame, "terminals:stop:t1"), composer, "the card's");
+    // Under the pointer, the card's row and the sidebar's session row light the same.
+    let mut lit = |id: &str| {
+        let frame = tree.layout(window);
+        let row = region(&frame, id).unwrap_or_else(|| panic!("no {id}"));
+        let at = limn::Point::new(row.x + 4.0, row.y + row.height / 2.0);
+        tree.handle_event(limn::UiEvent::PointerMove(at));
+        let frame = tree.layout(window);
+        let fill = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::FillRect {
+                rect,
+                color,
+                radius,
+            } if [look::row_hover(), look::selected_hover()].contains(color)
+                && rect.contains(at) =>
+            {
+                Some((rect.height, *radius, rect.x - row.x))
+            }
+            _ => None,
+        });
+        fill.unwrap_or_else(|| {
+            let fills: Vec<_> = frame
+                .commands
+                .iter()
+                .filter(
+                    |c| matches!(c, limn::DrawCommand::FillRect { rect, .. } if rect.contains(at)),
+                )
+                .collect();
+            panic!("{id} at {row:?} is not lit: {fills:?}")
+        })
+    };
+    let sidebar = lit("session:1");
+    assert_eq!(sidebar.0, 32.0);
+    assert_eq!(lit("terminals:open:t1"), sidebar);
+    click(&store, &mut ui, view::TASKS_OPEN);
+    settle(&store, &mut ui);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert_eq!(stop(&frame, "task:stop:t1"), composer, "the pane's");
+}
+
 /// A background task's row keeps its description on one line that fades out inside the
 /// card; resting on it shows the whole of it with the command, how long it has run and where.
 #[test]
