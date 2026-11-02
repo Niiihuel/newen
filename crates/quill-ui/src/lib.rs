@@ -4914,9 +4914,9 @@ pub enum MarketDialog {
     Manage,
 }
 
-/// Customize's own clicks, around the changes: its menus (Add, an item's "⋯", Discover's
-/// filter) open and close; Discover's directory and the marketplaces' dialogs open and close.
-/// `None` when `id` is none of them.
+/// Customize's own clicks, around the changes: its menus (the layer, Add, Sort, the status
+/// filter, an item's "⋯", Discover's filter) open and close; Discover's directory and the
+/// marketplaces' dialogs open and close. `None` when `id` is none of them.
 fn customize_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     let rest = id.strip_prefix("cz:")?;
     let toggle = |ui: &mut Ui, menu: &str| {
@@ -4931,7 +4931,7 @@ fn customize_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     }
     let (verb, arg) = rest.split_once(':').unwrap_or((rest, ""));
     match verb {
-        "add" | "more" | "filter-menu" => toggle(ui, id),
+        "add" | "more" | "filter-menu" | "layer" | "sort" | "status" => toggle(ui, id),
         "discover" => {
             ui.settings_menu = None;
             ui.directory = Some(arg.to_owned());

@@ -572,11 +572,14 @@ fn header(ui: &Ui, width: f32) -> Element {
             .radio(layer.as_deref() == Some(a.id.as_str()))
             .into()
     }));
-    let chip = customize::menu_button(
+    // Under the title's end, it opens toward the page.
+    let chip = quill_components::pieces::menu(
         customize::button(&menu, &label, Some(icon), true, false),
-        &menu,
         entries,
         ui.settings_menu.as_deref() == Some(menu.as_str()),
+        &menu,
+        280.0,
+        limn::PopoverPlacement::BottomStart,
     );
     let gear = icon_tool(
         "czp:settings",

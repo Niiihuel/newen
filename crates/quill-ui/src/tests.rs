@@ -11239,3 +11239,46 @@ fn a_proposal_for_another_agent_names_it_on_its_card() {
     });
     assert!(drawn_words(&store, &ui, "Runs in Codex"));
 }
+
+/// The layer chip, pressed as a person does through the tree, opens its menu with every
+/// agent; choosing one closes it and shows that agent's connectors only.
+#[test]
+fn the_layer_chip_opens_its_menu_and_an_agent_chosen_filters_the_page() {
+    let (store, mut ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let press = |tree: &mut UiTree, ui: &mut Ui, frame: &limn::Frame, id: &str| {
+        let rect = region(frame, id).unwrap_or_else(|| panic!("{id} is not on screen"));
+        let at = limn::Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let mut actions = tree.handle_event(limn::UiEvent::PointerDown(at));
+        actions.extend(tree.handle_event(limn::UiEvent::PointerUp(at)));
+        for action in actions {
+            update(&store, ui, &action);
+        }
+        tree.set_root(view(&store, ui, window));
+        tree.layout(window)
+    };
+    assert!(region(&frame, "czp:layer:=codex").is_none());
+    let frame = press(&mut tree, &mut ui, &frame, "cz:layer");
+    assert_eq!(ui.settings_menu.as_deref(), Some("cz:layer"));
+    assert!(region(&frame, "czp:layer:=").is_some(), "All agents");
+    assert!(region(&frame, "czp:layer:=claude").is_some(), "Claude Code");
+    let frame = press(&mut tree, &mut ui, &frame, "czp:layer:=codex");
+    assert_eq!(ui.settings_menu, None);
+    let page = ui.customize.as_ref().expect("the page");
+    assert_eq!(page.layer.as_deref(), Some("codex"));
+    assert_eq!(page.tab, view::SETTINGS_CONNECTORS);
+    assert!(region(&frame, "czp:open:srv:codex:linear").is_some());
+    assert!(region(&frame, "czp:open:srv:claude:github").is_none());
+    assert!(drawn(&store, &ui, "Codex") && !drawn(&store, &ui, "All agents 0"));
+    // Skills' Sort menu opens the same way.
+    click(
+        &store,
+        &mut ui,
+        &format!("czp:tab:{}", view::SETTINGS_SKILLS),
+    );
+    click(&store, &mut ui, "cz:sort");
+    assert_eq!(ui.settings_menu.as_deref(), Some("cz:sort"));
+}
