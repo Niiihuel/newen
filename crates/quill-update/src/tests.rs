@@ -531,12 +531,18 @@ fn bundle(dir: &std::path::Path, program: &[u8], marker: &str) {
 /// The Linux artifact of a bundle in `dir`: a gzipped tar, flat at its root.
 #[cfg(target_os = "linux")]
 fn tar_gz(dir: &std::path::Path, out: &std::path::Path) -> Vec<u8> {
+    tar_gz_of(dir, out, &["quill", "libcef.so", "locales"])
+}
+
+/// [`tar_gz`] of the entries `names` of `dir`.
+#[cfg(target_os = "linux")]
+fn tar_gz_of(dir: &std::path::Path, out: &std::path::Path, names: &[&str]) -> Vec<u8> {
     let status = std::process::Command::new("tar")
         .arg("-czf")
         .arg(out)
         .arg("-C")
         .arg(dir)
-        .args(["quill", "libcef.so", "locales"])
+        .args(names)
         .status()
         .unwrap();
     assert!(status.success());
@@ -749,6 +755,122 @@ fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
         .is_err());
     assert_eq!(install.trial(), None);
     assert_eq!(install.current().as_deref(), Some("1.1.0"));
+}
+
+/// 0.1.9 installs a release of Newen, quill's next name: its manifest under Newen's name, its
+/// program `newen`. The version staged gets a `quill` link to it, so launchers of
+/// `current/quill` start Newen; the next start activates it on trial and starts
+/// `current/newen`. When Newen's starts never run a minute (counted by this same code, which
+/// Newen keeps), its third goes back to 0.1.9, started as `current/quill` again. File by file,
+/// the same layout.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
+    use crate::install::Launch;
+    use std::path::Path;
+
+    let signer = key();
+    let root = tempfile::tempdir().unwrap();
+    let install = Install::at(root.path().join("app"));
+    let built = root.path().join("built");
+    bundle(&built, &elf("0.1.9"), "0.1.9");
+    let quill = install
+        .adopt(&built.join("quill"), &version("0.1.9"))
+        .unwrap();
+    // Newen's bundle: `newen` and CEF's files, and no `quill`.
+    let tree = root.path().join("newen");
+    bundle(&tree, &elf("0.2.0"), "0.2.0");
+    std::fs::rename(tree.join("quill"), tree.join("newen")).unwrap();
+    let archive = tar_gz_of(
+        &tree,
+        &root.path().join("newen-x86_64-linux.tar.gz"),
+        &["newen", "libcef.so", "locales"],
+    );
+    let server = serve(0).unwrap();
+    server.put("/newen-x86_64-linux.tar.gz", archive.clone());
+    let url = format!("{}/newen-x86_64-linux.tar.gz", server.base());
+    let newen = Manifest {
+        product: NEWEN_PRODUCT.into(),
+        ..manifest("0.2.0", None, &[(&platform(), artifact(&url, &archive))])
+    };
+    publish_as(&server, &signer, &newen, NEWEN_MANIFEST);
+    let agent = agent();
+    let trust = Trust::new(vec![signer.verifying_key()]);
+    let found = check(&agent, &Source::at(server.base()), &trust).unwrap();
+    let offered = offer(found, &version("0.1.9"), &platform()).unwrap();
+    let file = download(
+        &agent,
+        offered.artifact.as_ref().unwrap(),
+        &install.downloads(),
+        |_, _| true,
+    )
+    .unwrap();
+    let staged = install.stage(&file, &offered.version).unwrap();
+    assert_eq!(std::fs::read(staged.join("newen")).unwrap(), elf("0.2.0"));
+    assert_eq!(
+        std::fs::read_link(staged.join("quill")).unwrap(),
+        Path::new("newen")
+    );
+    assert_eq!(install.program(), quill, "0.1.9 still starts");
+    install.keep_staged(&install.staged_mark("0.2.0")).unwrap();
+
+    // The next start of 0.1.9 activates Newen, on trial, and starts its program.
+    let started = install.root().join("current/newen");
+    assert_eq!(
+        install.launch(&version("0.1.9")).unwrap(),
+        Launch::Activated {
+            version: version("0.2.0"),
+            program: started.clone()
+        }
+    );
+    assert_eq!(install.program(), started);
+    assert_eq!(std::fs::read(&quill).unwrap(), elf("0.2.0"), "a launcher's");
+    // Newen never runs a minute: its third start goes back to 0.1.9, refused from then on.
+    assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
+    assert_eq!(install.launch(&version("0.2.0")).unwrap(), Launch::Go);
+    assert_eq!(
+        install.launch(&version("0.2.0")).unwrap(),
+        Launch::RolledBack {
+            version: version("0.2.0"),
+            previous: version("0.1.9"),
+            program: quill.clone()
+        }
+    );
+    assert_eq!(install.current().as_deref(), Some("0.1.9"));
+    assert_eq!(install.program(), quill);
+    assert_eq!(std::fs::read(&quill).unwrap(), elf("0.1.9"));
+    assert_eq!(install.bad(), Some(version("0.2.0")));
+
+    // File by file, from its list and blobs: the same layout.
+    let later = Install::at(root.path().join("later"));
+    later
+        .adopt(&built.join("quill"), &version("0.1.9"))
+        .unwrap();
+    let entry = serve::publish_files(&server, &tree, &version("0.2.0"), &platform());
+    let list = files::fetch_bundle(&agent, &entry, &version("0.2.0"), &platform()).unwrap();
+    let blobs = later.downloads().join("blobs");
+    let staged = files::stage(&agent, &later, &list, &blobs, |_, _| true).unwrap();
+    assert_eq!(std::fs::read(staged.join("newen")).unwrap(), elf("0.2.0"));
+    assert_eq!(
+        std::fs::read_link(staged.join("quill")).unwrap(),
+        Path::new("newen")
+    );
+    assert_eq!(
+        later.activate(&version("0.2.0")).unwrap(),
+        later.root().join("current/newen")
+    );
+}
+
+/// A bundle's program is Newen's when it has one, else quill's, on every system.
+#[test]
+fn a_bundle_s_program_is_newen_s_when_it_has_one() {
+    use crate::install::{program_in, NEWEN_PROGRAM, PROGRAM};
+    let folder = tempfile::tempdir().unwrap();
+    assert_eq!(program_in(folder.path()), folder.path().join(PROGRAM));
+    std::fs::write(folder.path().join(PROGRAM), "quill").unwrap();
+    assert_eq!(program_in(folder.path()), folder.path().join(PROGRAM));
+    std::fs::write(folder.path().join(NEWEN_PROGRAM), "newen").unwrap();
+    assert_eq!(program_in(folder.path()), folder.path().join(NEWEN_PROGRAM));
 }
 
 #[cfg(target_os = "linux")]

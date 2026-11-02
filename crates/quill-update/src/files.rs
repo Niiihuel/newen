@@ -254,7 +254,7 @@ fn assemble(
     crate::install::run(
         std::process::Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict"])
-            .arg(staging.join("quill.app")),
+            .arg(crate::install::bundle_in(staging)),
     )?;
     Ok(())
 }
