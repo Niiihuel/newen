@@ -4009,24 +4009,29 @@ fn awake_command() -> Option<Command> {
 
 /// Start quill when the person logs in, or no longer: the desktop's autostart entry
 /// (freedesktop Desktop Application Autostart on Linux), a LaunchAgent on macOS, the user's
-/// `Run` key on Windows; written for this program or removed.
+/// `Run` key on Windows; written for this program or removed. Newen's entry goes either way: a
+/// quill gone back from Newen would otherwise keep it, and it starts quill too, beside quill's.
 #[cfg_attr(windows, allow(clippy::needless_return))]
 fn start_at_login(on: bool) -> Result<(), String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let mut reg = quill_files::command("reg");
-        if on {
-            let value = format!("\"{}\"", program.display());
-            reg.args([
-                "add", KEY, "/v", "quill", "/t", "REG_SZ", "/d", &value, "/f",
-            ]);
-        } else {
-            reg.args(["delete", KEY, "/v", "quill", "/f"]);
-        }
+        let reg = |args: &[&str]| {
+            let mut reg = quill_files::command("reg");
+            reg.args(args);
+            reg.output().map_err(|e| e.to_string())
+        };
         // Removing a value that is not there fails, which is as good as removed.
-        let done = reg.output().map_err(|e| e.to_string())?;
+        let _ = reg(&["delete", KEY, "/v", "newen", "/f"]);
+        let value = format!("\"{}\"", program.display());
+        let done = if on {
+            reg(&[
+                "add", KEY, "/v", "quill", "/t", "REG_SZ", "/d", &value, "/f",
+            ])?
+        } else {
+            reg(&["delete", KEY, "/v", "quill", "/f"])?
+        };
         return if done.status.success() || !on {
             Ok(())
         } else {
@@ -4035,37 +4040,55 @@ fn start_at_login(on: bool) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let Some(config) = quill_files::config_dir() else {
-            return Ok(());
-        };
         // On macOS the LaunchAgents folder is the home's, not Application Support.
         #[cfg(target_os = "macos")]
-        let (entry, text) = (
+        let (folder, name, newen, text) = (
             quill_files::home_dir()
                 .ok_or("no home folder")?
-                .join("Library/LaunchAgents/dev.quill.quill.plist"),
+                .join("Library/LaunchAgents"),
+            "dev.quill.quill.plist",
+            "dev.newen.newen.plist",
             format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.quill.quill</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n",
                 program.display()
             ),
         );
         #[cfg(not(target_os = "macos"))]
-        let (entry, text) = (
-            config.join("autostart/quill.desktop"),
+        let Some(folder) = quill_files::config_dir().map(|config| config.join("autostart")) else {
+            return Ok(());
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (name, newen, text) = (
+            "quill.desktop",
+            "newen.desktop",
             format!(
                 "[Desktop Entry]\nType=Application\nName=quill\nIcon=quill\nExec=\"{}\"\nX-GNOME-Autostart-enabled=true\n",
                 program.display()
             ),
         );
-        if !on {
-            return match std::fs::remove_file(&entry) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-                _ => Ok(()),
-            };
-        }
-        std::fs::create_dir_all(entry.parent().unwrap_or(&config)).map_err(|e| e.to_string())?;
-        std::fs::write(&entry, text).map_err(|e| e.to_string())
+        login_entry(on, &folder, name, newen, &text)
     }
+}
+
+/// `folder/name` written with `text`, or removed; Newen's `folder/newen` removed either way.
+#[cfg(not(windows))]
+fn login_entry(
+    on: bool,
+    folder: &std::path::Path,
+    name: &str,
+    newen: &str,
+    text: &str,
+) -> Result<(), String> {
+    let _ = std::fs::remove_file(folder.join(newen));
+    let entry = folder.join(name);
+    if !on {
+        return match std::fs::remove_file(&entry) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    std::fs::write(&entry, text).map_err(|e| e.to_string())
 }
 
 /// The bytes the files under `path` take.
@@ -5484,6 +5507,33 @@ mod tests {
         assert!(!on_battery(&[supply("Mains", "0")]));
         assert!(!on_battery(&[]));
         assert!(!on_battery(&[supply("Battery", ""), supply("USB", "1")]));
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Turned on, quill's entry is written and Newen's goes, so login never starts both; turned
+    /// off, both go.
+    #[test]
+    fn quill_s_login_entry_clears_newen_s() {
+        let folder = tempfile::tempdir().unwrap();
+        let at = |name: &str| folder.path().join(name);
+        std::fs::write(at("newen.desktop"), "Exec=/newen/current/newen").unwrap();
+        login_entry(
+            true,
+            folder.path(),
+            "quill.desktop",
+            "newen.desktop",
+            "Exec=q",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(at("quill.desktop")).unwrap(),
+            "Exec=q"
+        );
+        assert!(!at("newen.desktop").exists());
+        std::fs::write(at("newen.desktop"), "Exec=/newen").unwrap();
+        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
+        assert!(!at("quill.desktop").exists() && !at("newen.desktop").exists());
+        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
     }
 
     #[cfg(target_os = "linux")]
