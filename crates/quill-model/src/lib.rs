@@ -237,7 +237,8 @@ pub struct Settings {
     /// How a finished turn is shown when its session is not in view (Desktop's "Task
     /// complete"); it has no badge, so `Badge` reads as `Banner`.
     pub notify_done: NotifyLevel,
-    /// Whether a banner plays the system's sound (Desktop's "Notification sound").
+    /// Whether a banner comes with quill's own sound (Desktop's "Notification sound", which
+    /// plays the system's).
     pub notification_sound: bool,
     /// A pull request opens as a draft unless the person picks otherwise.
     pub pr_draft: bool,
@@ -644,11 +645,14 @@ pub enum Intent {
         session: SessionId,
         title: String,
     },
-    /// Show an OS banner, from the computer's own notifier; nothing waits on it.
+    /// Show an OS banner about `session`, from the computer's own notifier, with quill's own
+    /// sound if any (the banner itself stays silent). A click on it is
+    /// `Event::NotificationClicked`, where the system tells it.
     Notify {
+        session: SessionId,
         title: String,
         body: String,
-        sound: bool,
+        sound: Option<Chime>,
     },
     /// Keep the session at the top of the list, or stop keeping it there.
     Pin {
@@ -973,6 +977,9 @@ pub struct BrowserTab {
     /// The viewport set for it, by the person or the agent, instead of the pane's size.
     #[serde(default)]
     pub emulated: Option<(u32, u32)>,
+    /// Whether the agent set `emulated`, rather than the person from the Viewport menu.
+    #[serde(default)]
+    pub emulated_by_agent: bool,
 }
 
 /// What changed in a session's browser.
@@ -1128,6 +1135,14 @@ pub enum UpdateState {
     NotInstalled,
     /// The repository is private and no token was found (`QUILL_UPDATE_TOKEN`, or `gh`).
     NeedsAccess,
+}
+
+/// quill's own sounds, made by the engine: one when a task completes, one when a session
+/// needs the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Chime {
+    Done,
+    Ask,
 }
 
 /// What the engine tells the UI.
@@ -1449,6 +1464,10 @@ pub enum Event {
         session: SessionId,
         update: BrowserUpdate,
     },
+    /// The person clicked the banner about the session; never stored.
+    NotificationClicked {
+        session: SessionId,
+    },
 }
 
 impl Event {
@@ -1492,7 +1511,8 @@ impl Event {
             | Event::Reported { session, .. }
             | Event::Waiting { session, .. }
             | Event::WaitEnded { session, .. }
-            | Event::Browser { session, .. } => *session,
+            | Event::Browser { session, .. }
+            | Event::NotificationClicked { session } => *session,
             // quill's own, not a session's: no session has id 0.
             Event::Settings { .. }
             | Event::Restored

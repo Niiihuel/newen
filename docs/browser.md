@@ -130,9 +130,22 @@ La entrada no se tradujo a acciones de limn porque la página quiere más de lo 
 - **Estados:**
   - una pestaña en blanco (`about:blank`, sin cargar) o ninguna pestaña muestran el estado vacío de Desktop: el globo, "Browse the web" y "Type a URL or ask the agent to open a site. It can read, click, and type.". El original nombra a Claude y ofrece "Detect dev server", que quill todavía no tiene. Mientras se ve el estado vacío, la superficie no se dibuja y el motor deja de mostrar la página;
   - el error de arranque ("No Chromium found…", "The browser stopped.");
-  - debajo, el último aviso (un diálogo de la página, una descarga), que se puede descartar.
+  - debajo de la página, el último aviso, hasta que se cierra (ver 3.7).
 - **Atajos:** los del navegador de Desktop, con Ctrl en Linux.
 - **El pane se abre solo** cuando el agente abre una página, como Desktop.
+
+### 3.7 El tamaño de la página y los avisos
+**El tamaño** lo dice el botón de viewport de la barra de herramientas, no una barra aparte:
+- **Encendido** (con el relleno de los toggles activos de quill) mientras la pestaña tiene un tamaño fijado, lo haya elegido la persona o el agente con `resize_window`.
+- **Ícono:** un teléfono si el ancho es de 480 px o menos; si no, un monitor.
+- **Tooltip:** "Viewport" sin tamaño fijado; "Viewport: 1440 × 900" si lo eligió la persona; "Viewport: 1440 × 900 · set by the agent" si lo eligió el agente.
+- **Menú:** "Responsive", "Mobile" y "Tablet", más el tamaño propio del agente si no es ninguno de esos. La opción marcada dice "Set by the agent" cuando la eligió el agente. "Responsive" es la forma de volver al tamaño del pane (`BrowserOp::Viewport { size: None }`).
+
+Quién fijó el tamaño viaja en `BrowserTab::emulated_by_agent`, que pone `quill-browser`: el agente al redimensionar lo activa y el menú de la persona lo borra. `resize_window` ya no deja un aviso: el botón lo muestra.
+
+**Los avisos** (lo que dijo un diálogo de la página, una descarga guardada, un fallo del navegador) tienen una franja de 32 px bajo la página, con un ícono (el globo, o la advertencia en rojo si es un fallo), la frase y la X de "Dismiss". Duran hasta que la persona los cierra o llega otro. Van ahí porque son texto de largo variable que en la barra de herramientas no entra. En el ancho mínimo de la columna, la frase se desvanece antes de la X, y los controles de la barra de herramientas no se pisan ni se salen del pane.
+
+Por qué así: el navegador de Claude Desktop, por lo que se ve, no avisa del tamaño con una barra. Lo muestra en su botón de viewport, resaltado y con el tamaño en el tooltip, y en su menú marca la opción que eligió el agente, con "Responsive" para volver al tamaño del panel. Esto se infiere de lo que la app muestra, no de una especificación.
 
 ## 4. El agente
 

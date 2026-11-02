@@ -688,20 +688,26 @@ impl eframe::App for App {
                     Err(error) => eprintln!("quill: could not start the new version: {error}"),
                 }
             }
-            if let Some((level, title, body)) = self
+            if let Some((level, banner)) = self
                 .restored
                 .then(|| quill_ui::notice(&self.store, &self.ui, &event, focused))
                 .flatten()
             {
                 if level == quill_model::NotifyLevel::Banner {
-                    let sound = self.ui.settings.notification_sound;
-                    self.dispatch(vec![Intent::Notify { title, body, sound }]);
+                    self.dispatch(vec![banner]);
                 }
                 if self.ui.settings.attention {
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                         egui::UserAttentionType::Informational,
                     ));
                 }
+            }
+            // A click on a banner brings the window up on its session.
+            if let Event::NotificationClicked { session } = &event {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                let intents = quill_ui::banner_clicked(&self.store, &mut self.ui, *session);
+                self.dispatch(intents);
             }
             // What the page had selected goes on the clipboard.
             if let Event::Browser {
@@ -854,7 +860,8 @@ impl eframe::App for App {
                 .map(|(picture, link)| (link, picture));
             self.qr_for = link;
         }
-        // The image the viewer shows, at full size, decoded once off the window's thread.
+        self.ui.pixels_per_point = ctx.pixels_per_point();
+        // The image the viewer shows, at full size, read once off the window's thread.
         if let Some(path) = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone()) {
             if !self.ui.full.contains_key(&path) && self.full_asked.insert(path.clone()) {
                 let (done, ctx) = (self.full_done.clone(), ctx.clone());
@@ -868,6 +875,13 @@ impl eframe::App for App {
         }
         for (path, full) in std::mem::take(&mut *self.full_done.lock().unwrap()) {
             self.ui.full.insert(path, full);
+        }
+        // A whole picture weighs megabytes: past a few, only the one shown is kept.
+        if self.ui.full.len() > 8 {
+            let shown = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
+            self.ui.full.retain(|path, _| Some(path) == shown.as_ref());
+            let full = &self.ui.full;
+            self.full_asked.retain(|path| full.contains_key(path));
         }
         // The viewer and the editor lay the picture out at the file's size, read off the
         // window's thread.

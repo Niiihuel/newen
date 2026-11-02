@@ -26,7 +26,7 @@ pub use slash::{key as slash_key, slash_query};
 pub use view::{menu_digit, view};
 
 use quill_model::{
-    AgentCapabilities, AgentEvent, BrowserOp, Decision, Event, FileEffect, Intent, Lane,
+    AgentCapabilities, AgentEvent, BrowserOp, Chime, Decision, Event, FileEffect, Intent, Lane,
     LogoWanted, NewSession, NotifyLevel, ProposalAnswer, QueuedMessage, RequestId, SessionId,
     SessionStatus, Settings, Suggestion, TranscriptView,
 };
@@ -177,7 +177,8 @@ pub struct Session {
     pub pull_request: Option<String>,
     /// Has news the person has not seen: a gray dot in its row.
     pub unread: bool,
-    /// When it last changed in this run, for "Last updated".
+    /// When it last had news in this run (a message sent, a fork, a turn ended, a question
+    /// asked), for "Last updated"; streamed output does not count.
     pub touched: u64,
     /// The session that started it, which it reports to and is nested under.
     pub parent: Option<SessionId>,
@@ -267,9 +268,16 @@ impl Store {
 
     pub fn apply(&mut self, event: Event) {
         self.clock += 1;
+        // Only moments the person cares about move "Last updated": streamed output would swap
+        // two working sessions in the sidebar many times a second.
         if matches!(
             event,
-            Event::Queued { .. } | Event::Agent { .. } | Event::Forked { .. }
+            Event::Queued { .. }
+                | Event::Forked { .. }
+                | Event::Agent {
+                    event: AgentEvent::TurnFinished { .. } | AgentEvent::PermissionRequest { .. },
+                    ..
+                }
         ) {
             let clock = self.clock;
             if let Some(s) = self.session_mut(event.session()) {
@@ -654,7 +662,8 @@ impl Store {
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }
-            | Event::SignInFailed { .. } => {}
+            | Event::SignInFailed { .. }
+            | Event::NotificationClicked { .. } => {}
         }
     }
 }
@@ -1002,14 +1011,15 @@ pub fn palette_hover(store: &Store, ui: &mut Ui, id: &str) {
 }
 
 /// The banner an engine event earns, when its session is not in view: the level from
-/// Settings, the session's title and the notice's text. A permission request, a question
-/// or a finished turn of a session the person is not looking at; a side chat's turn is not.
+/// Settings and the banner, with the session's title, the notice's text and quill's sound
+/// for it when Settings has one. A permission request, a question or a finished turn of a
+/// session the person is not looking at; a side chat's turn is not.
 pub fn notice(
     store: &Store,
     ui: &Ui,
     event: &Event,
     focused: bool,
-) -> Option<(NotifyLevel, String, String)> {
+) -> Option<(NotifyLevel, Intent)> {
     let Event::Agent { session, event, .. } = event else {
         return None;
     };
@@ -1038,7 +1048,29 @@ pub fn notice(
         .map(|s| s.title.clone())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| "quill".into());
-    Some((level, title, text.into()))
+    let chime = if text == NOTICE_DONE {
+        Chime::Done
+    } else {
+        Chime::Ask
+    };
+    let banner = Intent::Notify {
+        session: *session,
+        title,
+        body: text.into(),
+        sound: ui.settings.notification_sound.then_some(chime),
+    };
+    Some((level, banner))
+}
+
+/// A click on a session's banner opens it, as a click on its row does.
+pub fn banner_clicked(store: &Store, ui: &mut Ui, session: SessionId) -> Vec<Intent> {
+    update(
+        store,
+        ui,
+        &limn::UiAction::Clicked {
+            id: format!("session:{session}"),
+        },
+    )
 }
 
 /// The folder the terminal and new sessions work in: the selected session's, else the chosen one.
@@ -1129,6 +1161,22 @@ pub struct Viewer {
     /// where `path` is among them; empty for a picture alone.
     pub gallery: Vec<(PathBuf, String)>,
     pub index: usize,
+    /// The last scale the viewer reported and whether it was the fit, until another picture.
+    pub zoom: Option<(f32, bool)>,
+}
+
+impl Viewer {
+    /// Show the picture at `index` of the gallery, wrapping around its ends, fitted.
+    fn show(&mut self, index: usize) {
+        let Some(index) = index.checked_rem(self.gallery.len()) else {
+            return;
+        };
+        self.path = self.gallery[index].0.clone();
+        self.index = index;
+        self.zoom = None;
+        // Closed now, it shrinks into no thumbnail but the one it grew from.
+        self.origin = None;
+    }
 }
 
 /// What the person is doing, apart from what the engine knows.
@@ -1163,8 +1211,8 @@ pub struct Ui {
     pub logo_asked: std::collections::HashSet<String>,
     /// The image the viewer shows, if any.
     pub viewer: Option<Viewer>,
-    /// The images at up to 2048 px for the viewer, decoded off the window's thread once it opens
-    /// on them; until then it shows the thumbnail.
+    /// The images at their own size for the viewer (smaller only past what limn decodes), read
+    /// off the window's thread once it opens on them; until then it shows the thumbnail.
     pub full: std::collections::HashMap<PathBuf, limn::RasterImage>,
     /// The composer's image being annotated, while its editor is open.
     pub annotating: Option<PathBuf>,
@@ -1185,6 +1233,9 @@ pub struct Ui {
     /// Each image's size in pixels, read from its file by the host: the viewer fits the
     /// picture to it and the editor lays it out at its shape.
     pub sizes: std::collections::HashMap<PathBuf, (f32, f32)>,
+    /// The screen's pixels for each logical one, which the host sets every frame: the viewer
+    /// shows a picture at 100 % with one of its pixels on each of the screen's.
+    pub pixels_per_point: f32,
     /// Why the last image was left out, until the composer's images change again.
     pub image_notice: Option<String>,
     /// The request whose changes the diff pane shows.
@@ -1362,8 +1413,8 @@ pub struct Ui {
     pub files_reveal: Option<String>,
     /// How many tabs each session's browser had when last heard: a new one opens the pane.
     pub browser_tabs: std::collections::HashMap<SessionId, usize>,
-    /// What each session's browser last had to say, until dismissed.
-    pub browser_notice: std::collections::HashMap<SessionId, String>,
+    /// What each session's browser last had to say, and whether it failed, until dismissed.
+    pub browser_notice: std::collections::HashMap<SessionId, (String, bool)>,
     /// The settings in force, as the engine last kept them, and the agents it can run.
     pub settings: quill_model::Settings,
     pub agents: Vec<quill_model::AgentInfo>,
@@ -2013,6 +2064,7 @@ impl Ui {
             discarding: false,
             saving: false,
             sizes: Default::default(),
+            pixels_per_point: 1.0,
             image_notice: None,
             diff: None,
             panes: vec![],
@@ -2644,13 +2696,16 @@ impl Ui {
                 self.in_panes_of(*session, |ui| ui.open_pane(Pane::Browser));
             }
         }
-        if let Event::Browser {
-            session,
-            update:
-                quill_model::BrowserUpdate::Notice(words) | quill_model::BrowserUpdate::Failed(words),
-        } = event
-        {
-            self.browser_notice.insert(*session, words.clone());
+        if let Event::Browser { session, update } = event {
+            match update {
+                quill_model::BrowserUpdate::Notice(words) => {
+                    self.browser_notice.insert(*session, (words.clone(), false));
+                }
+                quill_model::BrowserUpdate::Failed(words) => {
+                    self.browser_notice.insert(*session, (words.clone(), true));
+                }
+                _ => {}
+            }
         }
         if let Event::AgentModels { agent, models } = event {
             self.agent_models.insert(agent.clone(), models.clone());
@@ -3065,6 +3120,13 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
         return vec![];
     }
     match action {
+        // The viewer's zoom view, whose ID its close control's prefixes.
+        UiAction::Zoomed { id, scale, fitted } if id.starts_with(view::IMAGE_CLOSE) => {
+            if let Some(viewer) = &mut ui.viewer {
+                viewer.zoom = Some((*scale, *fitted));
+            }
+            vec![]
+        }
         UiAction::InputChanged { id, value } if id == view::TERMINAL_RENAME => {
             if let Some((_, name)) = &mut ui.terminal.renaming {
                 *name = value.clone();
@@ -3669,19 +3731,25 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         });
         return vec![];
     }
+    // limn's lightbox wraps its arrows around the run.
     if id == view::IMAGE_PREVIOUS || id == view::IMAGE_NEXT {
         if let Some(viewer) = &mut ui.viewer {
-            let index = if id == view::IMAGE_NEXT {
-                viewer.index + 1
+            let total = viewer.gallery.len();
+            let step = if id == view::IMAGE_NEXT {
+                1
             } else {
-                viewer.index.wrapping_sub(1)
+                total.saturating_sub(1)
             };
-            if let Some((path, _)) = viewer.gallery.get(index) {
-                viewer.path = path.clone();
-                viewer.index = index;
-                // Closed now, it shrinks into no thumbnail but the one it grew from.
-                viewer.origin = None;
-            }
+            viewer.show(viewer.index + step);
+        }
+        return vec![];
+    }
+    if let Some(index) = id
+        .strip_prefix(view::IMAGE_AT)
+        .and_then(|i| i.parse::<usize>().ok())
+    {
+        if let Some(viewer) = ui.viewer.as_mut().filter(|v| index < v.gallery.len()) {
+            viewer.show(index);
         }
         return vec![];
     }
@@ -5346,7 +5414,7 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             ("notify_permission", value) => settings.notify_permission = notify_level(value),
             ("notify_question", value) => settings.notify_question = notify_level(value),
             ("notify_done", value) => settings.notify_done = notify_level(value),
-            ("notification_sound", value) => settings.notification_sound = value == "system",
+            ("notification_sound", value) => settings.notification_sound = value != "none",
             ("text_size", "small") => settings.text_size = TextSize::Small,
             ("text_size", "medium") => settings.text_size = TextSize::Medium,
             ("text_size", "large") => settings.text_size = TextSize::Large,

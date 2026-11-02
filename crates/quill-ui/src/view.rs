@@ -109,6 +109,10 @@ pub const IMAGE_ANNOTATE: &str = "image:annotate";
 /// The viewer's arrows, through the pictures of a run of steps.
 pub const IMAGE_PREVIOUS: &str = "image:previous";
 pub const IMAGE_NEXT: &str = "image:next";
+/// The prefix of the thumbnails under the viewer's picture; the index in its run follows it.
+pub const IMAGE_AT: &str = "image:at:";
+/// The viewer's zoom toggle; the viewer zooms itself and reports the scale.
+pub const IMAGE_ZOOM: &str = "image:zoom";
 pub const ATTACH_FOLDER: &str = "attach:folder";
 pub const SLASH: &str = "attach:slash";
 pub const TERMINAL_TOGGLE: &str = "terminal:toggle";
@@ -1106,13 +1110,7 @@ fn tasks_pane(
         // The row's flexible child is what it holds, so Stop keeps to the right edge.
         let mut items = vec![lines.flex(1.0)];
         if task.running {
-            items.push(icon_tool(
-                &format!("task:stop:{}", task.id),
-                icons::of(icons::STOP),
-                "Stop",
-                28.0,
-                palette,
-            ));
+            items.push(stop_button(&format!("task:stop:{}", task.id)));
         }
         // Flush with the group's name, 10 above and below, over a hairline, as Desktop's.
         let gap = || Element::spacer().size(None, Some(10.0));
@@ -1463,31 +1461,9 @@ fn browser_pane(
         .size(Some(width), Some(40.0)),
         hline(width, look::pane_border()),
     ]);
-    let notice = ui.browser_notice.get(&session.id).map(|words| {
-        Element::column(vec![
-            hline(width, look::pane_border()),
-            Element::row(vec![
-                hgap(12.0),
-                Element::truncated_text(words.clone())
-                    .font_family(FontFamily::Sans)
-                    .font_size(SMALL)
-                    .foreground(look::muted())
-                    .max_width(width - 60.0)
-                    .centered_y(),
-                Element::spacer().flex(1.0),
-                icon_tool(
-                    BROWSER_NOTICE_CLOSE,
-                    icons::of(icons::CLOSE),
-                    "Dismiss",
-                    24.0,
-                    palette,
-                ),
-                hgap(4.0),
-            ])
-            .size(Some(width), Some(32.0)),
-        ])
-    });
-    let below = height - look::PANE_HEADER - 1.0 - 41.0 - if notice.is_some() { 33.0 } else { 0.0 };
+    let bar = browser_notice(session.id, ui, width, palette);
+    let below =
+        height - look::PANE_HEADER - 1.0 - 41.0 - if bar.is_some() { BAR + 1.0 } else { 0.0 };
     // A blank tab shows Desktop's empty state instead of its page, less the agent's name and the dev server it offers to find.
     let blank = |failed: Option<&String>| {
         let fill = || Element::spacer().flex(1.0);
@@ -1533,8 +1509,54 @@ fn browser_pane(
         None => blank(browser.failed.as_ref()),
     };
     let mut column = vec![header, toolbar, body];
-    column.extend(notice);
+    column.extend(bar);
     Element::column(column).size(Some(width), Some(height))
+}
+
+/// The height of the browser's notice strip, under its page.
+const BAR: f32 = 32.0;
+
+/// The strip under the page while the page or the browser has said something the person should
+/// know (a dialog's words, a download saved, a failure with a warning): its icon, its words,
+/// which fade when the pane is narrow, and its close. The page's size is the Viewport button's.
+fn browser_notice(
+    session: quill_model::SessionId,
+    ui: &Ui,
+    width: f32,
+    palette: ComponentPalette,
+) -> Option<Element> {
+    let (words, failed) = ui.browser_notice.get(&session)?;
+    let (icon, ink) = if *failed {
+        (icons::WARNING, look::failed())
+    } else {
+        (icons::GLOBE, look::muted())
+    };
+    Some(Element::column(vec![
+        hline(width, look::pane_border()),
+        Element::row(vec![
+            hgap(4.0),
+            Element::icon(icons::of(icon))
+                .foreground(ink)
+                .size(Some(16.0), Some(16.0))
+                .centered_y(),
+            Element::faded_text(words.clone(), FADE)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::palette().text)
+                .flex(1.0)
+                .centered_y(),
+            icon_tool(
+                BROWSER_NOTICE_CLOSE,
+                icons::of(icons::CLOSE),
+                "Dismiss",
+                24.0,
+                palette,
+            ),
+            hgap(0.0),
+        ])
+        .gap(8.0)
+        .size(Some(width), Some(BAR)),
+    ]))
 }
 
 /// A tab's right-click menu, Desktop's four actions: rename, clear, close, and
@@ -2424,9 +2446,9 @@ fn group_header(
 }
 
 /// A session's row: its title, its status, and under the pointer "···" with Desktop's
-/// Pin, Rename and Delete. As the newer Desktop draws them: a working session's title is gray with a light passing over it, an unread
-/// one is bold, one that needs the person ends in a warning, and a finished top-level one in
-/// the place it ran (this computer).
+/// Pin, Rename and Delete. As the newer Desktop draws them: a working session's title is gray with a light passing over it, one
+/// that needs the person ends in an amber dot, one that finished unseen in a blue one, and a
+/// finished top-level one in the place it ran (this computer). The title keeps its weight.
 fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalette) -> Element {
     let id = format!("row-menu:{}", session.id);
     let open = ui.row_menu == Some(session.id);
@@ -2493,11 +2515,7 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
     } else {
         Element::truncated_text(session_title(session)).foreground(look::palette().text)
     }
-    .font_family(if session.unread && !working {
-        FontFamily::SansBold
-    } else {
-        FontFamily::Sans
-    })
+    .font_family(FontFamily::Sans)
     .font_size(BODY)
     .flex(1.0)
     .centered_y();
@@ -2508,8 +2526,8 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
             .centered_y()
     };
     let indicator = match session.status {
-        SessionStatus::Awaiting => mark(icons::WARNING, look::palette().text),
-        SessionStatus::Failed(_) => status_dot(session),
+        SessionStatus::Awaiting | SessionStatus::Failed(_) => status_dot(session),
+        _ if session.unread && !working => status_dot(session),
         // It waits for another session's task to end (`wait_for_session`).
         _ if !session.waits.is_empty() => mark(icons::HOURGLASS, look::muted()),
         // Grouped by folder Desktop marks no place.
@@ -2586,8 +2604,9 @@ fn search_dialog(store: &Store, ui: &Ui, base: Element, _palette: ComponentPalet
     )
 }
 
-/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected.
-fn side_row(
+/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected. The rows of the
+/// right panel's cards that open something are these too.
+pub(crate) fn side_row(
     id: String,
     content: Vec<Element>,
     selected: bool,
@@ -2633,22 +2652,31 @@ fn side_row_with(
     }
 }
 
-/// Running and awaiting sessions carry a dot in the sidebar, as Desktop's rows do.
+/// Running and awaiting sessions carry a dot in the sidebar, as Desktop's rows do, and so
+/// does an unread one, in the accent; each says what it means to a screen reader.
 fn status_dot(session: &Session) -> Element {
     let status = &session.status;
     let color = match status {
         SessionStatus::Running | SessionStatus::Starting => look::running(),
         SessionStatus::Awaiting => look::awaiting(),
         SessionStatus::Failed(_) => look::removed(),
-        // Unread reads as a small gray dot.
-        _ if session.unread => look::muted(),
+        // A turn that ended while the person looked elsewhere: "Unread response".
+        _ if session.unread => look::theme().accent,
         _ => return Element::spacer().size(Some(6.0), Some(6.0)),
+    };
+    let said = match status {
+        SessionStatus::Running | SessionStatus::Starting => "Running",
+        SessionStatus::Awaiting => "Needs your input",
+        SessionStatus::Failed(_) => "Failed",
+        _ => "Unread response",
     };
     // A running session's dot pulses, as Desktop's does.
     let running = matches!(status, SessionStatus::Running | SessionStatus::Starting);
     limn::StatusDot::new(color)
         .pulse(running)
         .size(6.0)
+        .id(format!("dot:{}", session.id))
+        .description(said)
         .render()
         .centered_y()
 }
@@ -3697,9 +3725,9 @@ fn shape_icon(tool: limn::SketchTool) -> &'static str {
     }
 }
 
-/// The image viewer over the window: the picture at full size once decoded, else its thumbnail,
-/// fitted to its size, with its file name under it and, for a composer image, the annotate
-/// control.
+/// The image viewer over the window: the picture as large as the window allows, up to one of
+/// its pixels on each of the screen's, zoomed and panned as limn's lightbox does. Its thumbnail
+/// stands in while the whole picture decodes.
 fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette) -> Element {
     let Some(viewer) = &ui.viewer else {
         return base;
@@ -3711,23 +3739,37 @@ fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
-    let picture = ui.full.get(&viewer.path).or(ui.thumbs.get(&viewer.path));
-    // Desktop's lightbox: the picture fitted at most 640 wide, its controls beside it and its
-    // name under it, over the dimmed window.
-    let mut shown = limn::ImageViewer::new(base, true, name.clone(), IMAGE_CLOSE, palette)
+    // limn's lightbox draws only the toggle of the three zoom controls.
+    let mut shown = limn::ImageViewer::new(base, true, name, IMAGE_CLOSE, palette)
         .viewport(window)
-        .lightbox(true)
-        .caption(name);
+        .layout(limn::ViewerLayout::Lightbox)
+        .zoom_actions(IMAGE_ZOOM, IMAGE_ZOOM, IMAGE_ZOOM);
     if viewer.gallery.len() > 1 {
         shown = (shown.gallery(viewer.index, viewer.gallery.len()))
             .previous_action(IMAGE_PREVIOUS)
             .next_action(IMAGE_NEXT);
+        for (at, (path, caption)) in viewer.gallery.iter().enumerate() {
+            shown = shown.thumbnail(
+                format!("{IMAGE_AT}{at}"),
+                ui.thumbs.get(path).cloned(),
+                caption,
+            );
+        }
     }
-    if let Some(picture) = picture {
+    if let Some(picture) = ui.full.get(&viewer.path) {
         shown = shown.image(picture.clone());
     }
+    if let Some(thumb) = ui.thumbs.get(&viewer.path) {
+        shown = shown.placeholder(thumb.clone());
+    }
+    // 100 % is one of the picture's pixels on each of the screen's, so it fits without being
+    // enlarged past them.
     if let Some(&(width, height)) = ui.sizes.get(&viewer.path) {
-        shown = shown.natural_size(width, height);
+        let scale = ui.pixels_per_point.max(0.25);
+        shown = shown.picture_size(Size::new(width / scale, height / scale));
+    }
+    if let Some((scale, fitted)) = viewer.zoom {
+        shown = shown.zoom_level(scale, fitted);
     }
     if let Some(origin) = viewer.origin {
         shown = shown.origin(origin);
@@ -5069,15 +5111,33 @@ fn browser_step(tool: &str, input: &Value, done: bool) -> (String, String) {
     }
 }
 
+/// The Viewport button's tooltip: the size set, and who set it when it was the agent.
+pub(crate) fn viewport_label(tab: Option<&quill_model::BrowserTab>) -> String {
+    match tab.and_then(|t| Some((t.emulated?, t.emulated_by_agent))) {
+        Some(((w, h), true)) => format!("Viewport: {w} \u{d7} {h} \u{b7} set by the agent"),
+        Some(((w, h), false)) => format!("Viewport: {w} \u{d7} {h}"),
+        None => "Viewport".into(),
+    }
+}
+
+/// The Viewport button's icon: a phone for a phone's width, else a monitor.
+pub(crate) fn viewport_icon(emulated: Option<(u32, u32)>) -> &'static str {
+    match emulated {
+        Some((w, _)) if w <= 480 => icons::PHONE,
+        _ => icons::MONITOR,
+    }
+}
+
 /// Desktop's Viewport menu: the page at the pane's size, or as a phone or a
-/// tablet draws it; "Set by the agent" when resize_window chose a size of its own.
+/// tablet draws it; "Set by the agent" under the size resize_window chose. Its button is
+/// on while a size is set.
 fn viewport_menu(tab: Option<&quill_model::BrowserTab>, ui: &Ui) -> Element {
     let emulated = tab.and_then(|t| t.emulated);
     let open = ui.open_menu == Some(BROWSER_VIEWPORT);
     let anchor = toggle(
         BROWSER_VIEWPORT,
-        icons::of(icons::MONITOR),
-        "Viewport",
+        icons::of(viewport_icon(emulated)),
+        &viewport_label(tab),
         open || emulated.is_some(),
         None,
     );
@@ -5092,9 +5152,11 @@ fn viewport_menu(tab: Option<&quill_model::BrowserTab>, ui: &Ui) -> Element {
                 Some((w, h)) => format!("{BROWSER_VIEWPORT}:{w}x{h}"),
                 None => format!("{BROWSER_VIEWPORT}:responsive"),
             };
-            limn::DropdownMenuItem::new(id, label)
-                .selected(emulated == *size)
-                .into()
+            let item = limn::DropdownMenuItem::new(id, label).selected(emulated == *size);
+            match tab.filter(|t| t.emulated_by_agent && emulated == *size) {
+                Some(_) => item.description("Set by the agent").into(),
+                None => item.into(),
+            }
         })
         .collect();
     if let Some((w, h)) = emulated.filter(|e| !VIEWPORTS.iter().any(|(_, s)| *s == Some(*e))) {
@@ -5167,17 +5229,20 @@ fn browser_card(
         .radius(8.0)
         .size(Some(40.0), Some(40.0))
         .centered_y(),
+        // The words take what the globe and "Open" leave, fading out before the button.
         Element::column(vec![
             Element::faded_text(title, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
-                .foreground(look::palette().text)
-                .max_width(width - 160.0),
-            muted(line).font_size(SMALL),
+                .foreground(look::palette().text),
+            Element::faded_text(line, FADE)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::muted()),
         ])
         .gap(2.0)
+        .flex(1.0)
         .centered_y(),
-        Element::spacer().flex(1.0),
     ];
     if tab.is_some() {
         row.push(
@@ -6573,7 +6638,7 @@ fn composer(
         )
     });
     let trailing = if running && ui.prompt.trim().is_empty() {
-        composer_button(STOP, icons::of(icons::STOP), "Stop", false, 28.0)
+        stop_button(STOP)
     } else {
         send_button(!ui.prompt.trim().is_empty())
     };
@@ -7146,6 +7211,11 @@ fn composer_button(id: &str, icon: limn::Icon, label: &str, open: bool, side: f3
     limn::Tooltip::new(button, id, label, look::palette()).render()
 }
 
+/// The composer's Stop: its white rounded square. Every Stop of a running thing is this one.
+pub(crate) fn stop_button(id: &str) -> Element {
+    composer_button(id, icons::of(icons::STOP), "Stop", false, 28.0)
+}
+
 /// Send, drawn as Desktop's return arrow; limn has no such icon, so it is the character.
 fn send_button(ready: bool) -> Element {
     let palette = ComponentPalette {
@@ -7464,15 +7534,15 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let session_spent = limits.session.map_or(0.0, |w| spent(&w, now));
-    // A 14 px ring, blue over gray, as Desktop's.
+    // A 14 px ring, blue over gray, as Desktop's, filled as the Context card is.
+    let share = session.and_then(context_share).unwrap_or(0.0);
     let ring_palette = ComponentPalette {
         text: look::handle(),
         // Seen on the hover's #E5E5E5 too; Desktop darkens it there.
         selected: look::ring_track(),
         ..look::palette()
     };
-    let ring = limn::Progress::new(session_spent, ring_palette)
+    let ring = limn::Progress::new(share, ring_palette)
         .ring(14.0)
         .render()
         .centered();
@@ -7490,14 +7560,7 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
         anchor
     };
     let width = 328.0;
-    let (tokens, share) = session.map_or((0, 0.0), |s| {
-        let share = if s.context_window > 0 {
-            s.context_tokens as f32 / s.context_window as f32
-        } else {
-            0.0
-        };
-        (s.context_tokens, share)
-    });
+    let tokens = session.map_or(0, |s| s.context_tokens);
     let tokens = if tokens >= 1000 {
         format!("{:.1}k", tokens as f64 / 1000.0)
     } else {
@@ -7537,15 +7600,20 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
         }
     }
     let card = Element::column(rows).gap(14.0).padding(8.0);
-    // Its hint sums it up, as Desktop's: "Context 30.0k", the week's share and reset.
-    let mut tip = limn::Tooltip::new(
-        anchor,
-        USAGE_MENU,
-        format!("Context {tokens}"),
-        look::palette(),
-    )
-    // At the window's right edge it opens to the left, to stay whole.
-    .placement(limn::TooltipPlacement::Left);
+    // Its hint sums it up, as Desktop's: "Context 30.0k", the week's share and reset; with
+    // the window known, as the Context card says it: "51% · 512.9K / 1M".
+    let title = match session.map(context_fill) {
+        Some((used, max)) if max > 0 => format!(
+            "Context {}% \u{b7} {} / {}",
+            (share * 100.0).round().min(100.0) as u32,
+            compact(used),
+            compact(max)
+        ),
+        _ => format!("Context {tokens}"),
+    };
+    let mut tip = limn::Tooltip::new(anchor, USAGE_MENU, title, look::palette())
+        // At the window's right edge it opens to the left, to stay whole.
+        .placement(limn::TooltipPlacement::Left);
     if let Some(w) = limits.weekly {
         tip = tip.description(format!(
             "Weekly · all models: {}% · {}",
@@ -8937,8 +9005,7 @@ fn right_panel(
     environment.extend(crate::remote::row(session, ui, inner - 36.0));
     // How full the context is, as Desktop's percentage and bar while the card is folded: the
     // window comes from the agent's own report of its model.
-    let share = (session.context_window > 0)
-        .then(|| session.context_tokens as f32 / session.context_window as f32);
+    let share = context_share(session);
     let mut context_head = vec![];
     if let Some(share) = share.filter(|_| !open(CONTEXT_CARD, true)) {
         context_head.push(
@@ -9019,7 +9086,8 @@ fn right_panel(
             "panel:terminals",
             open("panel:terminals", true),
             vec![],
-            rows,
+            // Packed as the sidebar's rows are, 2 px apart.
+            vec![Element::column(rows).gap(2.0)],
             inner,
         ));
     }
@@ -9173,6 +9241,21 @@ pub(crate) fn compact(n: u64) -> String {
     }
 }
 
+/// How full the context is, used of the window: the agent's own breakdown when it gave one,
+/// else what its turns reported. The Context card and the composer's ring both show this.
+fn context_fill(session: &Session) -> (u64, u64) {
+    match session.context_usage.as_ref().filter(|u| u.max > 0) {
+        Some(u) => (u.used, u.max),
+        None => (session.context_tokens, session.context_window),
+    }
+}
+
+/// [`context_fill`] as a share, `None` while the window is not known.
+fn context_share(session: &Session) -> Option<f32> {
+    let (used, max) = context_fill(session);
+    (max > 0).then(|| used as f32 / max as f32)
+}
+
 /// The Context card open, as Desktop's rail draws it: "N% used" and
 /// "used / max", a meter of what fills the context, a row per category with its swatch,
 /// tokens and share (the deferred last, with "—"), and the lists under some categories,
@@ -9180,9 +9263,7 @@ pub(crate) fn compact(n: u64) -> String {
 fn context_breakdown(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
     use quill_model::ContextKind::*;
     let usage = session.context_usage.as_ref().filter(|u| u.max > 0);
-    let (used, max) = usage.map_or((session.context_tokens, session.context_window), |u| {
-        (u.used, u.max)
-    });
+    let (used, max) = context_fill(session);
     if used == 0 || max == 0 {
         return vec![muted("Send a message to see context usage.").font_size(SMALL)];
     }
@@ -10138,14 +10219,15 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                                 palette,
                             ),
                         ),
+                        // quill's own sounds in place of Desktop's "System sound".
                         setting(
                             "Notification sound",
-                            "Played when an OS banner is shown.",
+                            "Played with an OS banner: one sound when a task completes, another when a session needs you.",
                             setting_select(
                                 ui,
                                 "notification_sound",
-                                &choices(&[("system", "System sound"), ("none", "None")]),
-                                if s.notification_sound { "system" } else { "none" },
+                                &choices(&[("quill", "quill"), ("none", "None")]),
+                                if s.notification_sound { "quill" } else { "none" },
                                 palette,
                             ),
                         ),

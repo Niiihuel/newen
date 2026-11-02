@@ -145,6 +145,8 @@ pub(crate) struct Tab {
     /// The pane's size for it, and the one the agent asked for, which wins.
     view: (u32, u32),
     pub(crate) agent_view: Option<(u32, u32)>,
+    /// The agent set `agent_view`, not the person.
+    by_agent: bool,
     held: Option<PointerButton>,
     cursor_asked: Option<Instant>,
     pub(crate) console: VecDeque<String>,
@@ -180,6 +182,7 @@ impl Tab {
             back: self.back,
             forward: self.forward,
             emulated: self.agent_view,
+            emulated_by_agent: self.by_agent && self.agent_view.is_some(),
         }
     }
 
@@ -498,7 +501,7 @@ impl Browser {
                 }
             }
             BrowserOp::Viewport { tab, size } => {
-                self.emulate(&run, owner, tab, size).await?;
+                self.emulate(&run, owner, tab, size, false).await?;
                 self.publish(&run, owner);
             }
             BrowserOp::Files { tab, node, paths } => {
@@ -651,6 +654,7 @@ impl Browser {
                 forward: false,
                 view: DEFAULT_VIEW,
                 agent_view: None,
+                by_agent: false,
                 held: None,
                 cursor_asked: None,
                 console: VecDeque::new(),
@@ -887,19 +891,21 @@ impl Browser {
         }
     }
 
-    /// Draw `tab` at `size`, or at the pane's size again. A phone's width is emulated as a
-    /// phone, so the page's viewport meta applies.
+    /// Draw `tab` at `size`, or at the pane's size again, as the agent asked or the person
+    /// chose. A phone's width is emulated as a phone, so the page's viewport meta applies.
     pub(crate) async fn emulate(
         &self,
         run: &Arc<Run>,
         owner: Owner,
         tab: u32,
         size: Option<(u32, u32)>,
+        by_agent: bool,
     ) -> Result<(u32, u32), String> {
         let (session, shown) = {
             let mut state = run.state.lock().unwrap();
             let page = state.tab_mut(owner, tab).ok_or("That tab is closed.")?;
             page.agent_view = size.filter(|(w, h)| *w > 0 && *h > 0);
+            page.by_agent = by_agent;
             (page.session.clone(), page.size())
         };
         let mobile = size.is_some_and(|(w, _)| w <= 480);
