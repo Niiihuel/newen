@@ -2,20 +2,34 @@
 # Install Newen's icon into the person's icon theme and a launcher entry, so a Wayland desktop
 # (which names windows by their app id, "newen") shows Newen's icon. Usage:
 #   scripts/install-desktop.sh [path/to/newen]
-# Without a path: the installed program ($XDG_DATA_HOME/newen/app/current/newen), else this
-# checkout's build; a launcher of quill's made by hand (a wrapper, say) keeps what it started.
-# quill's launcher and icons go.
+# Without a path: the installed program ($XDG_DATA_HOME/newen/app/current/newen, or where
+# quill 0.1.9 placed it before Newen's first start moved the data), else this checkout's build.
+# A launcher of quill's made by hand (a wrapper, say) keeps what it started, and so does one of
+# quill's installation while it has no Newen. quill's launcher and icons go.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 apps=$data/applications
-bin=${1:-$data/newen/app/current/newen}
-[ -n "${1:-}" ] || [ -x "$bin" ] || bin=$root/target/release/newen
-[ -n "${1:-}" ] || [ -x "$bin" ] || bin=$root/target/debug/newen
+installed=("$data/newen/app/current/newen" "$data/quill/app/current/newen")
+bin=${1:-}
+if [ -z "$bin" ]; then
+  for candidate in "${installed[@]}" "$root/target/release/newen" "$root/target/debug/newen"; do
+    if [ -x "$candidate" ]; then bin=$candidate && break; fi
+  done
+fi
 exec_line="Exec=\"$bin\" %U"
 if [ -z "${1:-}" ] && [ -f "$apps/quill.desktop" ]; then
   old=$(grep -m1 '^Exec=' "$apps/quill.desktop" || true)
-  case $old in "" | *"$data/quill/app/"* | *"$root/target/"*) ;; *) exec_line=$old ;; esac
+  case $old in
+    "" | *"$root/target/"*) ;;
+    *"$data/quill/app/"*)
+      case $bin in "${installed[0]}" | "${installed[1]}") ;; *) exec_line=$old ;; esac ;;
+    *) exec_line=$old ;;
+  esac
+fi
+if [ "$exec_line" = "Exec=\"$bin\" %U" ] && [ ! -x "$bin" ]; then
+  echo "No Newen to start${bin:+ at $bin}: build it, install it, or give its path" >&2
+  exit 1
 fi
 for size in 16 24 32 48 64 128 256 512; do
   install -Dm644 "$root/apps/newen/assets/icons/newen-$size.png" "$data/icons/hicolor/${size}x${size}/apps/newen.png"

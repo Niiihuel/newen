@@ -664,7 +664,9 @@ Cada punto, con lo que lo cumple en Newen:
 - Sus lanzadores (menú, inicio de sesión) tienen que apuntar a un programa que
   exista también en la versión a la que vuelve: en Linux `current/newen` sirve
   (0.1.9 deja ese enlace al activarla), y es lo que escriben la migración,
-  `scripts/install-desktop.sh` y el inicio de sesión. En macOS, la vuelta atrás
+  `scripts/install-desktop.sh` y el inicio de sesión; mientras la versión que
+  arranca es la de quill, la migración y el script dejan `current/quill`, que
+  también existe en las dos. En macOS, la vuelta atrás
   devuelve un `quill.app` con `Contents/MacOS/quill`, y no se le puede agregar
   un `newen` sin romper su firma, así que su LaunchAgent no puede arrancar
   `quill.app/Contents/MacOS/newen`. **Pendiente en macOS**: un Newen que 0.1.9
