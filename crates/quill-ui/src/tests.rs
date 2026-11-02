@@ -7950,6 +7950,89 @@ fn deleting_the_shown_session_shows_the_new_conversations_own_panes() {
     assert!(!ui.kept_panes.contains_key(&Some(1)));
 }
 
+/// Two sessions working at once keep their places while they stream; a turn ending, a
+/// question or a message sent moves that one up.
+#[test]
+fn streaming_sessions_keep_their_order_until_something_happens() {
+    let mut store = Store::default();
+    for session in [1, 2] {
+        store.apply(Event::SessionCreated {
+            session,
+            agent: "claude".into(),
+            cwd: "/work".into(),
+        });
+        store.apply(Event::Queued {
+            session,
+            request: format!("r{session}"),
+            text: "Go".into(),
+            at: None,
+            images: vec![],
+        });
+    }
+    let ui = Ui::new("/work".into());
+    let say = |store: &mut Store, session, event| {
+        store.apply(Event::Agent {
+            session,
+            request: Some(format!("r{session}")),
+            event,
+        })
+    };
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    for round in 0..3 {
+        for session in [1, 2] {
+            say(
+                &mut store,
+                session,
+                AgentEvent::TextDelta {
+                    text: "word ".into(),
+                    parent: None,
+                },
+            );
+            say(
+                &mut store,
+                session,
+                AgentEvent::ToolUse {
+                    call: format!("c{round}"),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                    parent: None,
+                },
+            );
+            assert_eq!(view::order(&store, &ui), [2, 1]);
+        }
+    }
+    let finished = AgentEvent::TurnFinished {
+        ok: true,
+        interrupted: false,
+        usage: Usage::default(),
+        error: None,
+    };
+    say(&mut store, 1, finished.clone());
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+    say(
+        &mut store,
+        2,
+        AgentEvent::PermissionRequest {
+            id: "p1".into(),
+            call: None,
+            tool: "Bash".into(),
+            input: serde_json::json!({}),
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    );
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    store.apply(Event::Queued {
+        session: 1,
+        request: "r3".into(),
+        text: "And this".into(),
+        at: None,
+        images: vec![],
+    });
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+}
+
 #[test]
 fn the_sidebar_keeps_its_order_while_the_pointer_is_over_it() {
     let mut store = Store::default();

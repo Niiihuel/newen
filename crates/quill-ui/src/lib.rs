@@ -177,7 +177,8 @@ pub struct Session {
     pub pull_request: Option<String>,
     /// Has news the person has not seen: a gray dot in its row.
     pub unread: bool,
-    /// When it last changed in this run, for "Last updated".
+    /// When it last had news in this run (a message sent, a fork, a turn ended, a question
+    /// asked), for "Last updated"; streamed output does not count.
     pub touched: u64,
     /// The session that started it, which it reports to and is nested under.
     pub parent: Option<SessionId>,
@@ -267,9 +268,16 @@ impl Store {
 
     pub fn apply(&mut self, event: Event) {
         self.clock += 1;
+        // Only moments the person cares about move "Last updated": streamed output would swap
+        // two working sessions in the sidebar many times a second.
         if matches!(
             event,
-            Event::Queued { .. } | Event::Agent { .. } | Event::Forked { .. }
+            Event::Queued { .. }
+                | Event::Forked { .. }
+                | Event::Agent {
+                    event: AgentEvent::TurnFinished { .. } | AgentEvent::PermissionRequest { .. },
+                    ..
+                }
         ) {
             let clock = self.clock;
             if let Some(s) = self.session_mut(event.session()) {
