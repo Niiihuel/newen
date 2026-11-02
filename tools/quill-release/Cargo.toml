@@ -27,3 +27,11 @@ sha2 = "0.10"
 base64 = "0.22"
 # The new signing key, and the test feed's throwaway one.
 getrandom = "0.3"
+# The release notes the owner writes, release/notes/<version>.toml (docs/UPDATES.md), read
+# into structs with serde's derive (the workspace's serde).
+toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
+serde.workspace = true
+
+[dev-dependencies]
+# A release's notes and media built in a temporary folder; already in the lock.
+tempfile = "3"

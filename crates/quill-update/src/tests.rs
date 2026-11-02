@@ -38,6 +38,8 @@ fn manifest(at: &str, minimum: Option<&str>, platforms: &[(&str, Artifact)]) -> 
             .iter()
             .map(|(name, artifact)| ((*name).to_owned(), artifact.clone()))
             .collect(),
+        whats_new: None,
+        assets: Default::default(),
     }
 }
 
@@ -600,5 +602,141 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     assert_eq!(
         std::fs::read_to_string(program.with_file_name("libcef.so")).unwrap(),
         "cef 2.0.0"
+    );
+}
+
+/// A manifest with `whats_new` and one without both read, and the field is left out when
+/// there is none, so an old release's bytes stay as they were. A copy from before the field
+/// reads a manifest that has it, as serde skips any field it does not know.
+#[test]
+fn a_manifest_reads_with_or_without_whats_new_and_older_copies_ignore_it() {
+    let signer = key();
+    let plain = manifest("1.0.0", None, &[]);
+    let bytes = serde_json::to_vec(&plain).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("whats_new"));
+    assert_eq!(
+        verify(&bytes, &sign(&signer, &bytes), &signer.verifying_key()),
+        Ok(plain.clone())
+    );
+    let entry = artifact("https://example.org/whats-new.json", b"{}");
+    let with = Manifest {
+        whats_new: Some(entry.clone()),
+        ..plain.clone()
+    };
+    let bytes = serde_json::to_vec(&with).unwrap();
+    let read = verify(&bytes, &sign(&signer, &bytes), &signer.verifying_key()).unwrap();
+    assert_eq!(read.whats_new, Some(entry.clone()));
+    // What a copy without the field does: a field it does not know is skipped.
+    let mut later: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    later["something_later"] = serde_json::json!({ "url": "https://example.org/x" });
+    let later: Manifest = serde_json::from_value(later).unwrap();
+    assert_eq!(later.whats_new, Some(entry.clone()));
+    // Offered with the release; one that could not be downloaded is not.
+    let offered = offer(with.clone(), &version("0.9.0"), "linux-x86_64").unwrap();
+    assert_eq!(offered.whats_new, Some(entry));
+    let plain_http = Manifest {
+        whats_new: Some(artifact("http://example.org/whats-new.json", b"{}")),
+        ..plain
+    };
+    let offered = offer(plain_http, &version("0.9.0"), "linux-x86_64").unwrap();
+    assert_eq!(offered.whats_new, None);
+}
+
+/// A release on loopback whose what's new names `media`, each served as given: the release
+/// offered, its source and the server.
+fn whats_new_release(media: &[(whats_new::Kind, &[u8], &[u8])]) -> (Release, Source, Server) {
+    let server = serve(0).unwrap();
+    let medium = |name: &str, bytes: &[u8], served: &[u8]| {
+        server.put(&format!("/{name}"), served.to_vec());
+        artifact(&format!("{}/{name}", server.base()), bytes)
+    };
+    let media = media
+        .iter()
+        .enumerate()
+        .map(|(at, (kind, bytes, served))| whats_new::Medium {
+            kind: *kind,
+            file: medium(&format!("medium-{at}.png"), bytes, served),
+            poster: (*kind == whats_new::Kind::Video)
+                .then(|| medium(&format!("poster-{at}.png"), b"poster", b"poster")),
+        })
+        .collect();
+    let notes = whats_new::WhatsNew {
+        version: version("2.0.0"),
+        date: "2026-11-10".into(),
+        notes: whats_new::Notes {
+            new: vec!["A browser beside the chat".into()],
+            ..Default::default()
+        },
+        announcement: Some(whats_new::Announcement {
+            title: "A browser beside the chat".into(),
+            body: "Open any page next to the session.".into(),
+            bullets: vec![],
+            media,
+            try_it: Some("browser".into()),
+        }),
+    };
+    let json = serde_json::to_vec(&notes).unwrap();
+    let entry = medium(whats_new::FILE, &json, &json);
+    let release = Release {
+        version: version("2.0.0"),
+        date: String::new(),
+        notes: String::new(),
+        mandatory: false,
+        artifact: None,
+        whats_new: Some(entry),
+        assets: Default::default(),
+    };
+    (release, files(), server)
+}
+
+/// Each medium is kept only when it is the size and digest the signed notes name: one that is
+/// not is refused and the next is tried; the words come through either way.
+#[test]
+fn a_medium_that_does_not_match_its_digest_is_refused_and_the_words_still_come() {
+    use whats_new::{fetch_whats_new, Kind};
+    let agent = agent();
+    let folder = tempfile::tempdir().unwrap();
+    // The first picture was changed on the server; the clip after it matches.
+    let (release, source, _server) = whats_new_release(&[
+        (Kind::Image, b"the picture", b"another picture"),
+        (Kind::Video, b"the clip", b"the clip"),
+    ]);
+    let (notes, kept) = fetch_whats_new(&agent, &source, &release, folder.path()).unwrap();
+    assert_eq!(notes.notes.new, ["A browser beside the chat"]);
+    let kept = kept.expect("the clip");
+    assert_eq!(kept.kind, Kind::Video);
+    assert_eq!(std::fs::read(&kept.file).unwrap(), b"the clip");
+    assert_eq!(std::fs::read(kept.poster.unwrap()).unwrap(), b"poster");
+    // Only what matched is on the disk.
+    let names: Vec<_> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    // None matches: no medium, the words still.
+    let folder = tempfile::tempdir().unwrap();
+    let (release, source, _server) =
+        whats_new_release(&[(Kind::Image, b"the picture", b"the picture, longer")]);
+    let (notes, kept) = fetch_whats_new(&agent, &source, &release, folder.path()).unwrap();
+    assert_eq!((notes.version, kept), (version("2.0.0"), None));
+    // The notes themselves changed after signing: refused whole.
+    let (release, source, server) = whats_new_release(&[]);
+    server.put(
+        &format!("/{}", whats_new::FILE),
+        b"{\"version\":\"2.0.0\"}".to_vec(),
+    );
+    assert_eq!(
+        fetch_whats_new(&agent, &source, &release, folder.path()),
+        Err(Error::Digest)
+    );
+    // Another release's notes, signed as this one's.
+    let (release, source, _server) = whats_new_release(&[]);
+    let release = Release {
+        version: version("3.0.0"),
+        ..release
+    };
+    assert_eq!(
+        fetch_whats_new(&agent, &source, &release, folder.path()),
+        Err(Error::Manifest)
     );
 }
