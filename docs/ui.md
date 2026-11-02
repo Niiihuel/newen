@@ -247,7 +247,8 @@ Regla del gallery de limn: un test falla si dos controles comparten ID (§6).
 
 | Estado | Señal | Color Newen (§3) |
 |---|---|---|
-| `Running` | Newen: el título en gris con un brillo que pasa (sin punto) | `muted` |
+| `Running` | Newen: el título en gris con un brillo que pasa, y un punto de 6 px que late al final | `running` |
+| Trabajo que sigue tras el turno (un workflow, un ayudante, un comando; no un monitor) | el mismo punto que late, aunque el turno haya terminado | `running` |
 | `Awaiting` (pide permiso, pregunta o aprobar un plan) | punto fijo de 6 px al final de la fila | `awaiting` (ámbar) |
 | `Ready` (terminó y no se vio) | punto fijo de 6 px al final de la fila; el título conserva su peso, no va en negrita | `accent` (azul de Newen) |
 | `Error` | punto fijo | `removed` (rojo) |
@@ -381,6 +382,8 @@ Es el panel "Background tasks" de Desktop, hecho sobre las tareas que Newen ya s
 Lo que la papelera limpia se guarda con la sesión, así que sigue limpio tras reiniciar Newen (`Intent::ClearTasks`, `Event::TasksCleared`).
 
 El adaptador traduce `task_type` del CLI a un tipo genérico y `usage` a `TaskUsage` (`TaskProgress`, `TaskEnded`).
+
+**Workflows:** mientras corre, un workflow es una fila hija bajo la sesión que lo lanzó en la sidebar, con un spinner, su nombre, la fase actual y cuántos agentes de esa fase terminaron ("file-words · Read · 1/2"). Un clic selecciona la sesión, abre Background tasks y despliega sus fases; en el panel, la fila de un workflow también las despliega: cada fase con su avance y cada agente con una marca (corriendo, hecho, falló, en espera), su etiqueta y, debajo, lo que hace o lo que devolvió. Al terminar, la fila sale del árbol y queda en el historial del panel; el aviso de "terminado" es el punto azul del turno con que el agente responde al fin de su tarea. Las fases llegan en `TaskPhases` (foto completa, no se guarda): solo Claude Code las da (`workflow_progress` de `task_progress`, verificado en 2.1.316); Codex no tiene workflows. Las fases de un workflow terminado no sobreviven a un reinicio.
 
 **Terminals** (panel derecho): los comandos que el agente deja corriendo (tareas de tipo `command`), cada uno con su estado y "Stop" mientras corre. Un clic abre su salida en el panel Terminal, en una pestaña con su nombre que sigue el archivo donde el CLI la escribe (`tail -F`; "Output is being written to: …" en el resultado del Bash de Claude Code). Sin ese archivo, abre Background tasks.
 

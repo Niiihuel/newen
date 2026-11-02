@@ -111,7 +111,7 @@ Tipos de mensaje que el adaptador reconoce: `user`, `assistant`, `system`, `resu
 | `system/session_state_changed` | `state ∈ {idle, running, requires_action}` | fin de corrida = `result` + `idle` |
 | `system/status` | `status`, `permissionMode?` | cambio de modo originado en el CLI; `compacting` |
 | `system/post_turn_summary` | `title`, `description`, `status_category`, `status_detail`, `recent_action`, `needs_action`, `is_noteworthy`, `summarizes_uuid` | título/resumen de sesión |
-| `system/task_started\|task_progress\|task_notification\|task_updated` | `task_id`, `tool_use_id?` | tareas de fondo / subagentes |
+| `system/task_started\|task_progress\|task_notification\|task_updated` | `task_id`, `tool_use_id?`; un workflow: `workflow_name` al empezar y, de a ratos, `workflow_progress` (fases y agentes) | tareas de fondo / subagentes; `TaskPhases` |
 | `system/commands_changed` | `commands[]` | refrescar slash commands |
 | `system/vcs_state_changed`, `code_change_published` | `kind`, `cwd` / `url`, `action`, `branch` | refrescar git, PR |
 | `system/compact_boundary` | `compactMetadata{trigger, preTokens, postTokens, …}`, `logicalParentUuid` | compactación |

@@ -1120,10 +1120,12 @@ fn tasks_pane(
             meta,
         ])
         .gap(4.0);
-        // A helper agent's row opens its transcript.
+        // A helper agent's row opens its transcript; a workflow's unfolds its phases.
         let lines = match (&task.call, task.kind.as_str()) {
             (Some(call), "agent") => Element::clickable(format!("agent:{call}"), lines)
                 .accessibility_label(format!("View transcript of {}", task.description)),
+            (_, "workflow") => Element::clickable(format!("phases:{}", task.id), lines)
+                .accessibility_label(format!("Show the phases of {}", task.description)),
             _ => lines,
         };
         // The row's flexible child is what it holds, so Stop keeps to the right edge.
@@ -1133,12 +1135,16 @@ fn tasks_pane(
         }
         // Flush with the group's name, 10 above and below, over a hairline, as Desktop's.
         let gap = || Element::spacer().size(None, Some(10.0));
-        Element::column(vec![
-            gap(),
-            Element::row(items).gap(8.0).size(Some(inner), None),
-            gap(),
-            hline(inner, look::divider()),
-        ])
+        let mut block = vec![gap(), Element::row(items).gap(8.0).size(Some(inner), None)];
+        if ui
+            .expanded
+            .iter()
+            .any(|k| *k == format!("phases:{}", task.id))
+        {
+            block.extend([gap(), phases(task, inner)]);
+        }
+        block.extend([gap(), hline(inner, look::divider())]);
+        Element::column(block)
     };
     let mut column = vec![];
     for (key, label, running) in [
@@ -1174,6 +1180,63 @@ fn tasks_pane(
     .scrollbar_appearance(limn::ScrollbarAppearance::overlay())
     .size(Some(width), Some(below));
     Element::column(vec![header, body]).size(Some(width), Some(height))
+}
+
+/// A workflow's phases under its row in the Background tasks pane: each phase's title and how
+/// many of its agents ended, then each agent with a mark for where it is, its label and, under
+/// it, what it does now or gave back.
+fn phases(task: &crate::Task, width: f32) -> Element {
+    use newen_model::TaskState;
+    if task.phases.is_empty() {
+        return muted("No phases reported yet");
+    }
+    let mut rows = vec![];
+    for (at, phase) in task.phases.iter().enumerate() {
+        let ended = (phase.agents.iter())
+            .filter(|a| matches!(a.state, TaskState::Done | TaskState::Failed))
+            .count();
+        let title = if phase.title.is_empty() {
+            "Other"
+        } else {
+            &phase.title
+        };
+        rows.push(muted(format!("{title} · {ended}/{}", phase.agents.len())));
+        for (n, agent) in phase.agents.iter().enumerate() {
+            let mark = match agent.state {
+                TaskState::Running => {
+                    limn::Spinner::new(format!("phases:{}:{at}:{n}", task.id), look::muted())
+                        .size(12.0)
+                        .render()
+                }
+                state => {
+                    let (icon, color) = match state {
+                        TaskState::Done => (icons::CHECK, look::muted()),
+                        TaskState::Failed => (icons::ERROR, look::removed()),
+                        _ => (icons::TASK_PENDING, look::muted()),
+                    };
+                    Element::icon(icons::of(icon))
+                        .foreground(color)
+                        .size(Some(12.0), Some(12.0))
+                }
+            };
+            let mut lines = vec![Element::truncated_text(agent.label.clone())
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::palette().text)
+                .max_width(width - 20.0)];
+            if let Some(doing) = &agent.doing {
+                lines.push(
+                    Element::truncated_text(doing.clone())
+                        .font_family(FontFamily::Sans)
+                        .font_size(SMALL)
+                        .foreground(look::muted())
+                        .max_width(width - 20.0),
+                );
+            }
+            rows.push(Element::row(vec![mark, Element::column(lines).gap(2.0)]).gap(8.0));
+        }
+    }
+    Element::column(rows).gap(6.0)
 }
 
 /// The file on screen, as Desktop's: its path, folders muted leading to the tree and its name
@@ -2217,10 +2280,90 @@ fn started_by(store: &Store, parent: newen_model::SessionId) -> Vec<&Session> {
 fn tree_rows(store: &Store, session: &Session, depth: usize) -> usize {
     let below = started_by(store, session.id).into_iter();
     1 + if depth < TREE_DEPTH {
-        below.map(|s| tree_rows(store, s, depth + 1)).sum()
+        below.map(|s| tree_rows(store, s, depth + 1)).sum::<usize>() + workflows(session).count()
     } else {
         0
     }
+}
+
+/// The workflows a session runs now: each has a row under it in the sidebar while it runs.
+fn workflows(session: &Session) -> impl Iterator<Item = &crate::Task> {
+    session
+        .tasks
+        .iter()
+        .filter(|t| t.running && t.kind == "workflow")
+}
+
+/// Work of a session's that runs on after its turn (a workflow, a helper, a command), which
+/// keeps its dot on; a monitor may watch for good, so it does not.
+fn at_work(session: &Session) -> bool {
+    session
+        .tasks
+        .iter()
+        .any(|t| t.running && t.kind != "monitor")
+}
+
+/// A workflow's phase now and how far along it is: the last phase with agents, and those of
+/// its agents that ended (done or failed) out of all it has so far.
+fn headline(task: &crate::Task) -> (Option<&str>, usize, usize) {
+    let phase = (task.phases.iter().rev().find(|p| !p.agents.is_empty())).or(task.phases.first());
+    let ended = |a: &&newen_model::TaskAgent| {
+        matches!(
+            a.state,
+            newen_model::TaskState::Done | newen_model::TaskState::Failed
+        )
+    };
+    match phase {
+        Some(p) => (
+            Some(p.title.as_str()).filter(|t| !t.is_empty()),
+            p.agents.iter().filter(ended).count(),
+            p.agents.len(),
+        ),
+        None => (None, 0, 0),
+    }
+}
+
+/// A running workflow's row under its session: a spinner, its name and phase, and how many of
+/// that phase's agents ended. It opens its phases in the Background tasks pane.
+fn workflow_row(
+    session: &Session,
+    task: &crate::Task,
+    ui: &Ui,
+    palette: ComponentPalette,
+) -> Element {
+    let (phase, ended, all) = headline(task);
+    let name = task.name.as_deref().unwrap_or(&task.description);
+    let title = match phase {
+        Some(phase) => format!("{name} · {phase}"),
+        None => name.to_owned(),
+    };
+    let mut content = vec![
+        limn::Spinner::new(format!("workflow:spin:{}", task.id), look::muted())
+            .size(12.0)
+            .render()
+            .centered_y(),
+        Element::truncated_text(title)
+            .font_family(FontFamily::Sans)
+            .font_size(BODY)
+            .foreground(look::palette().text)
+            .flex(1.0)
+            .centered_y(),
+    ];
+    if all > 0 {
+        content.push(muted(format!("{ended}/{all}")).centered_y());
+    }
+    let open = ui.selected == Some(session.id)
+        && ui.pane_open(Pane::Tasks)
+        && ui
+            .expanded
+            .iter()
+            .any(|k| *k == format!("phases:{}", task.id));
+    side_row(
+        format!("workflow:{}:{}", session.id, task.id),
+        content,
+        open,
+        palette,
+    )
 }
 
 /// A session's row and, under it, the sessions it started and theirs, each on a guide that
@@ -2235,7 +2378,22 @@ fn with_children(
 ) -> Element {
     let id = format!("family:{}", session.id);
     let row = session_row(session, depth, ui, palette);
-    let children = started_by(store, session.id);
+    // Under it the sessions it started, then the workflows it runs now: (element, rows taken).
+    let children: Vec<(Element, usize)> = (started_by(store, session.id).into_iter())
+        .map(|child| {
+            (
+                with_children(store, child, depth + 1, ui, palette),
+                tree_rows(store, child, depth + 1),
+            )
+        })
+        .chain(workflows(session).map(|task| {
+            (
+                workflow_row(session, task, ui, palette)
+                    .animate_move(format!("family:{}:task:{}", session.id, task.id)),
+                1,
+            )
+        }))
+        .collect();
     if children.is_empty() || depth >= TREE_DEPTH {
         return row.animate_move(id);
     }
@@ -2245,13 +2403,13 @@ fn with_children(
             .background(look::divider())
             .size(Some(width), Some(height))
     };
-    let blocks = children.iter().enumerate().map(|(at, child)| {
+    let blocks = children.into_iter().enumerate().map(|(at, (child, rows))| {
         // Rows are 32 tall with 2 between: the guide runs on past the gap to the next one,
         // and at the last it stops at its row's middle, where it turns.
         let down = if at + 1 == count {
             17.0
         } else {
-            tree_rows(store, child, depth + 1) as f32 * 34.0
+            rows as f32 * 34.0
         };
         let guide = Element::row(vec![
             line(1.0, down),
@@ -2261,10 +2419,7 @@ fn with_children(
             ]),
         ])
         .size(Some(6.0), None);
-        Element::row(vec![
-            guide,
-            with_children(store, child, depth + 1, ui, palette).flex(1.0),
-        ])
+        Element::row(vec![guide, child.flex(1.0)])
     });
     Element::column(vec![
         row,
@@ -2554,6 +2709,8 @@ fn session_row(session: &Session, depth: usize, ui: &Ui, palette: ComponentPalet
     let indicator = match session.status {
         SessionStatus::Awaiting | SessionStatus::Failed(_) => status_dot(session),
         _ if session.unread && !working => status_dot(session),
+        // At work, its turn or what runs on after it: the dot pulses, as Desktop's hub shows.
+        _ if working || at_work(session) => status_dot(session),
         // It waits for another session's task to end (`wait_for_session`).
         _ if !session.waits.is_empty() => mark(icons::HOURGLASS, look::muted()),
         // Grouped by folder Desktop marks no place.
@@ -2681,23 +2838,18 @@ fn side_row_with(
 /// Running and awaiting sessions carry a dot in the sidebar, as Desktop's rows do, and so
 /// does an unread one, in the accent; each says what it means to a screen reader.
 fn status_dot(session: &Session) -> Element {
-    let status = &session.status;
-    let color = match status {
-        SessionStatus::Running | SessionStatus::Starting => look::running(),
-        SessionStatus::Awaiting => look::awaiting(),
-        SessionStatus::Failed(_) => look::removed(),
+    let (color, said) = match &session.status {
+        SessionStatus::Running | SessionStatus::Starting => (look::running(), "Running"),
+        SessionStatus::Awaiting => (look::awaiting(), "Needs your input"),
+        SessionStatus::Failed(_) => (look::removed(), "Failed"),
         // A turn that ended while the person looked elsewhere: "Unread response".
-        _ if session.unread => look::theme().accent,
+        _ if session.unread => (look::theme().accent, "Unread response"),
+        // Its turn ended, but a workflow, a helper or a command it started still runs.
+        _ if at_work(session) => (look::running(), "Running"),
         _ => return Element::spacer().size(Some(6.0), Some(6.0)),
     };
-    let said = match status {
-        SessionStatus::Running | SessionStatus::Starting => "Running",
-        SessionStatus::Awaiting => "Needs your input",
-        SessionStatus::Failed(_) => "Failed",
-        _ => "Unread response",
-    };
     // A running session's dot pulses, as Desktop's does.
-    let running = matches!(status, SessionStatus::Running | SessionStatus::Starting);
+    let running = said == "Running";
     limn::StatusDot::new(color)
         .pulse(running)
         .size(6.0)

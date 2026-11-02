@@ -230,6 +230,9 @@ pub struct Task {
     pub usage: Option<newen_model::TaskUsage>,
     /// When it began here, for its clock while it runs.
     pub since: std::time::Instant,
+    /// A workflow's own name and where its phases stand, as last reported.
+    pub name: Option<String>,
+    pub phases: Vec<newen_model::TaskPhase>,
 }
 
 impl Session {
@@ -776,7 +779,15 @@ fn agent_event(s: &mut Session, event: AgentEvent) {
             stopped: false,
             usage: None,
             since: std::time::Instant::now(),
+            name: None,
+            phases: vec![],
         }),
+        AgentEvent::TaskPhases { id, name, phases } => {
+            if let Some(task) = s.tasks.iter_mut().find(|t| t.id == id) {
+                task.name = name.or(task.name.take());
+                task.phases = phases;
+            }
+        }
         AgentEvent::TaskProgress { id, usage } => {
             if let Some(task) = s.tasks.iter_mut().find(|t| t.id == id) {
                 task.usage = Some(usage);
@@ -1720,6 +1731,26 @@ fn session_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
                 unread: false,
             }]);
         }
+    } else if let Some((s, task)) = id.strip_prefix("workflow:").and_then(|r| r.split_once(':')) {
+        // A running workflow's row opens its phases in the Background tasks pane, its
+        // session selected.
+        let s: SessionId = s.parse().ok()?;
+        let shown = ui.selected == Some(s);
+        let intents = clicked(store, ui, &format!("session:{s}"));
+        let key = format!("phases:{task}");
+        if !ui.expanded.contains(&key) {
+            ui.expanded.push(key);
+        }
+        // Another session's panes come back once the selection switches: the pane opens there.
+        if shown {
+            ui.open_pane(Pane::Tasks);
+        } else {
+            let kept = ui.kept_panes.entry(Some(s)).or_default();
+            if !kept.panes.contains(&Pane::Tasks) {
+                kept.panes.push(Pane::Tasks);
+            }
+        }
+        return Some(intents);
     } else if id == view::SIDE_OPEN {
         return ui
             .side_chat
@@ -4373,7 +4404,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         ui.expanded.retain(|k| k != key);
         return vec![];
     }
-    if id.starts_with("steps:") || id.starts_with("panel:") {
+    if id.starts_with("steps:") || id.starts_with("panel:") || id.starts_with("phases:") {
         if let Some(at) = ui.expanded.iter().position(|c| c == id) {
             ui.expanded.remove(at);
         } else {

@@ -1900,6 +1900,94 @@ fn a_changed_file_folds_and_opens_in_files_or_elsewhere() {
     assert_eq!(ui.files[&1].goto, Some(("src/a.rs".into(), 3)));
 }
 
+/// A workflow that runs on after its session's turn is a row under that session with its name,
+/// its phase and how many of that phase's agents ended; the session keeps a pulsing dot, the
+/// row opens the phases in the Background tasks pane, and once it ends the row leaves.
+#[test]
+fn a_running_workflow_is_a_row_under_its_session_that_opens_its_phases() {
+    use newen_model::{TaskAgent, TaskPhase, TaskState};
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    ui.selected = None;
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "w1".into(),
+            call: None,
+            description: "Read and sum up".into(),
+            kind: "workflow".into(),
+        },
+    );
+    let worker = |label: &str, state| TaskAgent {
+        label: label.into(),
+        state,
+        doing: None,
+    };
+    agent(
+        &mut store,
+        AgentEvent::TaskPhases {
+            id: "w1".into(),
+            name: Some("file-words".into()),
+            phases: vec![
+                TaskPhase {
+                    title: "Read".into(),
+                    agents: vec![
+                        worker("read README.md", TaskState::Done),
+                        worker("ls files", TaskState::Running),
+                    ],
+                },
+                TaskPhase {
+                    title: "Sum up".into(),
+                    agents: vec![],
+                },
+            ],
+        },
+    );
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = |store: &Store, ui: &Ui| UiTree::new(view(store, ui, window)).layout(window);
+    let shows = |frame: &limn::Frame, words: &str| {
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    let drawn = frame(&store, &ui);
+    assert!(region(&drawn, "workflow:1:w1").is_some(), "its row");
+    for words in ["file-words · Read", "1/2"] {
+        assert!(shows(&drawn, words), "{words}");
+    }
+    // Its session's turn ended, but the work goes on: the dot stays, pulsing.
+    assert_eq!(row_marks(&store, &ui).0.len(), 1);
+    // The row opens the phases in the pane, its session selected.
+    click(&store, &mut ui, "workflow:1:w1");
+    assert_eq!(ui.selected, Some(1));
+    assert!(ui.pane_open(Pane::Tasks));
+    settle(&store, &mut ui);
+    let drawn = frame(&store, &ui);
+    for words in ["Read · 1/2", "Sum up · 0/0", "ls files"] {
+        assert!(shows(&drawn, words), "{words}");
+    }
+    // Ended, it leaves the tree and stays in the pane's history.
+    agent(
+        &mut store,
+        AgentEvent::TaskEnded {
+            id: "w1".into(),
+            call: None,
+            summary: None,
+            ok: true,
+            stopped: false,
+            usage: None,
+        },
+    );
+    let drawn = frame(&store, &ui);
+    assert!(region(&drawn, "workflow:1:w1").is_none());
+    assert!(shows(&drawn, "Finished 1"));
+    assert!(row_marks(&store, &ui).0.is_empty(), "nothing runs: no dot");
+}
+
 #[test]
 fn background_tasks_list_running_and_finished_stop_and_clear() {
     let (mut store, mut ui) = store_with_session();

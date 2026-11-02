@@ -5,7 +5,7 @@
 //!
 //! Usage: newen-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
-//! todos, agent, think, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
+//! todos, agent, think, workflow, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
 //! it). With `--agent codex`, see codex.rs.
 
 mod codex;
@@ -123,6 +123,21 @@ fn scenario(name: &str) -> Option<Scenario> {
             )],
         ),
         "think" => (Policy::Allow, "default", vec![Prompt("Think it through, then answer in one line: is 391 prime?")]),
+        // A background workflow reports its phases and agents after the turn ends; listen until
+        // its notification and the turn that follows (`touch <capture>/stop` ends it sooner).
+        "workflow" => (
+            Policy::Allow,
+            "default",
+            vec![
+                Prompt(
+                    "Run a workflow with the Workflow tool, named file-words, in two phases: 'Read' with \
+                     two agents, one reading README.md and one listing the files with ls, each \
+                     answering in one word; then 'Sum up' with one agent joining their answers in one \
+                     sentence. Then wait for it and tell me its sentence.",
+                ),
+                Listen(600),
+            ],
+        ),
         // The suggestion comes after a turn's `result`, so each turn is listened past.
         "suggest" => (
             Policy::Allow,

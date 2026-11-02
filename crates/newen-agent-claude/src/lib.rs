@@ -7,8 +7,8 @@ use newen_agent::{
     AuthState, Choices, CommandRun, ContextCategory, ContextKind, ContextUsage, Decision, Decoded,
     ExtensionOp, FileChange, LaunchPlan, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeWords, ModelInfo, PlanLimits, Plugin, PluginOffer, ProgramRun, SessionSpec, Skill,
-    Suggestion, TaskUsage, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource, BROWSER_GUIDE,
-    BROWSER_TOOLS, HOST_TOOLS, WORK_GUIDE,
+    Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, ToolContent, Usage, UsageWindow,
+    WebSearchRun, WebSource, BROWSER_GUIDE, BROWSER_TOOLS, HOST_TOOLS, WORK_GUIDE,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -51,6 +51,8 @@ pub struct Claude {
     turn_tokens: u64,
     live_tokens: u64,
     task_tokens: HashMap<String, u64>,
+    /// Each running workflow's name, which only its start says.
+    workflows: HashMap<String, String>,
     /// The CLI's `/effort` takes `ultracode`: it is offered as the slider's last stop.
     ultracode: bool,
     /// Newen's tool calls waiting for the engine: the control request's id and the JSON-RPC id
@@ -1147,20 +1149,26 @@ impl AgentAdapter for Claude {
             }
             // Verified on 2.1.310 ([F:agent]): a helper agent runs as a task tied to the
             // tool call that started it, reports its tokens as it goes, and ends with a summary.
-            ("system", Some("task_started")) => decoded.events.push(AgentEvent::TaskStarted {
-                id: text(&msg["task_id"]),
-                call: msg["tool_use_id"].as_str().map(str::to_owned),
-                description: text(&msg["description"]),
-                // Desktop's names for the CLI's task types.
-                kind: match msg["task_type"].as_str().unwrap_or_default() {
-                    "local_agent" | "in_process_teammate" | "remote_agent" => "agent",
-                    "local_bash" => "command",
-                    "local_workflow" => "workflow",
-                    "monitor_mcp" | "monitor_ws" => "monitor",
-                    _ => "task",
+            ("system", Some("task_started")) => {
+                if let Some(name) = msg["workflow_name"].as_str() {
+                    self.workflows
+                        .insert(text(&msg["task_id"]), name.to_owned());
                 }
-                .into(),
-            }),
+                decoded.events.push(AgentEvent::TaskStarted {
+                    id: text(&msg["task_id"]),
+                    call: msg["tool_use_id"].as_str().map(str::to_owned),
+                    description: text(&msg["description"]),
+                    // Desktop's names for the CLI's task types.
+                    kind: match msg["task_type"].as_str().unwrap_or_default() {
+                        "local_agent" | "in_process_teammate" | "remote_agent" => "agent",
+                        "local_bash" => "command",
+                        "local_workflow" => "workflow",
+                        "monitor_mcp" | "monitor_ws" => "monitor",
+                        _ => "task",
+                    }
+                    .into(),
+                })
+            }
             ("system", Some(kind @ ("task_progress" | "task_notification"))) => {
                 let usage = &msg["usage"];
                 let usage = usage.is_object().then(|| TaskUsage {
@@ -1172,7 +1180,18 @@ impl AgentAdapter for Claude {
                     self.task_tokens.insert(text(&msg["task_id"]), usage.tokens);
                     decoded.events.push(self.tokens());
                 }
+                // Verified on 2.1.316 ([F:workflow]): a workflow's progress carries, now and
+                // then, all its phases and agents.
+                if let Some(progress) = msg["workflow_progress"].as_array() {
+                    let id = text(&msg["task_id"]);
+                    decoded.events.push(AgentEvent::TaskPhases {
+                        name: self.workflows.get(&id).cloned(),
+                        id,
+                        phases: phases(progress),
+                    });
+                }
                 if kind == "task_notification" {
+                    self.workflows.remove(&text(&msg["task_id"]));
                     decoded.events.push(AgentEvent::TaskEnded {
                         id: text(&msg["task_id"]),
                         call: msg["tool_use_id"].as_str().map(str::to_owned),
@@ -1857,6 +1876,54 @@ fn file_changes(structured: &Value) -> Vec<FileChange> {
 }
 
 mod inject;
+
+/// A workflow's phases and their agents from its `workflow_progress`: phases and agents count
+/// from 1, an agent's `phaseIndex` names its phase.
+fn phases(progress: &[Value]) -> Vec<TaskPhase> {
+    let of = |kind: &'static str| progress.iter().filter(move |p| p["type"] == kind);
+    let index: Vec<_> = of("workflow_phase").map(|p| p["index"].as_u64()).collect();
+    let mut phases: Vec<TaskPhase> = of("workflow_phase")
+        .map(|p| TaskPhase {
+            title: text(&p["title"]),
+            agents: vec![],
+        })
+        .collect();
+    for agent in of("workflow_agent") {
+        let state = match agent["state"].as_str() {
+            _ if agent["error"].is_string() => TaskState::Failed,
+            Some("done") => TaskState::Done,
+            Some("error" | "failed") => TaskState::Failed,
+            _ if agent["startedAt"].is_null() => TaskState::Queued,
+            _ => TaskState::Running,
+        };
+        let doing = [
+            &agent["error"],
+            &agent["resultPreview"],
+            &agent["lastToolSummary"],
+        ]
+        .into_iter()
+        .find_map(|v| v.as_str().map(str::to_owned));
+        // An agent outside the phases the run announced goes in an untitled one at the end.
+        let at = match index
+            .iter()
+            .position(|&i| i.is_some() && i == agent["phaseIndex"].as_u64())
+        {
+            Some(at) => at,
+            None => {
+                if phases.last().is_none_or(|p| !p.title.is_empty()) {
+                    phases.push(TaskPhase::default());
+                }
+                phases.len() - 1
+            }
+        };
+        phases[at].agents.push(TaskAgent {
+            label: text(&agent["label"]),
+            state,
+            doing,
+        });
+    }
+    phases
+}
 
 #[cfg(test)]
 mod tests;

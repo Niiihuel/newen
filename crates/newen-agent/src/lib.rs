@@ -156,6 +156,31 @@ pub struct TaskUsage {
     pub duration_ms: u64,
 }
 
+/// One phase of work in phases and the agents it ran.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaskPhase {
+    pub title: String,
+    pub agents: Vec<TaskAgent>,
+}
+
+/// One agent of a phase: what it is called, where it is, and in one line what it does now or
+/// what it gave back.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaskAgent {
+    pub label: String,
+    pub state: TaskState,
+    pub doing: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TaskState {
+    #[default]
+    Queued,
+    Running,
+    Done,
+    Failed,
+}
+
 /// One model the agent offers, with the efforts it accepts.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
@@ -634,6 +659,13 @@ pub enum AgentEvent {
     TaskProgress {
         id: String,
         usage: TaskUsage,
+    },
+    /// Where work in phases (a workflow) stands: its name and a whole snapshot of its phases,
+    /// which replaces the last one. Passing state, not stored.
+    TaskPhases {
+        id: String,
+        name: Option<String>,
+        phases: Vec<TaskPhase>,
     },
     /// That work ended; `summary` is its own account of what it did, `stopped` when it was
     /// stopped before it finished, and `usage` what it used.

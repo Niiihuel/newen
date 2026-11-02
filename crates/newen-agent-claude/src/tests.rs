@@ -888,6 +888,46 @@ fn a_helper_agent_is_a_task_tied_to_its_call() {
 }
 
 #[test]
+fn a_workflow_reports_its_name_phases_and_agents() {
+    let (_, events, _) = replay_at("2.1.316", "workflow");
+    assert!(events.iter().any(|e| matches!(e,
+        AgentEvent::TaskStarted { kind, .. } if kind == "workflow")));
+    let snapshots: Vec<_> = (events.iter())
+        .filter_map(|e| match e {
+            AgentEvent::TaskPhases { name, phases, .. } => Some((name.clone(), phases.clone())),
+            _ => None,
+        })
+        .collect();
+    let (name, first) = &snapshots[0];
+    assert_eq!(name.as_deref(), Some("file-words"));
+    let titles: Vec<_> = first.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(titles, ["Read", "Sum up"]);
+    // The first agent has started, the second waits in the same phase.
+    assert_eq!(first[0].agents.len(), 2);
+    assert_eq!(first[0].agents[0].state, newen_agent::TaskState::Running);
+    // At the last snapshot every agent is done, each with what it gave back.
+    let (_, last) = snapshots.last().unwrap();
+    let agents: Vec<_> = last.iter().flat_map(|p| &p.agents).collect();
+    assert_eq!(agents.len(), 3);
+    assert!(agents
+        .iter()
+        .all(|a| a.state == newen_agent::TaskState::Done));
+    assert_eq!(last[1].agents[0].label, "sum up");
+    assert!(last[1].agents[0]
+        .doing
+        .as_deref()
+        .is_some_and(|d| d.starts_with("The README.md")));
+    // It ends as any task does, and the CLI then answers in a turn of its own.
+    let ended = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::TaskEnded { ok: true, .. }));
+    let finished = events
+        .iter()
+        .rposition(|e| matches!(e, AgentEvent::TurnFinished { .. }));
+    assert!(ended.is_some() && finished > ended);
+}
+
+#[test]
 fn a_turn_counts_its_tokens_as_it_goes() {
     let (_, events, _) = replay("think");
     let counts: Vec<u64> = events
