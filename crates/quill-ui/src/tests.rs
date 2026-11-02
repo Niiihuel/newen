@@ -8389,6 +8389,56 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
     }
 }
 
+/// The composer's ring fills as the Context card says the context is, for a 200k window and
+/// a 1M one, and its hint gives the same share and figures.
+#[test]
+fn the_composer_s_ring_fills_as_the_context_card_says() {
+    for (used, window, card) in [
+        (512_900, 1_000_000, "51% used"),
+        (51_000, 200_000, "26% used"),
+    ] {
+        let (mut store, mut ui) = store_with_session();
+        store.sessions[0].context_tokens = used;
+        store.sessions[0].context_window = window;
+        settle(&store, &mut ui);
+        let window_size = limn::Size::new(2000.0, 900.0);
+        let mut tree = UiTree::new(view(&store, &ui, window_size));
+        let frame = tree.layout(window_size);
+        assert!(painted(&frame, card).is_some(), "the card says {card}");
+        let anchor = region(&frame, view::USAGE_MENU).expect("the ring");
+        let ring = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::ProgressRing { rect, fraction, .. }
+                if anchor.contains(limn::Point::new(rect.x + 1.0, rect.y + 1.0)) =>
+            {
+                Some(*fraction)
+            }
+            _ => None,
+        });
+        let fraction = ring.flatten().expect("the ring's arc");
+        assert!(
+            (fraction - used as f32 / window as f32).abs() < 1e-4,
+            "{window}: {fraction}"
+        );
+        assert_eq!(format!("{}% used", (fraction * 100.0).round() as u32), card);
+        // Its hint, once the pointer rests on it.
+        let at = limn::Point::new(
+            anchor.x + anchor.width / 2.0,
+            anchor.y + anchor.height / 2.0,
+        );
+        tree.handle_event(limn::UiEvent::PointerMove(at));
+        let start = std::time::Instant::now();
+        tree.layout_at(window_size, start);
+        let frame = tree.layout_at(window_size, start + std::time::Duration::from_millis(900));
+        let share = card.trim_end_matches(" used");
+        let hint = format!(
+            "Context {share} \u{b7} {} / {}",
+            view::compact(used),
+            view::compact(window)
+        );
+        assert!(painted(&frame, &hint).is_some(), "{hint}");
+    }
+}
+
 /// A background task's title, in the card and in its pane, is drawn in the face and size of
 /// the right panel's other rows, not the monospace an element has of its own.
 #[test]
