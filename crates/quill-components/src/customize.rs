@@ -331,8 +331,7 @@ pub fn empty(icon: &'static str, words: &str, width: f32) -> Element {
         .size(Some(width), Some(48.0))
 }
 
-/// The page's tabs (Skills, Connectors, Plugins) or a list's own (Your connectors, Discover):
-/// each its label on the tab's fill when shown, under the pointer's when not; one that cannot
+/// The page's tabs (Skills, Connectors, Plugins): each its label on the tab's fill when shown, under the pointer's when not; one that cannot
 /// be used is muted and says why in its tooltip, and reports nothing.
 pub fn tabs(tabs: &[(&str, &str, bool, Option<String>)]) -> Element {
     let tab = |id: &str, label: &str, on: bool, off: &Option<String>| {
@@ -464,22 +463,53 @@ pub fn status(icon: &'static str, words: &str, ink: limn::Color) -> Element {
     .gap(6.0)
 }
 
-/// The strip over a list when some of it needs the person: a warning, what is wrong, and the
-/// action that mends it all, on the waiting ink's pale fill.
-pub fn attention(words: &str, action: Element, width: f32) -> Element {
+/// The strip over a list when some of it needs the person, all amber: a warning, what is
+/// wrong, and the action that mends it all (`action`: its id and label), on a translucent
+/// amber fill inside an amber edge, the words in the amber that reads on either theme.
+pub fn attention(words: &str, action: (&str, &str), width: f32) -> Element {
+    let ink = look::manual();
+    let amber = |a| limn::Color {
+        a,
+        ..look::awaiting()
+    };
+    let glyph = |name: &'static str| {
+        Element::icon(icons::of(name))
+            .foreground(ink)
+            .size(Some(14.0), Some(14.0))
+            .centered_y()
+    };
+    let (id, label) = action;
+    let button = Element::clickable(
+        id,
+        Element::row(vec![
+            hgap(4.0),
+            glyph(icons::RELOAD),
+            text(label).font_size(BODY).foreground(ink).centered_y(),
+            hgap(4.0),
+        ])
+        .gap(6.0)
+        .size(None, Some(28.0)),
+    )
+    .border(look::awaiting(), 1.0)
+    .hover_background(amber(64))
+    .radius(6.0);
     Element::row(vec![
         Element::icon(icons::of(icons::WARNING))
-            .foreground(look::awaiting())
+            .foreground(ink)
             .size(Some(16.0), Some(16.0))
             .centered_y(),
-        text(words).font_size(BODY).centered_y().flex(1.0),
-        action.centered_y(),
+        text(words)
+            .font_size(BODY)
+            .foreground(ink)
+            .centered_y()
+            .flex(1.0),
+        button.centered_y(),
     ])
     .gap(10.0)
     .padding(12.0)
     .size(Some(width), None)
-    .background(look::customize_card())
-    .border(look::awaiting_edge(), 1.0)
+    .background(amber(36))
+    .border(look::awaiting(), 1.0)
     .radius(10.0)
 }
 

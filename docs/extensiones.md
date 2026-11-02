@@ -434,10 +434,11 @@ Customize deja de ser una columna de Ajustes. Lo que sigue es lo que la persona 
 ### 12.1 Cómo se llega y qué hay arriba
 
 - **Entrada:** el «Customize» de la barra lateral abre la página en el lugar de la conversación; la barra lateral queda. Elegir una sesión o «New» la cierra. Ajustes › General conserva «Customize…». El «+» del composer («Browse connectors», «Manage plugins», «Browse plugins») y `/skills` y `/plugin` también abren la página.
-- **Encabezado:** «Customize» en negrita de 22, el chip de la capa y, al final, el engranaje que abre Ajustes.
+- **Encabezado:** «Customize» en negrita de 22 y el chip de la capa, que abre su menú (All agents y cada agente). No hay engranaje: Ajustes se abre desde la barra lateral o con Ctrl+,.
 - **Pestañas:** Skills, Connectors y Plugins. Una pestaña en la que ningún agente mostrado participa se ve atenuada, no responde y dice por qué en su tooltip («Codex has no plugins quill can manage.»). El motivo sale de lo que declara cada adaptador (`AgentInfo.customize`: si tiene `plugins_query` y `servers_query`), no del nombre del agente.
-- **Migas:** dentro de un elemento, `Customize › Connectors › Your connectors › github`. Cada parte vuelve atrás. Son el `Breadcrumb` de limn.
-- **Barra de cada pestaña:** búsqueda; en Skills y Plugins, el chip de carpeta; «Discover»; y «+ Add ▾». El botón relleno es el que más sirve: Discover mientras la lista está vacía y Add después. En una ventana angosta la barra baja de línea.
+- **Migas:** dentro de un elemento, `Customize › Connectors › github`. Cada parte vuelve atrás. Son el `Breadcrumb` de limn.
+- **Listas largas:** el cuerpo de la página es una lista virtual de limn (`measured_list`): cada fila guarda lo que muestra y se arma y se mide solo al entrar en vista, así que con cientos de skills o conectores un cuadro arma unas 15 filas. Las marcas de «en qué otros agentes está» y la descripción de cada plugin se buscan una vez por cuadro, no por fila, y el logo de un conector se pide por su propia etiqueta.
+- **Barra de cada pestaña, una sola fila:** búsqueda; en Connectors, el filtro de estado como menú compacto (All / Connected / Not connected, con el elegido como rótulo); en Skills y Plugins, el chip de carpeta (y en Skills, «Sort»); «Discover»; y «+ Add ▾». El botón relleno es el que más sirve: Discover mientras la lista está vacía y Add después. En una ventana angosta la barra baja de línea. Arriba quedan solo el título con el chip de la capa y las pestañas.
 
 ### 12.2 Las capas («All agents» y cada agente)
 
@@ -450,9 +451,9 @@ Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
 
 ### 12.3 Connectors
 
-- Pestañas internas «Your connectors» y «Discover», y un filtro All / Connected / Not connected.
+- Sin pestañas internas: «Discover» es el botón de la barra. Dentro de Discover, la barra empieza con «← Your connectors», que vuelve a la lista, y la búsqueda pasa a ser la del registro. El filtro de estado es el menú de la barra.
 - **Lista:** Connector (logo de 24 o el ícono del enchufe, y el nombre, que abre el detalle), Type («Local» o «Remote») y Status de 160 («Connected», «On», «Needs sign-in», «Pending approval», «Not connected», «Failed to connect»), y el «⋯» con Remove para los propios. Por debajo de 560 de ancho la columna Type no se muestra.
-- **Franja:** si algún conector necesita a la persona (sesión vencida o falla), «N of your connectors need attention» con «Reconnect all». Reconectar todo pide `McpReconnect` en cada sesión que cargó ese servidor y vuelve a listar los de cada agente. «Hide for N days» no está.
+- **Franja:** si algún conector necesita a la persona (sesión vencida o falla), «N of your connectors need attention» con «Reconnect all», toda en ámbar: fondo ámbar translúcido, borde ámbar, y el ícono, el texto y el botón en la tinta ámbar de «Manual» (`look::manual`), legible en claro y oscuro. Reconectar todo pide `McpReconnect` en cada sesión que cargó ese servidor y vuelve a listar los de cada agente. «Hide for N days» no está.
 - **Vacía:** «Add your first connectors», en tarjeta y sin ilustración, con «Discover connectors». **Sin resultados:** la lupa de 32, «No connectors match your search» y «Try a different term, or browse Discover.».
 - **Discover:** el registro público de MCP en tarjetas de dos o tres por fila (mínimo 280). Cada tarjeta: radio `tile` 16 (token nuevo de limn), recuadro de 40, nombre de hasta dos líneas, «autor • Remote • v1.0.0», descripción de dos líneas y un botón fantasma «+». El directorio de plugins usa la misma tarjeta: «marketplace • 12k installs», un punto si la versión instalada no es la que se ofrece, y un engranaje que abre la página del plugin si ya está instalado.
 

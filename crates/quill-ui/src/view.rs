@@ -2709,20 +2709,11 @@ fn status_dot(session: &Session) -> Element {
 
 /// A new session's page: the greeting and the composer as one block, centered across the
 /// column with the greeting's line 42 % down it, as a chat app's new page sits, never nearer
-/// the top than 24 px. The greeting is quill's pen in the accent and words that follow the
-/// local hour and day (`greeting`), 40 px in the interface's face: limn bundles no serif.
+/// the top than 24 px. The greeting is words that follow the local hour and day
+/// (`greeting`), 40 px in the interface's face: limn bundles no serif.
 fn home(ui: &Ui, height: f32, composer: Element) -> Vec<Element> {
     let greeting = crate::greeting::now(ui.utc_offset, ui.name.as_deref());
-    let line = Element::row(vec![
-        Element::icon(icons::of(include_str!(
-            "../../../apps/quill/assets/icons/quill-mark.svg"
-        )))
-        .foreground(look::theme().accent)
-        .large_icon(44.0)
-        .centered_y(),
-        text(greeting).font_size(40.0).centered_y(),
-    ])
-    .gap(12.0);
+    let line = text(greeting).font_size(40.0);
     let top = (height * 0.42 - 48.0).max(24.0);
     vec![
         Element::spacer().size(None, Some(24.0)),
@@ -10890,16 +10881,6 @@ pub(crate) fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) ->
         .render()
 }
 
-/// The agents an item is on, as logos at its end, when it is on in several: those where `on`
-/// says it is. `None` otherwise: one agent's section already says it.
-pub(crate) fn agent_marks(ui: &Ui, id: &str, on: impl Fn(&str) -> bool) -> Option<Element> {
-    let who: Vec<(&'static str, String)> = marked_agents(ui, on)
-        .map(|a| (icons::agent(a.icon.as_deref()), a.name.clone()))
-        .collect();
-    // On in one agent, its section says it; the marks say where else it is.
-    (who.len() > 1).then(|| quill_components::customize::agent_marks(id, &who))
-}
-
 /// The agents where `on` holds, when there are several agents; none with one.
 pub(crate) fn marked_agents<'a>(
     ui: &'a Ui,
@@ -10907,12 +10888,6 @@ pub(crate) fn marked_agents<'a>(
 ) -> impl Iterator<Item = &'a quill_model::AgentInfo> {
     let several = ui.agents.len() > 1;
     ui.agents.iter().filter(move |a| several && on(&a.id))
-}
-
-/// Whether `agent` has a skill of this name that is not off.
-pub(crate) fn skill_on_in(ui: &Ui, agent: &str, name: &str) -> bool {
-    (ui.extensions.get(agent))
-        .is_some_and(|k| (k.list.skills.iter()).any(|s| s.name == name && s.state != "off"))
 }
 
 /// Whether `agent` has a connector of this name that is not off.
@@ -10927,12 +10902,6 @@ pub(crate) fn server_on_in(ui: &Ui, agent: &str, label: &str) -> bool {
         all.iter()
             .any(|s| s.label == label && s.status != McpStatus::Disabled)
     })
-}
-
-/// Whether `agent` has a plugin of this name that is on.
-pub(crate) fn plugin_on_in(ui: &Ui, agent: &str, name: &str) -> bool {
-    (ui.extensions.get(agent))
-        .is_some_and(|k| (k.list.plugins.iter()).any(|p| p.name == name && p.enabled))
 }
 
 /// `first` and `then` side by side at an item's end.
@@ -10966,39 +10935,52 @@ pub(crate) fn cut(words: &str, most: usize) -> String {
 
 /// Skills: by where they come from, each with its state; its "⋯" changes the state, in a
 /// project folder (the header's chip), or says why it cannot.
-pub(crate) fn skills_page(ui: &Ui, width: f32) -> Element {
+pub(crate) fn skills_page(ui: &Ui, width: f32) -> Vec<crate::customize::Block> {
+    use crate::customize::{ready, Block};
     use quill_components::customize;
     let folder = crate::customize_folder(ui);
     let project = crate::is_project(&folder);
     let query = ui.customize_query.trim().to_lowercase();
     let page = ui.customize.clone().unwrap_or_default();
-    let mut column = vec![];
+    let mut column: Vec<Block> = vec![];
     if page.layer.is_none() {
-        column.extend(global_section(ui, true, width));
+        column.extend(global_section(ui, true, width).map(ready));
     }
+    // Each agent's skills that are on, looked up once rather than for every row.
+    let on: std::collections::HashMap<&str, std::collections::HashSet<&str>> = (ui.agents.iter())
+        .map(|a| {
+            let skills = ui
+                .extensions
+                .get(&a.id)
+                .into_iter()
+                .flat_map(|k| &k.list.skills);
+            let on = skills.filter(|s| s.state != "off").map(|s| s.name.as_str());
+            (a.id.as_str(), on.collect())
+        })
+        .collect();
     for agent in crate::customize::agents(ui) {
-        column.push(Element::spacer().size(None, Some(16.0)));
+        column.push(ready(Element::spacer().size(None, Some(16.0))));
         let known = ui.extensions.get(&agent.id).filter(|k| k.loaded);
-        column.push(customize::agent_heading(
+        column.push(ready(customize::agent_heading(
             icons::agent(agent.icon.as_deref()),
             &agent.name,
             known.map(|k| k.list.skills.len()),
             width,
-        ));
+        )));
         let Some(known) = known else {
-            column.push(customize::loading(
+            column.push(ready(customize::loading(
                 "cz:skills:loading",
                 "Looking for skills\u{2026}",
-            ));
+            )));
             continue;
         };
         if known.working.as_deref() == Some("") {
-            column.push(customize::loading(
+            column.push(ready(customize::loading(
                 "cz:skills:loading",
                 "Reading again\u{2026}",
-            ));
+            )));
         }
-        column.extend(customize_said(known));
+        column.extend(customize_said(known).map(ready));
         let mut found: Vec<&quill_model::Skill> = (known.list.skills.iter())
             .filter(|s| page.source.as_ref().is_none_or(|from| &s.source == from))
             .filter(|s| {
@@ -11030,27 +11012,24 @@ pub(crate) fn skills_page(ui: &Ui, width: f32) -> Element {
             if let Some(first) = title.get_mut(..1) {
                 first.make_ascii_uppercase();
             }
-            column.push(Element::spacer().size(None, Some(12.0)));
-            column.push(customize::section(&title, Some(group.len()), None, width));
+            column.push(ready(Element::spacer().size(None, Some(12.0))));
+            column.push(ready(customize::section(
+                &title,
+                Some(group.len()),
+                None,
+                width,
+            )));
             for skill in group {
                 let label = (known.list.skill_states.iter())
                     .find(|(state, _)| *state == skill.state)
                     .map_or(skill.state.clone(), |(_, label)| label.clone());
-                let first = known.list.skill_states.first().map(|(s, _)| s.as_str());
-                let end = if known.working.as_deref() == Some(skill.name.as_str()) {
-                    Some(
-                        limn::Spinner::new(format!("cz:wait:{}", skill.name), look::muted())
-                            .size(14.0)
-                            .render(),
-                    )
-                } else {
-                    (Some(skill.state.as_str()) != first).then(|| muted(label).font_size(SMALL))
-                };
-                let marks = agent_marks(
-                    ui,
-                    &format!("cz:marks:{}:{}", agent.id, skill.name),
-                    |other| skill_on_in(ui, other, &skill.name),
-                );
+                let working = known.working.as_deref() == Some(skill.name.as_str());
+                let marks: Vec<(&'static str, String)> = marked_agents(ui, |other| {
+                    on.get(other)
+                        .is_some_and(|names| names.contains(skill.name.as_str()))
+                })
+                .map(|a| (icons::agent(a.icon.as_deref()), a.name.clone()))
+                .collect();
                 // Its states, each a choice unless the agent or the folder keeps it as it is;
                 // some agents keep a skill's state per folder, others for the person.
                 let why = skill.locked.clone().or_else(|| {
@@ -11058,55 +11037,26 @@ pub(crate) fn skills_page(ui: &Ui, width: f32) -> Element {
                         "Choose a project folder to change a skill\u{2019}s state there.".to_owned()
                     })
                 });
-                let mut entries: Vec<limn::DropdownMenuEntry> = (known.list.skill_states.iter())
-                    .map(|(state, label)| {
-                        let item = limn::DropdownMenuItem::new(
-                            format!("ext:skill:{}:{}={state}", agent.id, skill.name),
-                            label.clone(),
-                        )
-                        .radio(*state == skill.state);
-                        if why.is_some() {
-                            item.disabled().into()
-                        } else {
-                            item.into()
-                        }
-                    })
-                    .collect();
-                if let Some(why) = &why {
-                    entries.push(limn::DropdownMenuEntry::Separator);
-                    entries.push(
-                        limn::DropdownMenuItem::new("cz:why", "")
-                            .description(why.clone())
-                            .disabled()
-                            .into(),
-                    );
-                }
                 let menu = format!("cz:more:{}:{}", agent.id, skill.name);
                 let open = ui.settings_menu.as_deref() == Some(menu.as_str());
-                // On or off from its row; its other states in its "⋯".
-                let first = known.list.skill_states.first().map(|(s, _)| s.as_str());
-                let switch = limn::Switch::new(
-                    format!("czp:skill-switch:{}:{}", agent.id, skill.name),
-                    Some(skill.state.as_str()) == first,
-                    look::palette(),
-                )
-                .size(limn::ControlSize::Dense)
-                .accessibility_label(format!("{} on", skill.name))
-                .enabled(why.is_none() && known.list.skill_states.len() > 1)
-                .render();
-                let opens = crate::customize::opener("skill", &agent.id, &skill.name);
-                column.push(customize::item(
-                    icons::SKILL,
-                    &skill.name,
-                    &format!(
-                        "from {} \u{b7} {}",
-                        skill.source,
-                        cut(&skill.description, 200)
-                    ),
-                    ends(ends(marks, end), Some(switch)),
-                    ends(Some(customize::more(&menu, entries, open)), Some(opens)),
-                    width,
-                ));
+                let (agent, skill, states) = (
+                    agent.id.clone(),
+                    (*skill).clone(),
+                    known.list.skill_states.clone(),
+                );
+                column.push(Box::new(move || {
+                    skill_row(
+                        &agent,
+                        &skill,
+                        &states,
+                        &label,
+                        working,
+                        &marks,
+                        why.as_deref(),
+                        open,
+                        width,
+                    )
+                }));
             }
         }
         if found.is_empty() {
@@ -11115,48 +11065,214 @@ pub(crate) fn skills_page(ui: &Ui, width: f32) -> Element {
             } else {
                 "No skills found.".to_owned()
             };
-            column.push(customize::empty(icons::SKILL, &words, width));
+            column.push(ready(customize::empty(icons::SKILL, &words, width)));
         }
     }
-    Element::column(column).size(Some(width), None)
+    column
+}
+
+/// A skill's row: its name and where it comes from, the agents it is also on, its switch,
+/// and its "⋯" with every state; built only when it comes into view.
+#[allow(clippy::too_many_arguments)]
+fn skill_row(
+    agent: &str,
+    skill: &quill_model::Skill,
+    states: &[(String, String)],
+    label: &str,
+    working: bool,
+    marks: &[(&'static str, String)],
+    why: Option<&str>,
+    open: bool,
+    width: f32,
+) -> Element {
+    use quill_components::customize;
+    let first = states.first().map(|(s, _)| s.as_str());
+    let end = if working {
+        Some(
+            limn::Spinner::new(format!("cz:wait:{}", skill.name), look::muted())
+                .size(14.0)
+                .render(),
+        )
+    } else {
+        (Some(skill.state.as_str()) != first).then(|| muted(label).font_size(SMALL))
+    };
+    // On in one agent, its section says it; the marks say where else it is.
+    let marks = (marks.len() > 1)
+        .then(|| customize::agent_marks(&format!("cz:marks:{agent}:{}", skill.name), marks));
+    let mut entries: Vec<limn::DropdownMenuEntry> = (states.iter())
+        .map(|(state, label)| {
+            let item = limn::DropdownMenuItem::new(
+                format!("ext:skill:{agent}:{}={state}", skill.name),
+                label.clone(),
+            )
+            .radio(*state == skill.state);
+            if why.is_some() {
+                item.disabled().into()
+            } else {
+                item.into()
+            }
+        })
+        .collect();
+    if let Some(why) = why {
+        entries.push(limn::DropdownMenuEntry::Separator);
+        entries.push(
+            limn::DropdownMenuItem::new("cz:why", "")
+                .description(why.to_owned())
+                .disabled()
+                .into(),
+        );
+    }
+    let menu = format!("cz:more:{agent}:{}", skill.name);
+    // On or off from its row; its other states in its "⋯".
+    let switch = limn::Switch::new(
+        format!("czp:skill-switch:{agent}:{}", skill.name),
+        Some(skill.state.as_str()) == first,
+        look::palette(),
+    )
+    .size(limn::ControlSize::Dense)
+    .accessibility_label(format!("{} on", skill.name))
+    .enabled(why.is_none() && states.len() > 1)
+    .render();
+    let opens = crate::customize::opener("skill", agent, &skill.name);
+    customize::item(
+        icons::SKILL,
+        &skill.name,
+        &format!(
+            "from {} \u{b7} {}",
+            skill.source,
+            cut(&skill.description, 200)
+        ),
+        ends(ends(marks, end), Some(switch)),
+        ends(Some(customize::more(&menu, entries, open)), Some(opens)),
+        width,
+    )
+}
+
+/// A plugin's row: its logo or icon, its version, marketplace and what it does, the agents
+/// it is also on, and its "⋯"; built only when it comes into view.
+#[allow(clippy::too_many_arguments)]
+fn plugin_row(
+    id: &str,
+    plugin: &quill_model::Plugin,
+    offer: Option<&str>,
+    working: bool,
+    kinds: quill_model::ExtensionKinds,
+    marks: &[(&'static str, String)],
+    logo: Option<&limn::RasterImage>,
+    open: bool,
+    width: f32,
+) -> Element {
+    use quill_components::customize;
+    let market = plugin.id.split_once('@').map_or("", |(_, m)| m);
+    let mut words = vec![];
+    words.extend(plugin.version.as_ref().map(|v| format!("v{v}")));
+    words.push(format!("from {market}"));
+    words.extend(offer.map(str::to_owned));
+    let end = if working {
+        Some(
+            limn::Spinner::new(format!("cz:wait:{}", plugin.id), look::muted())
+                .size(14.0)
+                .render(),
+        )
+    } else {
+        (!plugin.enabled).then(|| muted("Off").font_size(SMALL))
+    };
+    let mut entries: Vec<limn::DropdownMenuEntry> = vec![];
+    if kinds.update_plugins {
+        entries.push(
+            limn::DropdownMenuItem::new(format!("ext:update:{id}:{}", plugin.id), "Update")
+                .icon(icons::of(icons::RELOAD))
+                .into(),
+        );
+    }
+    if kinds.switch_plugins {
+        entries.push(
+            limn::DropdownMenuItem::new(
+                format!("ext:switch:{id}:{}", plugin.id),
+                if plugin.enabled {
+                    "Turn off"
+                } else {
+                    "Turn on"
+                },
+            )
+            .icon(icons::of(icons::PLUG))
+            .into(),
+        );
+    }
+    if !entries.is_empty() {
+        entries.push(limn::DropdownMenuEntry::Separator);
+    }
+    entries.push(
+        limn::DropdownMenuItem::new(format!("ext:remove:{id}:{}", plugin.id), "Remove")
+            .icon(icons::of(icons::CLOSE))
+            .destructive(look::failed())
+            .into(),
+    );
+    let menu = format!("cz:more:{id}:{}", plugin.id);
+    let words = words.join(" \u{b7} ");
+    let more = ends(
+        Some(customize::more(&menu, entries, open)),
+        Some(crate::customize::opener("plugin", id, &plugin.id)),
+    );
+    // On in one agent, its section says it; the marks say where else it is.
+    let marks = (marks.len() > 1)
+        .then(|| customize::agent_marks(&format!("cz:marks:{id}:{}", plugin.id), marks));
+    let end = ends(marks, end);
+    match logo {
+        Some(logo) => customize::item_logo(logo, &plugin.name, &words, end, more, width),
+        None => customize::item(icons::PLUGIN, &plugin.name, &words, end, more, width),
+    }
 }
 
 /// Plugins: Desktop's header (search, Discover, + Add ▾ for the marketplaces), its card while
 /// none is installed, then the project's plugins under its folder and the person's own, each
 /// with its "⋯" (update, turn off or on, remove).
-pub(crate) fn plugins_page(ui: &Ui, width: f32) -> Element {
+pub(crate) fn plugins_page(ui: &Ui, width: f32) -> Vec<crate::customize::Block> {
+    use crate::customize::{ready, Block};
     use quill_components::customize;
     let folder = crate::customize_folder(ui);
     let project = crate::is_project(&folder);
     let query = ui.customize_query.trim().to_lowercase();
-    let mut column = vec![];
+    let mut column: Vec<Block> = vec![];
+    // Each agent's plugins that are on, looked up once rather than for every row.
+    let on: std::collections::HashMap<&str, std::collections::HashSet<&str>> = (ui.agents.iter())
+        .map(|a| {
+            let plugins = ui
+                .extensions
+                .get(&a.id)
+                .into_iter()
+                .flat_map(|k| &k.list.plugins);
+            let on = plugins.filter(|p| p.enabled).map(|p| p.name.as_str());
+            (a.id.as_str(), on.collect())
+        })
+        .collect();
     for (at, agent) in crate::customize::agents(ui).into_iter().enumerate() {
         if at > 0 {
-            column.push(Element::spacer().size(None, Some(16.0)));
+            column.push(ready(Element::spacer().size(None, Some(16.0))));
         }
         let known = ui.extensions.get(&agent.id).filter(|k| k.loaded);
-        column.push(customize::agent_heading(
+        column.push(ready(customize::agent_heading(
             icons::agent(agent.icon.as_deref()),
             &agent.name,
             known.map(|k| k.list.plugins.len()),
             width,
-        ));
+        )));
         let Some(known) = known else {
-            column.push(customize::loading(
+            column.push(ready(customize::loading(
                 "cz:plugins:loading",
                 "Looking for plugins\u{2026}",
-            ));
+            )));
             continue;
         };
         if known.working.as_deref() == Some("") {
-            column.push(customize::loading(
+            column.push(ready(customize::loading(
                 "cz:plugins:loading",
                 "Reading again\u{2026}",
-            ));
+            )));
         }
-        column.extend(customize_said(known));
+        column.extend(customize_said(known).map(ready));
         if known.list.plugins.is_empty() {
-            column.push(customize::hero(
+            column.push(ready(customize::hero(
                 "Add your first plugins",
                 &format!(
                     "Give {} new skills, commands and tools with plugins. Add them from Discover, or from a marketplace.",
@@ -11170,74 +11286,40 @@ pub(crate) fn plugins_page(ui: &Ui, width: f32) -> Element {
                     true,
                 )),
                 width,
-            ));
+            )));
         }
         let shown =
             |p: &&quill_model::Plugin| query.is_empty() || p.name.to_lowercase().contains(&query);
-        let item = |plugin: &quill_model::Plugin| {
-            let offer = known.list.offers.iter().find(|o| o.id == plugin.id);
-            let market = plugin.id.split_once('@').map_or("", |(_, m)| m);
-            let mut words = vec![];
-            words.extend(plugin.version.as_ref().map(|v| format!("v{v}")));
-            words.push(format!("from {market}"));
-            words.extend(offer.map(|o| cut(&o.description, 160)));
-            let end = if known.working.as_deref() == Some(plugin.id.as_str()) {
-                Some(
-                    limn::Spinner::new(format!("cz:wait:{}", plugin.id), look::muted())
-                        .size(14.0)
-                        .render(),
-                )
-            } else {
-                (!plugin.enabled).then(|| muted("Off").font_size(SMALL))
-            };
-            let id = &agent.id;
+        let offers: std::collections::HashMap<&str, &str> = (known.list.offers.iter())
+            .map(|o| (o.id.as_str(), o.description.as_str()))
+            .collect();
+        let item = |plugin: &quill_model::Plugin| -> Block {
+            let offer = offers.get(plugin.id.as_str()).map(|d| cut(d, 160));
+            let working = known.working.as_deref() == Some(plugin.id.as_str());
             let kinds = known.list.kinds;
-            let mut entries: Vec<limn::DropdownMenuEntry> = vec![];
-            if kinds.update_plugins {
-                entries.push(
-                    limn::DropdownMenuItem::new(format!("ext:update:{id}:{}", plugin.id), "Update")
-                        .icon(icons::of(icons::RELOAD))
-                        .into(),
-                );
-            }
-            if kinds.switch_plugins {
-                entries.push(
-                    limn::DropdownMenuItem::new(
-                        format!("ext:switch:{id}:{}", plugin.id),
-                        if plugin.enabled {
-                            "Turn off"
-                        } else {
-                            "Turn on"
-                        },
-                    )
-                    .icon(icons::of(icons::PLUG))
-                    .into(),
-                );
-            }
-            if !entries.is_empty() {
-                entries.push(limn::DropdownMenuEntry::Separator);
-            }
-            entries.push(
-                limn::DropdownMenuItem::new(format!("ext:remove:{id}:{}", plugin.id), "Remove")
-                    .icon(icons::of(icons::CLOSE))
-                    .destructive(look::failed())
-                    .into(),
-            );
-            let menu = format!("cz:more:{id}:{}", plugin.id);
+            let menu = format!("cz:more:{}:{}", agent.id, plugin.id);
             let open = ui.settings_menu.as_deref() == Some(menu.as_str());
-            let words = words.join(" \u{b7} ");
-            let more = ends(
-                Some(customize::more(&menu, entries, open)),
-                Some(crate::customize::opener("plugin", id, &plugin.id)),
-            );
-            let marks = agent_marks(ui, &format!("cz:marks:{id}:{}", plugin.id), |other| {
-                plugin_on_in(ui, other, &plugin.name)
-            });
-            let end = ends(marks, end);
-            match logo_picture(ui, &format!("plugin:{}", plugin.name)) {
-                Some(logo) => customize::item_logo(logo, &plugin.name, &words, end, more, width),
-                None => customize::item(icons::PLUGIN, &plugin.name, &words, end, more, width),
-            }
+            let marks: Vec<(&'static str, String)> = marked_agents(ui, |other| {
+                on.get(other)
+                    .is_some_and(|names| names.contains(plugin.name.as_str()))
+            })
+            .map(|a| (icons::agent(a.icon.as_deref()), a.name.clone()))
+            .collect();
+            let logo = logo_picture(ui, &format!("plugin:{}", plugin.name)).cloned();
+            let (agent, plugin) = (agent.id.clone(), plugin.clone());
+            Box::new(move || {
+                plugin_row(
+                    &agent,
+                    &plugin,
+                    offer.as_deref(),
+                    working,
+                    kinds,
+                    &marks,
+                    logo.as_ref(),
+                    open,
+                    width,
+                )
+            })
         };
         let here: Vec<&quill_model::Plugin> = (known.list.plugins.iter())
             .filter(|p| p.scope != "user")
@@ -11248,36 +11330,36 @@ pub(crate) fn plugins_page(ui: &Ui, width: f32) -> Element {
             .filter(shown)
             .collect();
         if project {
-            column.push(Element::spacer().size(None, Some(16.0)));
-            column.push(customize::section(
+            column.push(ready(Element::spacer().size(None, Some(16.0))));
+            column.push(ready(customize::section(
                 "In this project",
                 Some(here.len()),
                 Some(customize::folder_chip(PICK_FOLDER, &folder_name(&folder))),
                 width,
-            ));
+            )));
             if here.is_empty() {
-                column.push(customize::empty(
+                column.push(ready(customize::empty(
                     icons::FOLDER,
                     "No plugins installed for this project yet.",
                     width,
-                ));
+                )));
             }
             column.extend(here.into_iter().map(item));
         }
         if !yours.is_empty() {
-            column.push(Element::spacer().size(None, Some(16.0)));
+            column.push(ready(Element::spacer().size(None, Some(16.0))));
             let trailing =
                 (!project).then(|| customize::folder_chip(PICK_FOLDER, "Choose a project"));
-            column.push(customize::section(
+            column.push(ready(customize::section(
                 "Your plugins",
                 Some(yours.len()),
                 trailing,
                 width,
-            ));
+            )));
             column.extend(yours.into_iter().map(item));
         }
     }
-    Element::column(column).size(Some(width), None)
+    column
 }
 
 /// Discover's directory, as Desktop's: a modal of its own over
