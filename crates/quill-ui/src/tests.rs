@@ -11261,6 +11261,8 @@ fn the_layer_chip_opens_its_menu_and_an_agent_chosen_filters_the_page() {
         tree.layout(window)
     };
     assert!(region(&frame, "czp:layer:=codex").is_none());
+    // Nothing else in the header: Settings is the sidebar's.
+    assert!(region(&frame, "czp:settings").is_none());
     let frame = press(&mut tree, &mut ui, &frame, "cz:layer");
     assert_eq!(ui.settings_menu.as_deref(), Some("cz:layer"));
     assert!(region(&frame, "czp:layer:=").is_some(), "All agents");

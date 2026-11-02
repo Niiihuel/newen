@@ -434,7 +434,7 @@ Customize deja de ser una columna de Ajustes. Lo que sigue es lo que la persona 
 ### 12.1 Cómo se llega y qué hay arriba
 
 - **Entrada:** el «Customize» de la barra lateral abre la página en el lugar de la conversación; la barra lateral queda. Elegir una sesión o «New» la cierra. Ajustes › General conserva «Customize…». El «+» del composer («Browse connectors», «Manage plugins», «Browse plugins») y `/skills` y `/plugin` también abren la página.
-- **Encabezado:** «Customize» en negrita de 22, el chip de la capa y, al final, el engranaje que abre Ajustes.
+- **Encabezado:** «Customize» en negrita de 22 y el chip de la capa, que abre su menú (All agents y cada agente). No hay engranaje: Ajustes se abre desde la barra lateral o con Ctrl+,.
 - **Pestañas:** Skills, Connectors y Plugins. Una pestaña en la que ningún agente mostrado participa se ve atenuada, no responde y dice por qué en su tooltip («Codex has no plugins quill can manage.»). El motivo sale de lo que declara cada adaptador (`AgentInfo.customize`: si tiene `plugins_query` y `servers_query`), no del nombre del agente.
 - **Migas:** dentro de un elemento, `Customize › Connectors › Your connectors › github`. Cada parte vuelve atrás. Son el `Breadcrumb` de limn.
 - **Barra de cada pestaña:** búsqueda; en Skills y Plugins, el chip de carpeta; «Discover»; y «+ Add ▾». El botón relleno es el que más sirve: Discover mientras la lista está vacía y Add después. En una ventana angosta la barra baja de línea.

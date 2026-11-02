@@ -129,11 +129,6 @@ pub fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             }
             return Some(open(ui, arg));
         }
-        "settings" => {
-            ui.settings_page = Some(view::SETTINGS_FIRST.into());
-            ui.settings_query.clear();
-            return Some(vec![Intent::MeasureStorage]);
-        }
         "crumb" => {
             let page = ui.customize.as_mut()?;
             page.detail = None;
@@ -549,7 +544,8 @@ pub fn page(store: &Store, ui: &Ui, width: f32, height: f32) -> Element {
     .size(Some(width), Some(height))
 }
 
-/// "Customize" in 22 bold, the layer it shows as a chip with its menu, and Settings' gear.
+/// "Customize" in 22 bold and the layer it shows as a chip with its menu; Settings is in the
+/// sidebar, not here.
 fn header(ui: &Ui, width: f32) -> Element {
     let layer = ui.customize.as_ref().and_then(|p| p.layer.clone());
     let chosen = layer
@@ -581,21 +577,12 @@ fn header(ui: &Ui, width: f32) -> Element {
         280.0,
         limn::PopoverPlacement::BottomStart,
     );
-    let gear = icon_tool(
-        "czp:settings",
-        icons::of(icons::SETTINGS),
-        "Settings",
-        28.0,
-        look::palette(),
-    );
     Element::row(vec![
         text("Customize")
             .font_family(FontFamily::SansBold)
             .font_size(22.0)
             .centered_y(),
         chip.centered_y(),
-        Element::spacer().flex(1.0),
-        gear,
     ])
     .gap(12.0)
     .size(Some(width), Some(32.0))
