@@ -1,9 +1,9 @@
 //! What's new (docs/UPDATES.md): a release's announcement in a card that opens on its picture,
 //! before restarting into it (from the sidebar's strip) and once after; the "What's new"
 //! button in the strip's place until this version's notes are opened; and the notes dialog,
-//! every version quill kept, newest first. The engine downloads, matches and keeps them; this
+//! every version Newen kept, newest first. The engine downloads, matches and keeps them; this
 //! shows what it reports. A clip plays muted and looped with Cisco's OpenH264, once the
-//! person let quill download it (asked once, in the card or in Settings); without it, or under
+//! person let Newen download it (asked once, in the card or in Settings); without it, or under
 //! reduced motion, the clip's picture stands alone.
 
 use crate::{updates, view, Store, Ui};

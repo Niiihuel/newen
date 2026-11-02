@@ -114,7 +114,7 @@ pub fn section(
     Element::row(row).gap(8.0).size(Some(width), Some(34.0))
 }
 
-/// An agent's heading over what its program lists, quill's own (Desktop has one agent): its
+/// An agent's heading over what its program lists, Newen's own (Desktop has one agent): its
 /// logo before its name, 18 px, and the count in a pill, over a hairline.
 pub fn agent_heading(logo: &'static str, name: &str, count: Option<usize>, width: f32) -> Element {
     let mut row = vec![

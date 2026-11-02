@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "quill's look, shared by its apps: tokens, icons and the system's fonts, over limn."
+description = "Newen's look, shared by its apps: tokens, icons and the system's fonts, over limn."
 publish = false
 
 [dependencies]

@@ -1,6 +1,6 @@
 [package]
 name = "newen-update"
-description = "quill's own updates: a signed manifest per release, its download and its installation"
+description = "Newen's own updates: a signed manifest per release, its download and its installation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,11 +9,11 @@ publish = false
 
 [features]
 default = []
-# The loopback file server of the tests and of the local test feed (tools/quill-release).
+# The loopback file server of the tests and of the local test feed (tools/newen-release).
 serve = []
 
 [dependencies]
-# Where the update log is kept (the data folder every quill crate uses).
+# Where the update log is kept (the data folder every Newen crate uses).
 newen-files = { path = "../newen-files" }
 # The manifest is a small JSON document, and the GitHub API's answer too.
 serde = { workspace = true }
@@ -21,14 +21,14 @@ serde_json.workspace = true
 # Versions compared as SemVer says (pre-releases included); already in the lock.
 semver = { version = "1.0.28", features = ["serde"] }
 # The manifest's Ed25519 signature, checked strictly (weak keys refused); the one signature
-# format quill uses.
+# format Newen uses.
 ed25519-dalek = { version = "2.2", default-features = false }
 # The artifact's digest, and the signature and key as text.
 sha2 = "0.10"
 base64 = "0.22"
-# HTTPS requests, on the update thread: the engine's own client (quill-engine's logos use it too).
+# HTTPS requests, on the update thread: the engine's own client (newen-engine's logos use it too).
 ureq = "3"
-# Each file of a bundle is published gzipped (files.rs); already compiled into quill (png, ureq).
+# Each file of a bundle is published gzipped (files.rs); already compiled into Newen (png, ureq).
 flate2 = "1.1"
 
 [dev-dependencies]

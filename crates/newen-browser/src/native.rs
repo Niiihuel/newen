@@ -1,10 +1,10 @@
-//! Chromium inside quill's own process (docs/browser.md, "Native view"): each tab draws
+//! Chromium inside Newen's own process (docs/browser.md, "Native view"): each tab draws
 //! without a window of its own, and its frames reach the pane's surface as they are painted,
 //! with no screencast in between. The engine drives it over the same DevTools stream it
 //! drives a headless Chromium with: a message for a page goes to that browser's own
 //! DevTools, and the few browser-wide commands it sends (contexts, tabs, downloads) are
 //! answered with CEF's own. Nothing of it is a window, so nothing of the platform's windows
-//! (X11, Wayland, their scales and cursors) is involved, and quill draws over a page as over
+//! (X11, Wayland, their scales and cursors) is involved, and Newen draws over a page as over
 //! anything else of its own. Given the window's GPU, a tab's paints stay on it: Chromium's
 //! buffer (a dmabuf) is copied into a texture of the window's device, which it draws as is.
 
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// DevTools ids quill's own calls use, far above the engine's, which count from 1.
+/// DevTools ids Newen's own calls use, far above the engine's, which count from 1.
 const OWN_IDS: i64 = 1 << 30;
 /// The program run again as one of Chromium's own processes (`--type=renderer`…): it runs
 /// that process and gives its exit code. Call it first thing in `main`.
@@ -36,7 +36,7 @@ pub fn subprocess() -> Option<i32> {
     ))
 }
 
-/// Chromium running in quill's process, and what it shows in quill's window.
+/// Chromium running in Newen's process, and what it shows in Newen's window.
 #[derive(Clone)]
 pub struct Native {
     shared: Arc<Shared>,
@@ -166,7 +166,7 @@ impl Native {
                 } else {
                     "the window's GPU cannot import dmabufs (not Vulkan?)"
                 };
-                eprintln!("quill: the browser's frames go through the CPU: {why}");
+                eprintln!("newen: the browser's frames go through the CPU: {why}");
             }
             x11 && imports
         });
@@ -197,7 +197,7 @@ impl Native {
             settings.locales_dir_path =
                 CefString::from(dir.join("locales").to_string_lossy().as_ref());
         }
-        let mut app = QuillApp::new(if gpu.is_some() { "x11" } else { "headless" });
+        let mut app = NewenApp::new(if gpu.is_some() { "x11" } else { "headless" });
         if initialize(
             Some(args.as_main_args()),
             Some(&settings),
@@ -482,7 +482,7 @@ fn copy(
 }
 
 /// Where CEF's files are: `NEWEN_CEF_DIR`; else a release's, beside the program or, in a
-/// Windows installation, in `versions\{version}` beside it (docs/UPDATES.md); else the CEF quill
+/// Windows installation, in `versions\{version}` beside it (docs/UPDATES.md); else the CEF Newen
 /// was built with. `None` in a macOS bundle, whose framework holds them.
 fn cef_dir() -> Option<PathBuf> {
     // quill's name for it too, which a person's launcher may set (a NixOS wrapper, say).
@@ -520,15 +520,15 @@ fn userns_restricted() -> bool {
             .is_ok_and(|value| value.trim() == "1");
     if restricted {
         eprintln!(
-            "quill: the browser's pages run without Chromium's sandbox: AppArmor restricts \
+            "newen: the browser's pages run without Chromium's sandbox: AppArmor restricts \
              user namespaces here (kernel.apparmor_restrict_unprivileged_userns = 1)"
         );
     }
     restricted
 }
 
-/// Make libcef reachable before its first call. On Windows quill.exe loads libcef.dll late
-/// (`/DELAYLOAD`, apps/quill/build.rs), so an installation's `versions\{version}` can hold it;
+/// Make libcef reachable before its first call. On Windows newen.exe loads libcef.dll late
+/// (`/DELAYLOAD`, apps/newen/build.rs), so an installation's `versions\{version}` can hold it;
 /// on Linux an rpath of `$ORIGIN` finds it beside the program, and macOS loads its framework in
 /// `start`.
 fn library() {
@@ -552,7 +552,7 @@ pub type Wake = Arc<dyn Fn(Duration) + Send + Sync>;
 
 static PUMP: Mutex<Option<Wake>> = Mutex::new(None);
 
-/// macOS: CEF is a framework inside quill.app, loaded at run time, and Chromium's processes
+/// macOS: CEF is a framework inside Newen.app, loaded at run time, and Chromium's processes
 /// run as the bundle's helper apps (`helper`); the application object must answer Chromium's
 /// `CrAppProtocol`, which winit's does not, so its class is taught to.
 #[cfg(target_os = "macos")]
@@ -570,7 +570,7 @@ mod mac {
             .is_some_and(|contents| contents.join("Frameworks").join(FRAMEWORK).is_dir())
     }
 
-    /// Load the framework of the bundle quill runs from, once; it stays loaded.
+    /// Load the framework of the bundle Newen runs from, once; it stays loaded.
     pub fn load() -> Result<(), String> {
         static LOADED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
         LOADED
@@ -664,7 +664,7 @@ mod mac {
     }
 }
 
-/// The process of one of quill.app's helper apps (macOS), which Chromium runs its renderers,
+/// The process of one of Newen.app's helper apps (macOS), which Chromium runs its renderers,
 /// GPU and utility processes as: its exit code.
 #[cfg(target_os = "macos")]
 pub fn helper() -> i32 {
@@ -997,7 +997,7 @@ impl Shared {
         host.send_dev_tools_message(Some(call.to_string().as_bytes()));
     }
 
-    /// What a page's DevTools sent: quill's own answers are kept, the rest goes to the engine
+    /// What a page's DevTools sent: Newen's own answers are kept, the rest goes to the engine
     /// as from the page's session.
     fn heard(self: &Arc<Self>, token: u64, raw: &[u8]) {
         let Ok(mut message) = serde_json::from_slice::<Value>(raw) else {
@@ -1132,7 +1132,7 @@ impl Shared {
             Ok(paint) => paint,
             Err(error) => {
                 if !gpu.failed.swap(true, Ordering::Relaxed) {
-                    eprintln!("quill: a page's frame could not be imported: {error}");
+                    eprintln!("newen: a page's frame could not be imported: {error}");
                 }
                 return;
             }
@@ -1365,13 +1365,13 @@ impl Write for Outgoing {
 
 // `platform`: Chromium's display platform; `headless` paints on the CPU only.
 wrap_app! {
-    struct QuillApp {
+    struct NewenApp {
         platform: &'static str,
     }
 
     impl App {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-            Some(QuillProcess::new())
+            Some(NewenProcess::new())
         }
 
         fn on_before_command_line_processing(&self, kind: Option<&CefString>, line: Option<&mut CommandLine>) {
@@ -1400,7 +1400,7 @@ wrap_app! {
 
 // Only macOS's external pump asks for work to be scheduled (`Native::pump_with`).
 wrap_browser_process_handler! {
-    struct QuillProcess;
+    struct NewenProcess;
 
     impl BrowserProcessHandler {
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {

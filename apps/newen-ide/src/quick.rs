@@ -1,4 +1,4 @@
-//! Opening a file by its name, as nvim's pickers do: quill-files' `best`, and `:` to go to a
+//! Opening a file by its name, as nvim's pickers do: newen-files' `best`, and `:` to go to a
 //! line of the file on screen.
 
 use std::path::PathBuf;

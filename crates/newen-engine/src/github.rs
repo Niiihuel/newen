@@ -1,6 +1,6 @@
 //! GitHub as the person's identity, through the `gh` program: who is signed in, the browser
 //! sign-in, the sign-out and the contribution calendar. `gh` keeps the credentials in the
-//! system's keychain; quill holds none and needs no HTTP client for the API. Only the avatar
+//! system's keychain; Newen holds none and needs no HTTP client for the API. Only the avatar
 //! is fetched, from avatars.githubusercontent.com, the way logos.rs fetches images. Everything
 //! runs off the UI's thread. The calendar's validation is ported from openADE
 //! (`github_contributions.rs`, the user's own code, MIT OR Apache-2.0).
@@ -77,7 +77,7 @@ fn gh(args: &[&str]) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        // Never prompt, color or check for updates: the output is read by quill.
+        // Never prompt, color or check for updates: the output is read by Newen.
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -273,7 +273,7 @@ pub(crate) fn connect(avatars: Option<PathBuf>, ui: Sink, open_page: bool) -> Un
         "--scopes",
         "read:user",
     ]);
-    // quill opens the page itself.
+    // Newen opens the page itself.
     command.env("GH_BROWSER", "true").env("BROWSER", "true");
     tokio::spawn(async move {
         let failed = |message: String| ui(Event::GithubFailed { message });

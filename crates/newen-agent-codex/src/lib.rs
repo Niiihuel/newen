@@ -1,4 +1,4 @@
-//! quill's adapter for the OpenAI Codex CLI: `codex app-server`, JSON-RPC over stdio, one
+//! Newen's adapter for the OpenAI Codex CLI: `codex app-server`, JSON-RPC over stdio, one
 //! message a line (docs/codex.md). Shapes are the ones captured from codex-cli 0.163.0
 //! (`fixtures/0.163.0/<scenario>.jsonl:<line>`); what no capture shows is marked as inferred.
 //!
@@ -24,7 +24,7 @@ mod mux;
 const REMOTE: &str = "remote";
 
 /// The permission presets, as Codex's own are (docs/codex.md "Modos de permiso"). Each is an
-/// approval policy and a sandbox; quill always sends both, because a thread that is not told
+/// approval policy and a sandbox; Newen always sends both, because a thread that is not told
 /// takes the person's own Codex config, which may be `danger-full-access`
 /// (resume.jsonl, first attempt in docs/codex.md "Fase 1"). Plan is Codex's Plan collaboration
 /// mode in the read-only sandbox (plan-mode.jsonl).
@@ -62,7 +62,7 @@ fn thread_config(spec: &SessionSpec) -> Value {
     config
 }
 
-/// Notifications that carry nothing quill shows; not `Unknown`, not events.
+/// Notifications that carry nothing Newen shows; not `Unknown`, not events.
 const QUIET: [&str; 17] = [
     "mcpServer/startupStatus/updated",
     "thread/status/changed",
@@ -73,7 +73,7 @@ const QUIET: [&str; 17] = [
     "warning",
     "deprecationNotice",
     "serverRequest/resolved",
-    // The turn's accumulated git diff; quill attributes files itself (docs/codex.md).
+    // The turn's accumulated git diff; Newen attributes files itself (docs/codex.md).
     "turn/diff/updated",
     "item/commandExecution/outputDelta",
     "item/fileChange/outputDelta",
@@ -81,7 +81,7 @@ const QUIET: [&str; 17] = [
     "thread/compacted",
     // The plan comes whole in its item, which is drawn once it ends (plan-mode.jsonl:73-120).
     "item/plan/delta",
-    // The settings a `turn/start` set, told back (plan-mode.jsonl:17); quill sent them.
+    // The settings a `turn/start` set, told back (plan-mode.jsonl:17); Newen sent them.
     "thread/settings/updated",
     // The moderation's flags of a turn, and where another client stopped reading.
     "turn/moderationMetadata",
@@ -96,7 +96,7 @@ enum Pending {
     Thread,
     /// `turn/start`.
     Turn,
-    /// `turn/steer`, for the quill request it carries.
+    /// `turn/steer`, for the Newen request it carries.
     Steer(String),
     /// Events to tell once the answer comes: the only way a command without its own answer
     /// can be told back (`encode` returns lines, not events).
@@ -173,7 +173,7 @@ pub struct Codex {
     version: String,
     thread: Option<String>,
     turn: Option<String>,
-    /// The quill requests of the running turn, steers included.
+    /// The Newen requests of the running turn, steers included.
     turn_requests: Vec<String>,
     /// Requests of `turn/start`s whose `turn/started` has not come.
     starting: Vec<String>,
@@ -184,13 +184,13 @@ pub struct Codex {
     effort: Option<String>,
     models: Vec<ModelInfo>,
     thread_model: Option<String>,
-    /// The thread's effort when quill chose none (the person's Codex config).
+    /// The thread's effort when Newen chose none (the person's Codex config).
     thread_effort: Option<String>,
     plan: Option<String>,
     /// Each tool call's name and input, to ask about it and to close it.
     calls: HashMap<String, (String, Value)>,
     approvals: HashMap<String, Approval>,
-    /// quill's own tools Codex called and waits on, by the request's key: its JSON-RPC id.
+    /// Newen's own tools Codex called and waits on, by the request's key: its JSON-RPC id.
     host_calls: HashMap<String, Value>,
     auth_failed: bool,
     plan_updates: u64,
@@ -229,13 +229,13 @@ impl Codex {
     }
 
     /// `thread/start`, or `thread/resume` / `thread/fork` of the spec's session. A resumed
-    /// thread asks for no turns: quill keeps its own history, and the full one is deprecated
+    /// thread asks for no turns: Newen keeps its own history, and the full one is deprecated
     /// (resume.jsonl:41).
     fn open_thread(&mut self) -> String {
         let resume = self.spec.lock().unwrap().resume.clone();
         let mut params = self.thread_params();
         let Some(id) = resume else {
-            // quill's own tools, as tools the client declares; a resumed thread keeps the ones
+            // Newen's own tools, as tools the client declares; a resumed thread keeps the ones
             // it started with (inferred from the schema: only `thread/start` takes them).
             params["dynamicTools"] = newen_agent::HOST_TOOLS
                 .iter()
@@ -259,7 +259,7 @@ impl Codex {
         self.request(method, params, Pending::Thread)
     }
 
-    /// A request of quill's own, by a name that keeps the numbers of the others.
+    /// A request of Newen's own, by a name that keeps the numbers of the others.
     fn named(&mut self, id: &str, method: &str, params: Value, pending: Pending) -> String {
         self.pending.insert(id.to_owned(), pending);
         json!({ "id": id, "method": method, "params": params }).to_string()
@@ -394,7 +394,7 @@ impl Codex {
         let result = &msg["result"];
         match pending {
             Pending::Init => {
-                // "quill/0.163.0 (Linux; …)": the client's name, then the CLI's version
+                // "newen/0.163.0 (Linux; …)": the client's name, then the CLI's version
                 // (simple.jsonl:2).
                 self.version = text(&result["userAgent"])
                     .split_whitespace()
@@ -516,7 +516,7 @@ impl Codex {
         match method {
             "turn/started" => {
                 self.turn = p["turn"]["id"].as_str().map(str::to_owned);
-                // No turn of quill's on its way: another client started it.
+                // No turn of Newen's on its way: another client started it.
                 self.remote_turn = self.starting.is_empty();
                 self.turn_requests = std::mem::take(&mut self.starting);
                 events.push(AgentEvent::Running {
@@ -597,7 +597,7 @@ impl Codex {
                 events.push(remote_state(&p["status"]))
             }
             "remoteControl/status/changed" => {}
-            // Another client (the phone) answered it: quill's card goes.
+            // Another client (the phone) answered it: Newen's card goes.
             "serverRequest/resolved" => {
                 let id = key(&p["requestId"]);
                 if self.approvals.remove(&id).is_some() {
@@ -848,7 +848,7 @@ impl Codex {
         let status = text(&item["status"]);
         let failed = status == "failed" || status == "declined";
         match item["type"].as_str() {
-            // A turn started on the phone: its words are the person's, which quill has not seen.
+            // A turn started on the phone: its words are the person's, which Newen has not seen.
             Some("userMessage") if done && self.remote_turn => {
                 let words: Vec<&str> = (item["content"].as_array().into_iter().flatten())
                     .filter_map(|input| input["text"].as_str())
@@ -858,7 +858,7 @@ impl Codex {
                     text: words.join("\n"),
                 });
             }
-            // quill has the person's words already, a steer's too.
+            // Newen has the person's words already, a steer's too.
             Some("userMessage") => {}
             Some("agentMessage") if done && !text(&item["text"]).is_empty() => {
                 out.events.push(AgentEvent::Text {
@@ -1066,7 +1066,7 @@ impl Codex {
                     out,
                 );
             }
-            // A tool the client declared to Codex: quill's own are named as Claude's adapter
+            // A tool the client declared to Codex: Newen's own are named as Claude's adapter
             // serves them, `sessions__<tool>`, which the transcript draws as its own.
             Some("dynamicToolCall") => {
                 let (mut name, input) = (text(&item["tool"]), item["arguments"].clone());
@@ -1104,7 +1104,7 @@ impl Codex {
         out: &mut Decoded,
     ) {
         let key = key(id);
-        // One of quill's own tools: the engine runs it and answers with `HostToolResult`
+        // One of Newen's own tools: the engine runs it and answers with `HostToolResult`
         // (inferred from the schema: `DynamicToolCallParams`, no capture).
         if method == "item/tool/call" {
             self.host_calls.insert(key.clone(), id.clone());
@@ -1165,7 +1165,7 @@ impl Codex {
                     vec![],
                 )
             }
-            // Dialogs, permission grants and token refreshes: quill offers none, and Codex
+            // Dialogs, permission grants and token refreshes: Newen offers none, and Codex
             // waits for an answer.
             _ => {
                 out.events.push(AgentEvent::Unknown(msg.clone()));
@@ -1203,7 +1203,7 @@ impl AgentAdapter for Codex {
 
     /// A server's tool takes an approval mode, and a server a list of tools it hides
     /// (`mcp_servers.<server>.tools.<tool>.approval_mode`, `disabled_tools`; inferred from
-    /// Codex's config types, newer than the version quill was tested with).
+    /// Codex's config types, newer than the version Newen was tested with).
     fn tool_policies(&self) -> Vec<newen_agent::ToolPolicy> {
         newen_agent::ToolPolicy::ALL.to_vec()
     }
@@ -1234,7 +1234,7 @@ impl AgentAdapter for Codex {
         mode == FULL_ACCESS
     }
 
-    // The presets of docs/codex.md "Modos de permiso" and Plan, in quill's words for them.
+    // The presets of docs/codex.md "Modos de permiso" and Plan, in Newen's words for them.
     fn modes(&self) -> Vec<ModeWords> {
         use newen_agent::ModeTone::*;
         let w = |id: &str, label: &str, about: &str, tone, listed| ModeWords {
@@ -1305,7 +1305,7 @@ impl AgentAdapter for Codex {
     // Sign-in is the CLI's own `codex login` (docs/codex.md, codex-rs/cli/src/login.rs): it
     // prints the page address on stderr and waits for the browser to come back to a local
     // server, so it never needs a code. `--device-auth` prints a code the person must type
-    // on the page, which quill has no place to show, so it is not offered.
+    // on the page, which Newen has no place to show, so it is not offered.
     fn sign_in_methods(&self) -> Choices {
         vec![("chatgpt".into(), "ChatGPT account".into())]
     }
@@ -1480,7 +1480,7 @@ impl AgentAdapter for Codex {
                     effort: spec.effort,
                     ..Self::default()
                 };
-                // quill says who it is (docs/codex.md); the answer starts the rest.
+                // Newen says who it is (docs/codex.md); the answer starts the rest.
                 // Remote Control and the host's own tools are in the experimental API.
                 vec![self.request(
                     "initialize",
@@ -1578,7 +1578,7 @@ impl AgentAdapter for Codex {
                 json!({ "name": name, "threadId": self.thread }),
                 Pending::McpSignIn(name),
             )],
-            // Process-wide and runtime-only: quill keeps the person's choice in its own settings
+            // Process-wide and runtime-only: Newen keeps the person's choice in its own settings
             // (docs/remote-control.md §3).
             AgentCommand::Remote { on, .. } => {
                 let method = if on {
@@ -1594,9 +1594,9 @@ impl AgentAdapter for Codex {
                 Pending::Pairing,
             )],
             // `Rewind` restores files, which Codex does not do (`thread/revert` leaves them): they
-            // stay quill's snapshots, so `capabilities.rewind` is false. The conversation goes
+            // stay Newen's snapshots, so `capabilities.rewind` is false. The conversation goes
             // back through `thread/fork` with `lastTurnId` (docs/codex.md). No context
-            // breakdown, MCP switch or credentials to forget that quill drives yet.
+            // breakdown, MCP switch or credentials to forget that Newen drives yet.
             _ => vec![],
         }
     }
@@ -1722,7 +1722,7 @@ fn context_categories(last: &Value, window: u64) -> Vec<ContextCategory> {
     categories
 }
 
-/// Who quill says it is to Codex: itself, never another client (AGENTS.md).
+/// Who Newen says it is to Codex: itself, never another client (AGENTS.md).
 /// Whether a phone can reach the app-server, from Codex's status (`disabled`, `connecting`,
 /// `connected`, `errored`).
 fn remote_state(status: &Value) -> AgentEvent {
@@ -1812,7 +1812,7 @@ fn shell_line(command: &str) -> String {
     line
 }
 
-/// A command as the tool quill already draws: a lone read, listing or search is a step of its
+/// A command as the tool Newen already draws: a lone read, listing or search is a step of its
 /// own; anything else, or a chain of actions, is a Bash step (plan.jsonl:69, deny-patch.jsonl:53).
 fn command_tool(item: &Value) -> (&'static str, Value) {
     let actions = item["commandActions"]

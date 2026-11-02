@@ -1,5 +1,5 @@
-//! The "/" palette over the composer, as Desktop's slash menu. Its rows are quill's own commands
-//! that map to what quill already does, then the agent's commands; a pick either inserts
+//! The "/" palette over the composer, as Desktop's slash menu. Its rows are Newen's own commands
+//! that map to what Newen already does, then the agent's commands; a pick either inserts
 //! `/name ` for the agent or runs the existing action.
 
 use crate::{view, Session, Store, Ui};
@@ -13,7 +13,7 @@ const MAX_QUERY: usize = 50;
 /// The rows as the list shows them: the id a pick reports, and the item.
 type Row = (String, SuggestionItem);
 
-/// One of quill's own commands: its name and aliases, Desktop's words for it, and the action
+/// One of Newen's own commands: its name and aliases, Desktop's words for it, and the action
 /// the existing button or menu item reports.
 struct Own {
     name: &'static str,
@@ -88,7 +88,7 @@ fn rank<S: AsRef<str>>(
     n.find(&q).map(|at| (4, Some(at..at + q.len())))
 }
 
-/// quill's own commands whose action exists now: the ones that need a session only show once
+/// Newen's own commands whose action exists now: the ones that need a session only show once
 /// one is selected, and plan only when the agent offers that mode.
 fn own_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<Own> {
     let own = |name, aliases, description, action: &str| Own {
@@ -185,7 +185,7 @@ fn own_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<Own> {
     commands
 }
 
-/// The rows for `query`, in Desktop's order: quill's commands, then the agent's, each kept in
+/// The rows for `query`, in Desktop's order: Newen's commands, then the agent's, each kept in
 /// that order among equal ranks.
 fn rows(store: &Store, ui: &Ui, query: &str) -> Vec<Row> {
     let session = ui.selected.and_then(|id| store.session(id));
@@ -197,7 +197,7 @@ fn rows(store: &Store, ui: &Ui, query: &str) -> Vec<Row> {
     let mut found: Vec<(u8, Row)> = Vec::new();
     for command in &own {
         if let Some((rank, matched)) = rank(query, command.name, command.aliases) {
-            let id = format!("slash:quill:{}", command.action);
+            let id = format!("slash:newen:{}", command.action);
             let item = SuggestionItem::new(id.clone(), command.name)
                 .description(command.description)
                 .matched(matched.into_iter().collect());
@@ -206,7 +206,7 @@ fn rows(store: &Store, ui: &Ui, query: &str) -> Vec<Row> {
     }
     for command in agent {
         if let Some((rank, matched)) = rank(query, &command.name, command.aliases.as_slice()) {
-            // A name quill also has goes to the agent, and says so; Desktop's rows show no
+            // A name Newen also has goes to the agent, and says so; Desktop's rows show no
             // argument hints.
             let custom = own.iter().any(|o| o.name == command.name);
             let id = format!("slash:agent:{}", command.name);
@@ -406,7 +406,7 @@ pub fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ui.slash_dismissed = slash_query(&ui.prompt).map(|(at, _)| at);
         return Some(vec![]);
     }
-    let row = ["slash:agent:", "slash:quill:", "slash:option:"]
+    let row = ["slash:agent:", "slash:newen:", "slash:option:"]
         .iter()
         .any(|prefix| id.starts_with(prefix));
     let (at, _) = open(store, ui)?;
@@ -424,14 +424,14 @@ fn pick(store: &Store, ui: &mut Ui, at: usize, id: &str) -> Vec<Intent> {
     ui.slash_dismissed = None;
     let name = id
         .strip_prefix("slash:agent:")
-        .or_else(|| id.strip_prefix("slash:quill:argument:"));
+        .or_else(|| id.strip_prefix("slash:newen:argument:"));
     if let Some(name) = name {
         ui.restore_prompt = Some(format!("{head}/{name} "));
         return vec![];
     }
     let Some(click) = id
         .strip_prefix("slash:option:")
-        .or_else(|| id.strip_prefix("slash:quill:"))
+        .or_else(|| id.strip_prefix("slash:newen:"))
     else {
         return vec![];
     };

@@ -1,8 +1,8 @@
 //! The step after the welcome: choose System, Light or Dark before anything else is shown.
-//! quill's own design (inferred): Desktop has no theme step; its Settings › General has an
+//! Newen's own design (inferred): Desktop has no theme step; its Settings › General has an
 //! icon-only System / Light / Dark control, default System, and no onboarding step for it.
 //! The cards here are miniature
-//! quill windows, so the choice is seen, not read; choosing applies live, as Settings does.
+//! Newen windows, so the choice is seen, not read; choosing applies live, as Settings does.
 
 use crate::Ui;
 use limn::{Color, Element, Point, Size};
@@ -74,7 +74,7 @@ pub fn view(ui: &Ui, window: Size) -> Element {
         centered(text("Choose your look").font_size(22.0)),
         Element::spacer().size(None, Some(8.0)),
         // Centered by hand: limn's text has no alignment, so each line is its own.
-        centered(muted("Pick how quill looks.")),
+        centered(muted("Pick how Newen looks.")),
         centered(muted("You can change it any time in Settings.")),
         Element::spacer().size(None, Some(32.0)),
         centered(Element::row(cards.into()).gap(16.0)),
@@ -152,7 +152,7 @@ fn bar(width: f32, height: f32, color: Color) -> Element {
         .radius(height / 2.0)
 }
 
-/// A small quill window: the sidebar strip, a message and a reply, the composer.
+/// A small Newen window: the sidebar strip, a message and a reply, the composer.
 fn mini(t: &Tones) -> Element {
     let sidebar = Element::column(vec![
         bar(22.0, 5.0, t.ink),

@@ -1,5 +1,5 @@
 // Turns captures/<scenario>-<epoch>/ into anonymized fixtures:
-// crates/quill-agent-claude/fixtures/<cli-version>/<scenario>.jsonl (docs/plan.md Q1.2).
+// crates/newen-agent-claude/fixtures/<cli-version>/<scenario>.jsonl (docs/plan.md Q1.2).
 // Usage: node scripts/fixtures.mjs captures/<dir>... [--name <fixture>]
 import fs from "node:fs";
 import path from "node:path";

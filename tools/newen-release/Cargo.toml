@@ -1,6 +1,6 @@
 [package]
 name = "newen-release"
-description = "The owner's tools for quill's updates: the release signer and a local test feed; never part of the app"
+description = "The owner's tools for Newen's updates: the release signer and a local test feed; never part of the app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,12 +20,12 @@ path = "src/test_feed.rs"
 # The manifest, its signature and versions as the app reads them; `serve` is the loopback file
 # server the test feed answers from.
 newen-update = { path = "../../crates/newen-update", features = ["serve"] }
-# The same versions quill-update builds: nothing new is compiled.
+# The same versions newen-update builds: nothing new is compiled.
 serde_json.workspace = true
 ed25519-dalek = { version = "2.2", default-features = false }
 sha2 = "0.10"
 base64 = "0.22"
-# Checks that each new blob unpacks to its file; the version quill-update uses.
+# Checks that each new blob unpacks to its file; the version newen-update uses.
 flate2 = "1.1"
 # The new signing key, and the test feed's throwaway one.
 getrandom = "0.3"

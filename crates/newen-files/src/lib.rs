@@ -1,4 +1,4 @@
-//! A folder's files as quill's trees list and change them, on the disk: run beside the
+//! A folder's files as Newen's trees list and change them, on the disk: run beside the
 //! window, never on it. What the tree may do, after openADE's: every target is a plain path
 //! under the folder, links are never followed, nothing is overwritten, and deleting only
 //! moves to the desktop's trash. Messages are for the person, without absolute paths.
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn a_bare_program_name_is_found_through_path_and_pathext() {
-        let root = std::env::temp_dir().join(format!("quill-files-path-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-files-path-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let (first, second) = (root.join("first"), root.join("second"));
         fs::create_dir_all(&first).unwrap();
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn files_are_made_renamed_and_trashed_without_overwriting_or_leaving_the_folder() {
-        let root = std::env::temp_dir().join(format!("quill-ide-files-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-ide-files-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let op = |op| run(&root, &op, kept);

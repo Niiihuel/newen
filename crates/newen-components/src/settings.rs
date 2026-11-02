@@ -1,4 +1,4 @@
-//! Settings as quill draws them, Desktop's: a modal with a column of
+//! Settings as Newen draws them, Desktop's: a modal with a column of
 //! pages under a search, and each page's settings in titled groups of rows. The app says
 //! which pages there are and what each setting's control is.
 
@@ -45,7 +45,7 @@ pub struct SettingsPage {
 }
 
 /// A select of Settings: its choice and a chevron at the end of a row, as Desktop's, opening
-/// quill's menu. `set:{name}` opens it and each choice reports `set:{name}={value}`.
+/// Newen's menu. `set:{name}` opens it and each choice reports `set:{name}={value}`.
 pub fn select(name: &str, choices: &[(String, String)], current: &str, open: bool) -> Element {
     let label = choices
         .iter()

@@ -1,4 +1,4 @@
-//! Finding in a folder, for quill-ide's pickers and the Files pane's filter: its files as git
+//! Finding in a folder, for newen-ide's pickers and the Files pane's filter: its files as git
 //! sees them, a file by the letters of its path as nvim's pickers do, and the lines that hold
 //! some words as ripgrep would, case told apart only when the words have a capital.
 
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn the_top_level_lists_folders_then_files_without_git() {
-        let root = std::env::temp_dir().join(format!("quill-files-top-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-files-top-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for dir in [".git", "src", "docs"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn lines_are_found_in_every_file_and_a_capital_tells_case_apart() {
-        let root = std::env::temp_dir().join(format!("quill-files-grep-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-files-grep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/a.rs"), "fn main() {}\n    Main();\n").unwrap();

@@ -1889,7 +1889,7 @@ fn a_changed_file_folds_and_opens_in_files_or_elsewhere() {
     // Its menu lists the session's places for this file and line.
     click(&store, &mut ui, "open-file-menu:src/a.rs");
     assert_eq!(ui.diff_menu.as_deref(), Some("src/a.rs"));
-    // In quill, it opens in the Files pane, the caret going to its line once read.
+    // In Newen, it opens in the Files pane, the caret going to its line once read.
     assert!(
         click(&store, &mut ui, "doc:open-at:4:src/a.rs").contains(&Intent::ReadFile {
             session: 1,
@@ -3898,7 +3898,7 @@ fn a_wider_pane_widens_the_column_and_panes_stack_and_expand_on_springs() {
 #[test]
 fn the_pr_request_names_the_branch_prefix() {
     assert!(
-        pr_request(false, newen_model::Settings::default().branch_prefix()).contains("`quill/`")
+        pr_request(false, newen_model::Settings::default().branch_prefix()).contains("`newen/`")
     );
     let settings = newen_model::Settings {
         branch_prefix: "team/".into(),
@@ -4226,10 +4226,10 @@ fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
     assert_eq!(notice(&store, &ui, &waiting, false), None);
 }
 
-/// A finished task asks for quill's "done" sound and a question for its "ask" one, as
+/// A finished task asks for Newen's "done" sound and a question for its "ask" one, as
 /// Settings has it; none while the person looks at that very session in the focused window.
 #[test]
-fn a_banner_asks_for_quills_own_sound_per_settings_and_not_in_view() {
+fn a_banner_asks_for_newens_own_sound_per_settings_and_not_in_view() {
     use newen_model::Chime;
     let (store, mut ui) = store_with_session();
     let finished = Event::Agent {
@@ -4346,8 +4346,8 @@ fn slash_rows_rank_exact_then_prefix_then_substring() {
             "slash:agent:compact",
             "slash:agent:cp-tool",
             "slash:agent:cpx",
-            // quill's "mcp" holds the substring too, and comes first among equal ranks.
-            "slash:quill:plus:connectors:manage",
+            // Newen's "mcp" holds the substring too, and comes first among equal ranks.
+            "slash:newen:plus:connectors:manage",
             "slash:agent:ship-cp",
         ]
     );
@@ -4361,7 +4361,7 @@ fn slash_typed_mo_lists_model_first() {
     let ids = slash_ids(&store, &ui);
     assert_eq!(
         ids.first().map(String::as_str),
-        Some("slash:quill:argument:model")
+        Some("slash:newen:argument:model")
     );
 }
 
@@ -4574,7 +4574,7 @@ fn slash_with_no_match_leaves_enter_to_send() {
 }
 
 #[test]
-fn slash_quill_command_clears_the_token_and_runs_its_action() {
+fn slash_newen_command_clears_the_token_and_runs_its_action() {
     let (store, mut ui) = store_with_session();
     ui.prompt = "/diff".into();
     assert_eq!(
@@ -5863,7 +5863,7 @@ fn the_updates_line_says_when_it_last_checked_or_why_that_failed() {
     });
     assert_eq!(
         updates::description(&ui),
-        "quill is up to date \u{b7} Checked just now"
+        "Newen is up to date \u{b7} Checked just now"
     );
     ui.applied(&Event::Update(newen_model::UpdateState::Downloading {
         version: "0.1.9".into(),
@@ -6361,7 +6361,7 @@ fn the_foot_shows_the_github_identity_and_its_menu_connects_or_disconnects() {
     let (store, mut ui) = store_with_session();
     ui.skip_welcome = true;
     ui.name = Some("Grace Hopper".into());
-    // Not asked or not connected: quill's user, and the menu offers to connect.
+    // Not asked or not connected: Newen's user, and the menu offers to connect.
     let (initials, name, avatar) = crate::github::identity(&ui);
     assert_eq!(
         (initials.as_str(), name.as_str(), avatar),
@@ -6369,7 +6369,7 @@ fn the_foot_shows_the_github_identity_and_its_menu_connects_or_disconnects() {
     );
     ui.github.state = Some(newen_model::GithubState::SignedOut);
     assert_eq!(crate::github::menu_action(&ui).1, "Connect GitHub");
-    // Connected: GitHub's name, whatever the quill user is called.
+    // Connected: GitHub's name, whatever the Newen user is called.
     ui.github.state = Some(github_in());
     let (initials, name, _) = crate::github::identity(&ui);
     assert_eq!((initials.as_str(), name.as_str()), ("AL", "Ada Lovelace"));
@@ -8101,7 +8101,7 @@ fn an_agents_skills_join_its_slash_menu_and_its_mcp_switch_waits_for_a_capabilit
 fn remote_control_is_offered_by_agents_that_have_it_and_shows_the_link() {
     let (mut store, mut ui) = store_with_session();
     ui.prompt = "/rc".into();
-    assert!(!slash_ids(&store, &ui).contains(&"slash:quill:remote:command".into()));
+    assert!(!slash_ids(&store, &ui).contains(&"slash:newen:remote:command".into()));
     agent(
         &mut store,
         AgentEvent::Ready {
@@ -8115,7 +8115,7 @@ fn remote_control_is_offered_by_agents_that_have_it_and_shows_the_link() {
     );
     assert_eq!(
         slash_ids(&store, &ui).first().map(String::as_str),
-        Some("slash:quill:remote:command")
+        Some("slash:newen:remote:command")
     );
     // The switch asks the agent, named as the session is, and shows it connecting.
     assert_eq!(
@@ -10278,7 +10278,7 @@ fn the_announcement_card_keeps_its_parts_apart_at_small_and_large_windows() {
         a.body =
             "Open any page next to the session and point the agent at it. ".repeat(5)[..280].into();
         a.bullets = vec![
-            "Pages keep their sign-ins across sessions and restarts of quill. "
+            "Pages keep their sign-ins across sessions and restarts of Newen. "
                 .repeat(3)[..160]
                 .into();
             5
@@ -10707,7 +10707,7 @@ fn a_tab_no_agent_shown_has_is_off_with_why() {
     click(&store, &mut ui, "czp:layer:=codex");
     assert_eq!(
         customize::tab_off(&ui, view::SETTINGS_PLUGINS).as_deref(),
-        Some("Codex has no plugins quill can manage.")
+        Some("Codex has no plugins Newen can manage.")
     );
     assert!(click(&store, &mut ui, "czp:tab:plugins").is_empty());
     assert_eq!(ui.customize.as_ref().unwrap().tab, view::SETTINGS_SKILLS);
@@ -10845,7 +10845,7 @@ fn a_connectors_tool_permissions_are_kept_after_the_last_change() {
 }
 
 /// Skills: on and off from its row, in the agent's first and last states; a file chosen to
-/// upload, to replace one, or to save one into; and deleting quill's own.
+/// upload, to replace one, or to save one into; and deleting Newen's own.
 #[test]
 fn skills_switch_upload_replace_download_and_delete() {
     use newen_model::{ExtensionOp, GlobalOp};

@@ -1,4 +1,4 @@
-//! quill's own sounds, made here from two soft tones each: no recording and nobody else's
+//! Newen's own sounds, made here from two soft tones each: no recording and nobody else's
 //! sound. A finished task falls a fourth to rest (G5 then D5); a session that needs the person
 //! rises a fourth, as a question (D5 then G5). Each tone is a sine with a little of its
 //! second and third harmonics, a 6 ms rise and a 90 ms decay; the second starts 120 ms after
@@ -100,8 +100,8 @@ pub(crate) fn players(wav: &[u8], path: &std::path::Path) -> Vec<Run> {
 pub(crate) async fn play(chime: Chime) {
     let wav = wav(chime);
     let path = std::env::temp_dir().join(match chime {
-        Chime::Done => "quill-done.wav",
-        Chime::Ask => "quill-ask.wav",
+        Chime::Done => "newen-done.wav",
+        Chime::Ask => "newen-ask.wav",
     });
     // A few kilobytes, on an engine thread, not the window's.
     if cfg!(target_os = "macos") && std::fs::write(&path, &wav).is_err() {

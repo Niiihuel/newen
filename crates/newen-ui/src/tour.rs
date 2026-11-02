@@ -1,5 +1,5 @@
 //! The tour after the welcome: a bubble on each of six of the window's own controls, in order.
-//! Its steps and look are quill's own; Desktop's onboarding was not captured, so nothing here
+//! Its steps and look are Newen's own; Desktop's onboarding was not captured, so nothing here
 //! is copied from it (inferred). The host passes a step whose control is not laid out, so the
 //! tour never waits on a control that is not there.
 
@@ -71,7 +71,7 @@ const STEPS: [Step; 6] = [
     Step {
         targets: &[ACCOUNT_MENU],
         title: "Settings and updates",
-        body: "Agents, connectors and plugins, appearance, and quill's updates.",
+        body: "Agents, connectors and plugins, appearance, and Newen's updates.",
         side: CoachSide::Right,
         align: CoachAlign::End,
     },
@@ -159,7 +159,7 @@ pub(crate) fn layer(ui: &Ui, root: Element, palette: ComponentPalette) -> Elemen
             tour_step
         })
         .collect();
-    // The labels are quill's own: limn's defaults are Spanish.
+    // The labels are Newen's own: limn's defaults are Spanish.
     Tour::new(root, TOUR, steps, ui.tour, palette)
         .coach_mark()
         .counter(format!("{} of {}", ui.tour.unwrap_or(0) + 1, STEPS.len()))

@@ -1,11 +1,11 @@
-//! Code as quill's apps show it: the editor in quill's inks and rail, a Markdown file rendered
+//! Code as Newen's apps show it: the editor in Newen's inks and rail, a Markdown file rendered
 //! in a reading column, and what tells the two apart.
 
 use crate::look;
 use limn::{EditorController, Element};
 use std::path::Path;
 
-/// The inks code is drawn in: types, properties and functions apart, as quill-ide's.
+/// The inks code is drawn in: types, properties and functions apart, as newen-ide's.
 pub fn syntax_colors() -> limn::CodeSyntaxColors {
     limn::CodeSyntaxColors {
         text: look::palette().text,
@@ -26,7 +26,7 @@ pub fn is_markdown(path: &Path) -> bool {
     )
 }
 
-/// The editor for `path`: its language, quill's inks and quill's rail, arrows and thumb, as
+/// The editor for `path`: its language, Newen's inks and Newen's rail, arrows and thumb, as
 /// every other scroll surface. The host sets the rest (size, keys, what it marks).
 pub fn editor(id: impl Into<String>, editor: &EditorController, path: &Path) -> limn::CodeEditor {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -46,7 +46,7 @@ pub struct PreviewIds {
     pub diagram: &'static str,
 }
 
-/// A Markdown file rendered, in a reading column, as quill renders its conversation: code in
+/// A Markdown file rendered, in a reading column, as Newen renders its conversation: code in
 /// its inks, diagrams drawn (`diagram_sources` shown as source), links that act.
 pub fn markdown_preview(
     text: &str,

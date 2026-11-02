@@ -1,4 +1,4 @@
-//! quill's durable record (spec.md D5): the events each session showed, in order, as JSON.
+//! Newen's durable record (spec.md D5): the events each session showed, in order, as JSON.
 //! The engine appends an event before the UI sees it and replays them all at start.
 //! Streaming deltas are left out; the finished text they make is kept.
 
@@ -41,7 +41,7 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// Keep `value` under `key`: a small fact quill must not forget, such as the version whose
+    /// Keep `value` under `key`: a small fact Newen must not forget, such as the version whose
     /// announcement was shown.
     pub fn mark(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn a_logo_is_quills_own_and_never_kept_in_a_session() {
+    fn a_logo_is_newens_own_and_never_kept_in_a_session() {
         let logo = Event::Logo {
             key: "mcp:figma".into(),
             light: None,
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn a_mark_is_kept_across_openings_and_replaced_by_the_next() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("quill.db");
+        let path = dir.path().join("newen.db");
         let store = Store::open(&path).unwrap();
         assert_eq!(store.marked("whats_new_seen").unwrap(), None);
         store.mark("whats_new_seen", "0.1.7").unwrap();

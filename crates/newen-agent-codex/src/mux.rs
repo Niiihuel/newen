@@ -1,4 +1,4 @@
-//! One `codex app-server` for all of quill's Codex sessions, so a phone paired over Remote
+//! One `codex app-server` for all of Newen's Codex sessions, so a phone paired over Remote
 //! Control reaches every one of them (docs/remote-control.md §3). Each session's adapter speaks
 //! to the process as if it were its own; this shares the one connection among them.
 //!
@@ -110,7 +110,7 @@ impl Mux for CodexMux {
             }
         }
         match params["threadId"].as_str() {
-            // A thread no session holds (another client's) is not quill's to show.
+            // A thread no session holds (another client's) is not Newen's to show.
             Some(thread) => (self.threads.get(thread))
                 .map(|&session| vec![(session, line.to_owned())])
                 .unwrap_or_default(),

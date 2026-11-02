@@ -10,7 +10,7 @@ use newen_agent::{
 };
 use serde_json::{json, Value};
 
-/// The ids of the app-server requests that are quill's own: names, not numbers, so the
+/// The ids of the app-server requests that are Newen's own: names, not numbers, so the
 /// numbers of the requests every capture holds stay the ones the adapter writes.
 pub(crate) const SKILLS_ID: &str = "newen-skills";
 pub(crate) const MCP_STATUS_ID: &str = "newen-mcp-status";
@@ -366,7 +366,7 @@ pub(crate) fn failed(stdout: &str) -> Option<String> {
 }
 
 /// A skill is named `$name` in a message to Codex (inferred from its TUI: the explicit
-/// mention), where quill's `/` menu writes `/name`; a first word like a skill's name is turned,
+/// mention), where Newen's `/` menu writes `/name`; a first word like a skill's name is turned,
 /// so a path or a sentence is not.
 pub(crate) fn skill_mention(text: &str) -> String {
     let Some(rest) = text.strip_prefix('/') else {

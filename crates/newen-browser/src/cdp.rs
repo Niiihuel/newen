@@ -53,7 +53,7 @@ impl Cdp {
         let pending: Pending = Arc::default();
         let (out, mut lines) = mpsc::unbounded_channel::<Vec<u8>>();
         std::thread::Builder::new()
-            .name("quill-cdp-write".into())
+            .name("newen-cdp-write".into())
             .spawn(move || {
                 while let Some(mut line) = lines.blocking_recv() {
                     line.push(0);
@@ -67,7 +67,7 @@ impl Cdp {
         let alive = Arc::new(AtomicBool::new(true));
         let living = alive.clone();
         std::thread::Builder::new()
-            .name("quill-cdp-read".into())
+            .name("newen-cdp-read".into())
             .spawn(move || {
                 let mut buffer = Vec::new();
                 let mut chunk = vec![0; 1 << 16];

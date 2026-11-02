@@ -1,4 +1,4 @@
-//! The contract between quill's engine and one coding-agent CLI (docs/agents.md).
+//! The contract between Newen's engine and one coding-agent CLI (docs/agents.md).
 //!
 //! An adapter is pure: it never opens a process or a socket. The engine starts what
 //! [`AgentAdapter::launch`] describes, writes what [`AgentAdapter::encode`] returns, and
@@ -106,7 +106,7 @@ pub struct SessionExtras {
     pub skills: bool,
 }
 
-/// One of an agent's own settings, as its adapter declares it, which quill's Settings shows on
+/// One of an agent's own settings, as its adapter declares it, which Newen's Settings shows on
 /// the agent's page and hands back in [`SessionSpec::options`]: a switch (`"true"` or
 /// `"false"`) without choices, else one of `choices`, each with how to say it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -424,7 +424,7 @@ pub struct NewServer {
 }
 
 /// Whether the person is signed in to an agent, as its own program reports it: the account
-/// belongs to the program, quill keeps none of it.
+/// belongs to the program, Newen keeps none of it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AuthState {
     SignedIn {
@@ -454,7 +454,7 @@ pub struct ProgramRun {
 
 /// Where a server's definition came from: the person's own settings, the project's, the
 /// person's for this project only, the organization's, a plugin, the person's account, the
-/// app running the agent (quill's own tools), or somewhere else.
+/// app running the agent (Newen's own tools), or somewhere else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum McpSource {
     User,
@@ -464,7 +464,7 @@ pub enum McpSource {
     Plugin,
     Account,
     App,
-    /// quill's own "All agents" layer, which the engine marks (adapters never do).
+    /// Newen's own "All agents" layer, which the engine marks (adapters never do).
     Global,
     Other,
 }
@@ -572,7 +572,7 @@ pub struct PlanLimits {
     pub weekly: Option<UsageWindow>,
 }
 
-/// Something the agent said, in quill's terms.
+/// Something the agent said, in Newen's terms.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
     /// The agent answered `Start`: who it is and what it can do.
@@ -585,7 +585,7 @@ pub enum AgentEvent {
     Session {
         id: String,
     },
-    /// A request began running (`request` is the id quill sent with the prompt).
+    /// A request began running (`request` is the id Newen sent with the prompt).
     Running {
         requests: Vec<String>,
     },
@@ -622,7 +622,7 @@ pub enum AgentEvent {
     },
     /// Work the agent runs beside its turn began: a helper agent, a command in the
     /// background. `call` is the tool call that started it; `kind` says what it is in
-    /// quill's words: `agent`, `command`, `workflow`, `monitor` or `task`.
+    /// Newen's words: `agent`, `command`, `workflow`, `monitor` or `task`.
     TaskStarted {
         id: String,
         call: Option<String>,
@@ -662,7 +662,7 @@ pub enum AgentEvent {
         /// The sources of a web search (`None` for other tools).
         #[serde(default)]
         web: Option<WebSearchRun>,
-        /// The pictures it gave back, as the engine kept them: files under quill's data folder.
+        /// The pictures it gave back, as the engine kept them: files under Newen's data folder.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<PathBuf>,
         /// The same pictures as the adapter read them, for the engine to keep; never stored.
@@ -670,7 +670,7 @@ pub enum AgentEvent {
         inline: Vec<ToolContent>,
     },
     /// A tool ended. `prompt` is the agent's own id of the request that caused it, the
-    /// same for every tool of that request; the engine ties it to quill's request id.
+    /// same for every tool of that request; the engine ties it to Newen's request id.
     ToolDone {
         call: String,
         prompt: Option<String>,
@@ -701,7 +701,7 @@ pub enum AgentEvent {
         usage: Usage,
         error: Option<String>,
     },
-    /// The answer to a command quill sent, by the id `encode` gave it.
+    /// The answer to a command Newen sent, by the id `encode` gave it.
     Reply {
         id: String,
         ok: bool,
@@ -748,7 +748,7 @@ pub enum AgentEvent {
     PromptSuggestion {
         text: String,
     },
-    /// The agent calls one of quill's own tools, the ones that start and propose other
+    /// The agent calls one of Newen's own tools, the ones that start and propose other
     /// sessions ([`HOST_TOOLS`]). The engine answers with [`AgentCommand::HostToolResult`].
     HostTool {
         id: String,
@@ -782,7 +782,7 @@ pub struct PromptImage {
     pub data: Vec<u8>,
 }
 
-/// Something quill asks of the agent.
+/// Something Newen asks of the agent.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AgentCommand {
     Start,
@@ -868,7 +868,7 @@ impl ToolContent {
     }
 }
 
-/// quill's own tools, which an adapter offers its agent where the agent can take tools from
+/// Newen's own tools, which an adapter offers its agent where the agent can take tools from
 /// its host: a tool's name, what it is for, and the JSON schema of its input.
 pub const HOST_TOOLS: [(&str, &str, &str); 6] = [
     (
@@ -929,10 +929,10 @@ pub trait AgentAdapter: Send {
     fn id(&self) -> AgentId;
     /// The agent's name for people, as Settings lists it.
     fn name(&self) -> &'static str;
-    /// The versions of the agent's program quill was tested with.
+    /// The versions of the agent's program Newen was tested with.
     fn tested(&self) -> &'static [&'static str];
     fn launch(&self, spec: &SessionSpec) -> LaunchPlan;
-    /// What the session can be given from quill's "All agents" layer.
+    /// What the session can be given from Newen's "All agents" layer.
     fn session_extras(&self) -> SessionExtras {
         SessionExtras::default()
     }
@@ -1013,7 +1013,7 @@ pub trait AgentAdapter: Send {
     fn server_oauth_client(&self) -> bool {
         false
     }
-    /// The agent's own logo, an SVG drawn in `currentColor`, to name it where quill lists agents (AGENTS.md).
+    /// The agent's own logo, an SVG drawn in `currentColor`, to name it where Newen lists agents (AGENTS.md).
     fn icon(&self) -> Option<&'static str> {
         None
     }
@@ -1056,7 +1056,7 @@ pub trait AgentAdapter: Send {
         None
     }
     /// Whether the sign-in page shows a code the person pastes back; off, the browser returns
-    /// to the program by itself and quill only waits.
+    /// to the program by itself and Newen only waits.
     fn login_takes_code(&self) -> bool {
         true
     }
@@ -1084,7 +1084,7 @@ pub trait AgentAdapter: Send {
 
 /// The built-in browser's tools (docs/browser.md §4), served like [`HOST_TOOLS`] by a server of
 /// their own, `browser`. Their meaning follows Claude Desktop's browser tools;
-/// the words are quill's.
+/// the words are Newen's.
 /// One dev server of a project's launch file (Claude Desktop's format):
 /// `{"version": "0.0.1", "configurations": [{"name", "runtimeExecutable", "runtimeArgs",
 /// "port", "url"?}]}`.
@@ -1199,12 +1199,12 @@ pub const BROWSER_TOOLS: [(&str, &str, &str); 19] = [
     ),
 ];
 
-/// How an agent is asked to work with the user, in words of quill's own: ask before work that
+/// How an agent is asked to work with the user, in words of Newen's own: ask before work that
 /// leaves room for doubt, plan what is large, keep a task list, check, and close with what is
 /// left. Every adapter hands it to its agent.
 pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When the user wants something done after another conversation finishes, call wait_for_session instead of promising to wait: nothing of that conversation reaches you otherwise. Then end your turn.\n- When the user wants work run by another agent CLI, start it with start_session's `agent`, by an id list_sessions gives: it is a session of that agent, which reports back to you.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
 
-/// What an agent is told of the built-in browser, in words of quill's own.
+/// What an agent is told of the built-in browser, in words of Newen's own.
 pub const BROWSER_GUIDE: &str = "# Built-in browser\n\nYou have a browser built into this app, with the browser tools (navigate, read_page, find, get_page_text, form_input, computer, javascript_tool, read_console_messages, read_network_requests, tabs_*). The user sees its tab beside the conversation and can use it too. Use it to check what you build for the web: start the dev server, open it, read the console and the page, act on it, and take a screenshot to show the result instead of asking the user to look. Prefer read_page and find to pick elements by ref; use screenshots to see layout. Local addresses are always allowed; other sites may ask the user first. Do not use it for what a plain fetch answers.";
 
 /// One entry of an agent's task list.

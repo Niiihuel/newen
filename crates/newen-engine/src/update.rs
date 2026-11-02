@@ -1,4 +1,4 @@
-//! quill's own updates, off the interface's thread (docs/UPDATES.md). Checks keep to the wall
+//! Newen's own updates, off the interface's thread (docs/UPDATES.md). Checks keep to the wall
 //! clock: about every four hours (give or take 15 %), one at the start only when the last is
 //! over an hour old, and one when the window comes back or the computer wakes and the last is
 //! that old. A newer version found downloads when Settings allow (a mandatory one always) and
@@ -50,21 +50,21 @@ const KEYS: &str = "update_keys";
 /// How many installed versions' notes are kept.
 const KEPT_NOTES: usize = 10;
 
-/// Shows a system notification (title, body); a click on it brings quill up.
+/// Shows a system notification (title, body); a click on it brings Newen up.
 pub type Notifier = Arc<dyn Fn(String, String) + Send + Sync>;
 
-/// quill's update state, shared by the router and the tasks that move it along.
+/// Newen's update state, shared by the router and the tasks that move it along.
 #[derive(Clone)]
 pub struct Updates {
     shared: Arc<Mutex<Shared>>,
     ui: Sink,
-    /// Whether quill looks for its own updates at all (`Config::updates`).
+    /// Whether Newen looks for its own updates at all (`Config::updates`).
     enabled: bool,
     /// The record, where what the person saw of the notes is marked.
     store: Arc<Mutex<newen_store::Store>>,
     /// Where each release's notes and media are kept, a folder per version; `None` keeps none.
     notes: Option<PathBuf>,
-    /// The installation this copy runs from; `None` for one quill does not update.
+    /// The installation this copy runs from; `None` for one Newen does not update.
     install: Option<Install>,
     /// The update log (`Config::update_log`); `None` keeps none.
     log: Option<PathBuf>,
@@ -111,8 +111,8 @@ impl Shared {
 }
 
 impl Updates {
-    /// Starts the checks, unless this copy is not one quill updates: a build from source or a
-    /// binary `quill --install` never placed reports that and checks nothing. Off, nothing is
+    /// Starts the checks, unless this copy is not one Newen updates: a build from source or a
+    /// binary `newen --install` never placed reports that and checks nothing. Off, nothing is
     /// reported or checked.
     pub fn start(
         ui: Sink,
@@ -275,7 +275,7 @@ impl Updates {
         };
         let activated = match &staged {
             Some(staged) => install.activate_staged(staged, &running()),
-            // Another start of quill activated it already: restart into it.
+            // Another start of Newen activated it already: restart into it.
             None => Ok(install.program()),
         };
         match activated {
@@ -351,7 +351,7 @@ impl Updates {
 
     /// A line in the update log (and on stderr).
     fn log(&self, line: impl AsRef<str>) {
-        eprintln!("quill: update: {}", line.as_ref());
+        eprintln!("newen: update: {}", line.as_ref());
         if let Some(path) = &self.log {
             newen_update::log::write(path, line.as_ref());
         }
@@ -384,7 +384,7 @@ impl Updates {
             let store = self.store.lock().unwrap();
             if sequence.is_none_or(|kept| manifest.sequence > kept) {
                 if let Err(error) = store.mark(SEQUENCE, &manifest.sequence.to_string()) {
-                    eprintln!("quill: update: {error}");
+                    eprintln!("newen: update: {error}");
                 }
             }
             if let Some(keys) = &manifest.rotated {
@@ -406,7 +406,7 @@ impl Updates {
         let at = now();
         // Kept before the interface hears of it.
         if let Err(error) = (self.store.lock().unwrap()).mark(LAST_CHECK, &at.to_string()) {
-            eprintln!("quill: update: {error}");
+            eprintln!("newen: update: {error}");
         }
         {
             let mut shared = self.shared.lock().unwrap();
@@ -695,8 +695,8 @@ impl Updates {
         };
         self.log(format!("notify: {version} is ready ({why})"));
         (self.notify)(
-            "quill".into(),
-            format!("quill {version} is ready. Restart quill to update."),
+            "Newen".into(),
+            format!("Newen {version} is ready. Restart Newen to update."),
         );
     }
 }
@@ -776,7 +776,7 @@ impl Updates {
         tokio::task::spawn_blocking(move || {
             let kept = (updates.store.lock().unwrap()).mark(OPENED, newen_update::VERSION);
             if let Err(error) = kept {
-                eprintln!("quill: what's new: {error}");
+                eprintln!("newen: what's new: {error}");
             }
             updates.tell_whats_new(false);
         });
@@ -794,13 +794,13 @@ impl Updates {
             let json = serde_json::to_vec_pretty(&release_notes(notes, media))
                 .map_err(|_| Error::Manifest)?;
             std::fs::write(folder.join(NOTES), json).map_err(|error| {
-                eprintln!("quill: what's new: {error}");
+                eprintln!("newen: what's new: {error}");
                 Error::Disk
             })
         });
         match kept {
             Ok(()) => self.tell_whats_new(false),
-            Err(error) => eprintln!("quill: what's new: not kept: {error}"),
+            Err(error) => eprintln!("newen: what's new: not kept: {error}"),
         }
     }
 
@@ -832,7 +832,7 @@ impl Updates {
             && current.is_some_and(|(_, notes)| notes.announcement.is_some())
             && marked(SEEN).as_deref() != Some(newen_update::VERSION)
             && (store.mark(SEEN, newen_update::VERSION))
-                .inspect_err(|error| eprintln!("quill: what's new: {error}"))
+                .inspect_err(|error| eprintln!("newen: what's new: {error}"))
                 .is_ok();
         drop(store);
         (self.ui)(Event::WhatsNew(WhatsNew {
@@ -900,14 +900,14 @@ fn cut(text: &str, most: usize) -> String {
     if text.chars().count() <= most {
         return text.to_owned();
     }
-    eprintln!("quill: what's new: cut to {most} characters: {text}");
+    eprintln!("newen: what's new: cut to {most} characters: {text}");
     let mut cut: String = text.chars().take(most - 1).collect();
     cut.push('\u{2026}');
     cut
 }
 
-/// Why this copy is not one quill updates: built from source (under a `target` folder, or with
-/// `NEWEN_NO_UPDATE` set), or never placed by `quill --install`.
+/// Why this copy is not one Newen updates: built from source (under a `target` folder, or with
+/// `NEWEN_NO_UPDATE` set), or never placed by `newen --install`.
 fn unmanaged() -> Option<UpdateState> {
     if newen_files::env("NO_UPDATE").is_some_and(|value| !value.is_empty()) {
         return Some(UpdateState::FromSource);

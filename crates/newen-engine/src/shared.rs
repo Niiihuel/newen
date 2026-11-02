@@ -1,6 +1,6 @@
 //! One process an agent's sessions share, when its adapter splits it among them
 //! (`AgentAdapter::mux`, docs/remote-control.md §3). It starts with the first session that
-//! needs it, lives while quill runs, and starts again after it ends. Each session reads and
+//! needs it, lives while Newen runs, and starts again after it ends. Each session reads and
 //! writes through it as if the process were its own: its lines carry the session's launch
 //! (`generation`), as an own process's do.
 
@@ -104,7 +104,7 @@ async fn run(
                     match spawn(adapter.as_ref(), &spec, program.as_deref(), &env, launch, said.clone()) {
                         Ok(started) => process = Some(started),
                         Err(error) => {
-                            eprintln!("quill: {error}");
+                            eprintln!("newen: {error}");
                             if let Op::Attach { generation, inbox, .. } = op {
                                 let _ = inbox.send(Input::Exited { generation, code: Some(127) });
                             }

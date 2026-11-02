@@ -1,6 +1,6 @@
 //! The Files pane, as Desktop's file tile: the session's folder as
 //! a tree (`newen_components::tree`, in Desktop's look) beside the files open in it, in tabs,
-//! each in quill's editor or, for Markdown, rendered. The engine lists the folder, runs its file
+//! each in Newen's editor or, for Markdown, rendered. The engine lists the folder, runs its file
 //! operations and reads and writes its files (`Intent::ListDir`, `FileOp`, `ReadFile`,
 //! `WriteFile`).
 

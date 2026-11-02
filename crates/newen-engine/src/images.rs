@@ -46,7 +46,7 @@ pub fn attach(paths: &[PathBuf]) -> (Vec<PromptImage>, Vec<&'static str>) {
 }
 
 /// The pictures a tool gave back, written to `dir` in the order they came, under names of
-/// quill's own (what the agent sent never names a file). One that is not base64 of a PNG,
+/// Newen's own (what the agent sent never names a file). One that is not base64 of a PNG,
 /// JPEG, GIF or WebP, or cannot be written, is let go.
 pub fn keep(dir: &Path, pictures: Vec<ToolContent>) -> Vec<PathBuf> {
     use base64::Engine;
@@ -109,7 +109,7 @@ fn prepare(bytes: Vec<u8>) -> Result<PromptImage, &'static str> {
 }
 
 /// JPEG at 2000 px at most, stepping quality down and size down by ×0.75 (to 500 px) until it
-/// fits `target` bytes; the last resort is 500 px at quality 70. quill uses JPEG where Desktop
+/// fits `target` bytes; the last resort is 500 px at quality 70. Newen uses JPEG where Desktop
 /// prefers WebP: the `image` crate encodes only lossless WebP, which is larger (inferred).
 fn resize_to_fit(decoded: &DynamicImage, target: usize) -> Option<Vec<u8>> {
     let longest = decoded.width().max(decoded.height());
@@ -168,7 +168,7 @@ mod tests {
     }
 
     fn write(name: &str, bytes: &[u8]) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("quill-images-{}-{name}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("newen-images-{}-{name}", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         path
     }
@@ -213,7 +213,7 @@ mod tests {
             mime: "image/png".into(),
             data,
         };
-        let dir = std::env::temp_dir().join(format!("quill-keep-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-keep-{}", std::process::id()));
         let shot = png(4, 3, false);
         let kept = keep(
             &dir,
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_reported_as_failed_never_sent() {
-        let (images, notices) = attach(&[PathBuf::from("/nonexistent/quill/image.png")]);
+        let (images, notices) = attach(&[PathBuf::from("/nonexistent/newen/image.png")]);
         assert!(images.is_empty());
         assert_eq!(notices, vec![FAILED]);
     }

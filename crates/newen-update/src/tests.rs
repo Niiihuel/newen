@@ -98,7 +98,7 @@ fn keys_are_base64_and_a_weak_one_is_refused() {
 
 #[test]
 fn a_newer_release_is_offered_mandatory_only_below_its_minimum() {
-    let linux = artifact("https://example.org/quill-x86_64-linux.tar.gz", b"quill");
+    let linux = artifact("https://example.org/newen-x86_64-linux.tar.gz", b"newen");
     let release = manifest("1.2.0", Some("1.1.0"), &[("linux-x86_64", linux.clone())]);
     let offered = |installed: &str| offer(release.clone(), &version(installed), "linux-x86_64");
     assert_eq!(offered("1.2.0"), None);
@@ -123,7 +123,7 @@ fn a_newer_release_is_offered_mandatory_only_below_its_minimum() {
     // An artifact that could not be trusted to install counts as none.
     for bad in [
         Artifact {
-            url: "http://example.org/quill.tar.gz".into(),
+            url: "http://example.org/newen.tar.gz".into(),
             ..linux.clone()
         },
         Artifact {
@@ -352,11 +352,11 @@ fn program(size: usize) -> Vec<u8> {
     (0..size).map(|at| (at * 31 % 251) as u8).collect()
 }
 
-/// A server with `body` at `/quill.gz`, and its artifact.
+/// A server with `body` at `/newen.gz`, and its artifact.
 fn artifact_server(body: &[u8]) -> (Server, Artifact) {
     let server = serve(0).unwrap();
-    server.put("/quill.gz", body.to_vec());
-    let wanted = artifact(&format!("{}/quill.gz", server.base()), body);
+    server.put("/newen.gz", body.to_vec());
+    let wanted = artifact(&format!("{}/newen.gz", server.base()), body);
     (server, wanted)
 }
 
@@ -424,7 +424,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
 fn a_cut_download_resumes_where_it_stopped() {
     let body = program(400_000);
     let (server, wanted) = artifact_server(&body);
-    server.configure(|files| files.cut = Some(("/quill.gz".into(), 150_000)));
+    server.configure(|files| files.cut = Some(("/newen.gz".into(), 150_000)));
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
     let first = download(&agent, &wanted, folder.path(), |_, _| true);
@@ -440,7 +440,7 @@ fn a_cut_download_resumes_where_it_stopped() {
     assert_eq!(std::fs::read(path).unwrap(), body);
     assert_eq!(
         server.requests(),
-        vec![("/quill.gz".into(), None), ("/quill.gz".into(), Some(kept))]
+        vec![("/newen.gz".into(), None), ("/newen.gz".into(), Some(kept))]
     );
 }
 
@@ -464,7 +464,7 @@ fn a_server_without_ranges_sends_it_again_from_the_start() {
     let body = program(200_000);
     let (server, wanted) = artifact_server(&body);
     server.configure(|files| {
-        files.cut = Some(("/quill.gz".into(), 50_000));
+        files.cut = Some(("/newen.gz".into(), 50_000));
         files.no_ranges = true;
     });
     let agent = agent();
@@ -487,7 +487,7 @@ fn a_program_is_known_by_its_first_bytes_and_a_bundle_by_its_path() {
     assert!(!starts_native("linux", b"MZ\x90\x00"));
     assert!(!starts_native("windows", b"\x7fELF"));
     assert!(!starts_native("macos", b"\x7fELF"));
-    assert!(!starts_native("linux", b"quill\0\0\0"));
+    assert!(!starts_native("linux", b"newen\0\0\0"));
     assert!(!starts_native("linux", b""));
 
     let program = Path::new("/Users/ana/Applications/Newen.app/Contents/MacOS/newen");
@@ -1179,7 +1179,7 @@ fn a_v2_manifest_is_read_by_a_copy_from_before_it() {
         #[serde(default)]
         whats_new: Option<OldArtifact>,
     }
-    let archive = artifact("https://example.org/quill-x86_64-linux.tar.gz", b"quill");
+    let archive = artifact("https://example.org/newen-x86_64-linux.tar.gz", b"newen");
     let list = artifact("https://example.org/files-linux-x86_64.json", b"{}");
     let platforms = ["linux-x86_64", "windows-x86_64", "macos-aarch64"];
     let manifest = Manifest {
@@ -1371,12 +1371,12 @@ fn a_list_of_files_with_a_path_out_of_the_bundle_is_refused() {
             .collect(),
     };
     let fine = bundle(
-        vec![file("quill"), file("quill.app/Contents/MacOS/quill")],
-        vec![("a/b/Current", "../x"), ("lib", "quill")],
+        vec![file("newen"), file("Newen.app/Contents/MacOS/newen")],
+        vec![("a/b/Current", "../x"), ("lib", "newen")],
     );
     assert!(valid(&fine));
     for path in [
-        "../quill",
+        "../newen",
         "/etc/passwd",
         "a//b",
         "a/./b",
@@ -1386,11 +1386,11 @@ fn a_list_of_files_with_a_path_out_of_the_bundle_is_refused() {
     ] {
         assert!(!valid(&bundle(vec![file(path)], vec![])), "{path}");
     }
-    assert!(!valid(&bundle(vec![file("quill"), file("quill")], vec![])));
+    assert!(!valid(&bundle(vec![file("newen"), file("newen")], vec![])));
     for target in ["../x", "/abs", "a/../../x"] {
         assert!(!valid(&bundle(vec![], vec![("link", target)])), "{target}");
     }
-    let mut http = file("quill");
+    let mut http = file("newen");
     http.url = "http://example.org/f.gz".into();
     assert!(!valid(&bundle(vec![http], vec![])));
 }

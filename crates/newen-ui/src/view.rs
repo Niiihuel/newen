@@ -632,14 +632,14 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
     let root = image_viewer(ui, root, window, palette);
     let root = annotator(ui, root, window, palette);
     let root = crate::tour::layer(ui, root, palette);
-    // Desktop's own wording for both closes and for a delete, less its vendor's servers: quill forgets only its own record.
+    // Desktop's own wording for both closes and for a delete, less its vendor's servers: Newen forgets only its own record.
     let tabs = &ui.terminal.tabs;
     let deleting = ui.deleting.and_then(|id| store.session(id));
     let (title, description, label) = match (ui.terminal.closing, deleting) {
         (_, Some(session)) => (
             "Delete session?",
             format!(
-                "\u{201c}{}\u{201d} will be removed from quill. The agent's own transcript of it stays on this computer.",
+                "\u{201c}{}\u{201d} will be removed from Newen. The agent's own transcript of it stays on this computer.",
                 session_title(session)
             ),
             "Delete",
@@ -1178,7 +1178,7 @@ fn tasks_pane(
 
 /// The file on screen, as Desktop's: its path, folders muted leading to the tree and its name
 /// copying itself, and its tools (Reload, Preview or source, Find, Copy; Cancel and Save while
-/// edited), over the file in quill's editor, rendered for Markdown, or what keeps it from
+/// edited), over the file in Newen's editor, rendered for Markdown, or what keeps it from
 /// showing. With no file, Desktop's words for an empty tile.
 fn file_view(
     pane: &crate::files::FilesPane,
@@ -1645,7 +1645,7 @@ fn sidebar_toggle(ui: &Ui) -> Element {
     crate::updates::toggle_dot(ui, toggle)
 }
 
-/// "Open in" as Desktop lists it: quill-ide, then the
+/// "Open in" as Desktop lists it: newen-ide, then the
 /// editors installed, by name, each with its own icon; then the desktop's default app and its
 /// file manager. Each row is "open-in:<editor | default | files>:<target>", `target` a session
 /// or "here", the folder on screen.
@@ -1957,7 +1957,7 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         )
     };
     let mut rows = vec![
-        // Desktop's band holds its menu, this toggle and its history; quill keeps the toggle,
+        // Desktop's band holds its menu, this toggle and its history; Newen keeps the toggle,
         // centered on the top bar's middle.
         Element::row(vec![hgap(5.0), sidebar_toggle(ui)]).size(None, Some(look::TOP_BAR - 16.0)),
         Element::spacer().size(None, Some(12.0)),
@@ -2085,8 +2085,8 @@ fn sidebar(store: &Store, ui: &Ui, height: f32, palette: ComponentPalette) -> El
         }
     }
     // At its foot over a line, the person: their GitHub picture (else their initials) and
-    // name, opening the menu that holds Settings, as Desktop's. Its other entries are claude.ai's pages; quill keeps none. GitHub says who
-    // it is (`gh`); without it the foot has quill's user and the menu offers to connect.
+    // name, opening the menu that holds Settings, as Desktop's. Its other entries are claude.ai's pages; Newen keeps none. GitHub says who
+    // it is (`gh`); without it the foot has Newen's user and the menu offers to connect.
     let (initial, name, avatar) = crate::github::identity(ui);
     let mut account = vec![hgap(0.0)];
     let picture = avatar.and_then(|path| ui.thumbs.get(&path));
@@ -2326,7 +2326,7 @@ fn account_plan(store: &Store, session: Option<&Session>) -> Option<String> {
 
 /// The filter menu of a group's header: Group by, Sort by and Reset to
 /// defaults, with the current choices checked. Desktop's Show, New section and View all,
-/// and grouping by date or environment, are not here: quill keeps no dates or sections and
+/// and grouping by date or environment, are not here: Newen keeps no dates or sections and
 /// runs on this computer only.
 fn filter_menu(key: &str, ui: &Ui) -> Element {
     let id = format!("filter-menu:{key}");
@@ -3021,7 +3021,7 @@ fn entries<'a>(
 }
 
 /// What to call `agent` in a sentence: the first word of its name ("Claude Code" is "Claude"),
-/// which is how Desktop says it; "the agent" before quill knows it.
+/// which is how Desktop says it; "the agent" before Newen knows it.
 pub(crate) fn agent_word(ui: &Ui, agent: &str) -> String {
     // shortcut: a name whose first word is not what people call it reads oddly, when an
     // adapter needs a short name of its own.
@@ -3807,7 +3807,7 @@ fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
     shown.render()
 }
 
-/// A link's right-click menu, where it was clicked: the page in quill's browser, in the
+/// A link's right-click menu, where it was clicked: the page in Newen's browser, in the
 /// computer's own, or its address copied.
 fn link_menu(ui: &Ui, base: Element, window: Size) -> Element {
     let Some((url, at)) = &ui.link_menu else {
@@ -3846,7 +3846,7 @@ pub const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(120
 
 /// The row under a reply while the pointer is on it, in Desktop's order: copy, fork from here, then the time it came. Read aloud is the person's newer
 /// Desktop's, with the system's own voice; its pin, a chapter
-/// mark, is left out while quill has no chapters.
+/// mark, is left out while Newen has no chapters.
 fn reply_actions(
     session: &Session,
     at: usize,
@@ -4030,7 +4030,7 @@ fn working_words(id: &str, words: String) -> Element {
         .shrink_to_fit()
 }
 
-/// The line under the turn: quill's pen writing (in place of Desktop's orange
+/// The line under the turn: Newen's pen writing (in place of Desktop's orange
 /// dots, as the person chose), then the step running, or the
 /// turn's clock, its tokens, the work running beside it and whether the model thinks, muted,
 /// at the transcript's size. Waiting on the person it says so; with only background work
@@ -4581,9 +4581,9 @@ fn image_block(
     ])
 }
 
-/// quill's web search block: a pill that says what was searched, with the sources as cards
+/// Newen's web search block: a pill that says what was searched, with the sources as cards
 /// under it. The design follows rareui's WebSearch (rareui, `web-search.tsx`; its license is
-/// not checked yet), with quill's own colors. Desktop draws a WebSearch as a plain step
+/// not checked yet), with Newen's own colors. Desktop draws a WebSearch as a plain step
 /// instead. Motion, citation chips and favicons are not here yet.
 fn web_search_block(
     step: &Step,
@@ -5378,7 +5378,7 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
         "Skill" => ("Ran skill", "Running skill", said("skill")),
         "ExitPlanMode" => ("Proposed plan", "Proposing plan", String::new()),
         // The rest in Desktop's words. What follows the
-        // verb is quill's where Desktop shows none (inferred): the server, the resource, the
+        // verb is Newen's where Desktop shows none (inferred): the server, the resource, the
         // command stopped.
         "EnterPlanMode" => ("Started planning", "Making a plan", String::new()),
         "EnterWorktree" if input["path"].is_string() => {
@@ -5430,7 +5430,7 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
             ("Stopped loop", "Stopping loop", String::new())
         }
         "ScheduleWakeup" => ("Scheduled check-in", "Scheduling check-in", said("reason")),
-        // quill's own session tools, in Desktop's words.
+        // Newen's own session tools, in Desktop's words.
         name if name.ends_with("sessions__start_session") => {
             if input["initiation"] == "own_initiative" {
                 ("Suggested task", "Suggesting task", said("title"))
@@ -6530,7 +6530,7 @@ fn site_permission(
             actions(
                 id,
                 true,
-                ("Always allow this server", "Until quill quits"),
+                ("Always allow this server", "Until Newen quits"),
                 "Don't allow",
                 ui,
                 palette,
@@ -6735,7 +6735,7 @@ fn composer(
 /// left, wrapping when the column is narrow; the mode, the model, its effort and the
 /// plan's usage on the right.
 fn home_footer(store: &Store, ui: &Ui, palette: ComponentPalette) -> Element {
-    // quill runs sessions on this computer only, so "Local" is a label, not a menu.
+    // Newen runs sessions on this computer only, so "Local" is a label, not a menu.
     let local = Element::row(vec![
         hgap(8.0),
         chip_icon(icons::of(icons::LAPTOP)),
@@ -7291,7 +7291,7 @@ fn send_button(ready: bool) -> Element {
     limn::Tooltip::new(button, SEND, "Send", look::palette()).render()
 }
 
-/// "+": what can go into the message, as far as quill can: files and folders
+/// "+": what can go into the message, as far as Newen can: files and folders
 /// as @-mentions the agent reads, and the slash that opens its commands.
 fn plus_menu(session: Option<&Session>, ui: &Ui) -> Element {
     let open = ui.open_menu == Some(PLUS_MENU);
@@ -7756,7 +7756,7 @@ fn folder_menu(store: &Store, ui: &Ui) -> Element {
 }
 
 /// The modes the menu lists, in its order: those the agent offers, then those the chosen
-/// model adds (Auto), that quill can name.
+/// model adds (Auto), that Newen can name.
 pub(crate) fn offered_modes(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<String> {
     let capabilities = agent_capabilities(store, session, ui);
     let agent = session.map_or(ui.agent.as_str(), |s| s.agent.as_str());
@@ -8587,9 +8587,9 @@ fn diff_row(row: &DiffRow, at: usize, width: f32, palette: ComponentPalette) -> 
     .size(Some(width), None)
 }
 
-/// A changed file's open, a split button drawn as Create PR's: the file at `line` in quill's
+/// A changed file's open, a split button drawn as Create PR's: the file at `line` in Newen's
 /// own Files pane, and its menu with every other place, "Open in" as a session's menu lists
-/// them (quill-ide, the editors found, the default app, the file manager).
+/// them (newen-ide, the editors found, the default app, the file manager).
 fn open_file(path: &str, line: u32, ui: &Ui, palette: ComponentPalette) -> Element {
     open_file_chip(path, line, open_in_menu(path, line, ui), palette)
 }
@@ -9733,7 +9733,7 @@ fn activity(session: &Session) -> Option<String> {
 /// "New session" over a single one, "3 suggested tasks" and "Start all" over several. A
 /// waiting task shows its title, its brief in two lines, a close, "Do it here" and "Start";
 /// a started one is a row that follows its session, with what it does now, and opens it.
-/// Desktop's "Options" (where and how it runs) is not here: quill starts every session on
+/// Desktop's "Options" (where and how it runs) is not here: Newen starts every session on
 /// this computer, as the one that proposed it.
 fn proposals_card(
     store: &Store,
@@ -10071,9 +10071,9 @@ fn setting_select(
     )
 }
 
-/// Settings' pages, in the order the column lists them: quill's own, then one per agent
-/// quill can run, built from what the agent says it offers, then this computer's. Desktop's
-/// pages for its account, its cloud and its own features are not here: quill has none of
+/// Settings' pages, in the order the column lists them: Newen's own, then one per agent
+/// Newen can run, built from what the agent says it offers, then this computer's. Desktop's
+/// pages for its account, its cloud and its own features are not here: Newen has none of
 /// them (docs/ui.md §2.11).
 fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<SettingsPage> {
     use newen_model::{InterfaceFont, Motion, TextSize, Theme, TranscriptView};
@@ -10112,7 +10112,7 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                 vec![
                     setting("Theme", "", theme),
                     // Desktop's own words and choices; its
-                    // Anthropic Sans and OpenDyslexic are not quill's (docs/ui.md §2.11).
+                    // Anthropic Sans and OpenDyslexic are not Newen's (docs/ui.md §2.11).
                     setting(
                         "Interface font",
                         "Font for the whole interface \u{2014} menus, sidebars, and panels.",
@@ -10240,7 +10240,7 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                     ],
                 ),
                 (
-                    // Desktop's own words and choices; quill has no dock badge,
+                    // Desktop's own words and choices; Newen has no dock badge,
                     // so Badge is its own marks in the sidebar and on the window (inferred).
                     "Notifications".into(),
                     vec![
@@ -10280,21 +10280,21 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                                 palette,
                             ),
                         ),
-                        // quill's own sounds in place of Desktop's "System sound".
+                        // Newen's own sounds in place of Desktop's "System sound".
                         setting(
                             "Notification sound",
                             "Played with an OS banner: one sound when a task completes, another when a session needs you.",
                             setting_select(
                                 ui,
                                 "notification_sound",
-                                &choices(&[("quill", "quill"), ("none", "None")]),
-                                if s.notification_sound { "quill" } else { "none" },
+                                &choices(&[("newen", "Newen"), ("none", "None")]),
+                                if s.notification_sound { "newen" } else { "none" },
                                 palette,
                             ),
                         ),
                         setting(
                             "Draw attention",
-                            "Ask the desktop to flag quill when a session finishes or needs you while quill isn't in front.",
+                            "Ask the desktop to flag Newen when a session finishes or needs you while Newen isn't in front.",
                             setting_switch("attention", s.attention, palette),
                         ),
                     ],
@@ -10305,11 +10305,11 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                         // Desktop's "Branch prefix" and its own default.
                         setting(
                             "Branch prefix",
-                            "Prefix added to the branch names quill asks agents to create.",
+                            "Prefix added to the branch names Newen asks agents to create.",
                             limn::TextField::new(
                                 "set:branch_prefix",
                                 s.branch_prefix.as_str(),
-                                "quill",
+                                "newen",
                                 palette,
                             )
                             .render()
@@ -10389,8 +10389,8 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                     program,
                     setting(
                         "Native view",
-                        "Pages draw in quill's window as they would in Chromium's, with no delay. \
-                         From quill's next start.",
+                        "Pages draw in Newen's window as they would in Chromium's, with no delay. \
+                         From Newen's next start.",
                         setting_switch("browser_native", s.browser_native, palette),
                     ),
                     // Desktop's "Open links in built-in browser".
@@ -10422,17 +10422,17 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
         icon: icons::MONITOR,
         groups: vec![
             (
-                "quill".into(),
+                "Newen".into(),
                 vec![
                     setting("Version", "", text(env!("CARGO_PKG_VERSION")).centered_y()),
                     setting(
                         "Open at login",
-                        "Start quill when you log in to this computer.",
+                        "Start Newen when you log in to this computer.",
                         setting_switch("login", s.open_at_login, palette),
                     ),
                     setting(
                         "Licenses",
-                        "The terms of third-party software quill uses.",
+                        "The terms of third-party software Newen uses.",
                         setting_button(crate::licenses::OPEN, "View"),
                     ),
                 ],
@@ -10489,7 +10489,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
         "Make sure you trust a server before you add it: it runs on this computer.",
     )];
     // For which agents: its own program adds it to its own config, which the terminal sees too;
-    // "All agents" is quill's, added to each session.
+    // "All agents" is Newen's, added to each session.
     body.push(label("Add to"));
     let mut targets = vec![keyed_button(
         "srv:to:*",
@@ -10511,7 +10511,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
     }));
     body.push(Element::row(targets).gap(8.0).wrap().max_width(460.0));
     body.push(note(if adding.all {
-        "quill adds it to each session, so the agents\u{2019} own files stay as they are."
+        "Newen adds it to each session, so the agents\u{2019} own files stay as they are."
     } else {
         "Each one adds it with its own command, so it shows in its terminal too."
     }));
@@ -10571,7 +10571,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
         if adding.all || !cannot.is_empty() {
             body.push(warn(
                 if adding.all {
-                    "quill\u{2019}s own layer can\u{2019}t take an OAuth client: each agent signs in by itself.".to_owned()
+                    "Newen\u{2019}s own layer can\u{2019}t take an OAuth client: each agent signs in by itself.".to_owned()
                 } else {
                     format!("{} can\u{2019}t take an OAuth client of your own: it signs in by itself.", cannot.join(" and "))
                 },
@@ -10597,7 +10597,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
         }
     }
     // A secret is kept in the system's keychain and reaches the agent only as a variable of
-    // its process: only quill's own layer has them.
+    // its process: only Newen's own layer has them.
     if adding.all {
         body.push(label("Secret variables"));
         body.push(area(
@@ -10697,7 +10697,7 @@ pub(crate) fn server_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -
     .render()
 }
 
-/// The "All agents" section of Connectors (`skills` false) or Skills: quill's own items, with
+/// The "All agents" section of Connectors (`skills` false) or Skills: Newen's own items, with
 /// how each agent treats each (docs/agents.md "All agents"). Nothing while there are none and
 /// only one agent: it would say nothing the agent's own section does not.
 pub(crate) fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Element> {
@@ -10734,7 +10734,7 @@ pub(crate) fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Elemen
         column.push(customize::empty(
             if skills { icons::SKILL } else { icons::PLUG },
             if skills {
-                "No skills for all agents yet. quill adds them to each session."
+                "No skills for all agents yet. Newen adds them to each session."
             } else {
                 "No connectors for all agents yet. Add one with \u{201c}All agents\u{201d}."
             },
@@ -10785,7 +10785,7 @@ pub(crate) fn global_section(ui: &Ui, skills: bool, width: f32) -> Option<Elemen
         let menu = format!("cz:more:glob:{kind}:{name}");
         let open = ui.settings_menu.as_deref() == Some(menu.as_str());
         let opens = crate::customize::opener(if skills { "skill" } else { "srv" }, "", name);
-        let mut said = format!("from quill \u{b7} {words}");
+        let mut said = format!("from Newen \u{b7} {words}");
         if !notes.is_empty() {
             said = format!("{} \u{b7} {}", capital(&notes.join(", ")), said);
         }
@@ -10852,7 +10852,7 @@ pub(crate) fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) ->
                 .background(look::palette().raised)
                 .border(look::settings_field_edge(), 1.0)
                 .radius(8.0),
-                note("quill keeps it for all agents and adds it to each session."),
+                note("Newen keeps it for all agents and adds it to each session."),
             ],
             !name.trim().is_empty(),
         ),
@@ -10861,7 +10861,7 @@ pub(crate) fn skill_dialog(ui: &Ui, base: Element, palette: ComponentPalette) ->
             vec![
                 label("Folder"),
                 field("path", path, "/home/you/skills/release-notes"),
-                note("A folder with a SKILL.md. quill keeps a copy."),
+                note("A folder with a SKILL.md. Newen keeps a copy."),
             ],
             !path.trim().is_empty(),
         ),
@@ -11621,7 +11621,7 @@ fn marketplace_dialog(ui: &Ui, base: Element, palette: ComponentPalette) -> Elem
             .render()
             .size(Some(440.0), Some(32.0));
             // Each agent adds it with its own program; Codex reads Claude's marketplace files
-            // too, but quill asks each one.
+            // too, but Newen asks each one.
             let to = Element::row(
                 ui.agents
                     .iter()
@@ -11796,15 +11796,15 @@ fn agent_page(
     let tested = agent.tested.join(", ");
     let (version_value, version_about) = match &version {
         Some(v) if agent.tested.contains(v) => {
-            (v.clone(), format!("quill was tested with {tested}."))
+            (v.clone(), format!("Newen was tested with {tested}."))
         }
         Some(v) => (
             v.clone(),
-            format!("quill was tested with {tested}; this version may behave differently."),
+            format!("Newen was tested with {tested}; this version may behave differently."),
         ),
         None => (
             "Not run yet".to_owned(),
-            format!("quill was tested with {tested}."),
+            format!("Newen was tested with {tested}."),
         ),
     };
     let program = limn::TextField::new(
@@ -11821,7 +11821,7 @@ fn agent_page(
             setting(
                 "Program",
                 &format!(
-                    "The {} program quill runs. Empty runs the one on your PATH. Applies to new sessions.",
+                    "The {} program Newen runs. Empty runs the one on your PATH. Applies to new sessions.",
                     agent.name
                 ),
                 program,
@@ -11980,7 +11980,7 @@ fn human_bytes(bytes: u64) -> String {
 /// The session's MCP servers (`/mcp`), as Desktop's dialog lists them: each server with what ships it, where it was configured and how it is,
 /// and what can be done about it: connect (sign in), reconnect, turn on. A row opens the
 /// server's details: its sign-in (re-authenticate, clear its credentials after asking) and,
-/// quill's own, its tools by what they do. Its words are Desktop's; while a turn runs the
+/// Newen's own, its tools by what they do. Its words are Desktop's; while a turn runs the
 /// actions wait for it to end.
 fn mcp_dialog(
     store: &Store,
@@ -12013,7 +12013,7 @@ fn mcp_dialog(
         }
     };
     let words = |s: String| muted(s).font_size(BODY);
-    // Desktop shows each server's favicon; quill shows the logo it found, else the initial.
+    // Desktop shows each server's favicon; Newen shows the logo it found, else the initial.
     let avatar = |server: &newen_model::McpServer, side: f32| match logo_picture(
         ui,
         &format!(
@@ -12048,7 +12048,7 @@ fn mcp_dialog(
         McpSource::Local => "Local",
         McpSource::Managed => "Managed",
         McpSource::Plugin => "Plugin",
-        // Desktop lists the account's connectors apart; quill names them (inferred).
+        // Desktop lists the account's connectors apart; Newen names them (inferred).
         McpSource::Account => "Account",
         McpSource::App => "App",
         McpSource::Global => "All agents",
@@ -12160,7 +12160,7 @@ fn mcp_dialog(
             if let Some(note) = note {
                 body.push(words(note.to_owned()).padding(8.0));
             }
-            // quill's own: the tools, by what their server says they do (Desktop's groups
+            // Newen's own: the tools, by what their server says they do (Desktop's groups
             // for its connectors' tools).
             let groups = [
                 ("Read-only tools", 0),

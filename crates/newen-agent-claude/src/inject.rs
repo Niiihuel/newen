@@ -1,4 +1,4 @@
-//! What quill's "All agents" layer adds to a Claude Code session without writing the CLI's
+//! What Newen's "All agents" layer adds to a Claude Code session without writing the CLI's
 //! files: `--mcp-config` with the servers (V1, docs/agents.md: the CLI expands `${VAR}` in the
 //! JSON, so a secret is only the name of a variable of the process) and `--plugin-dir` with a
 //! plugin of Newen's whose skills are the global ones, shown as `newen:<name>` (V4).

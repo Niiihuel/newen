@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "quill's adapter for the OpenAI Codex CLI: its app-server JSON-RPC protocol."
+description = "Newen's adapter for the OpenAI Codex CLI: its app-server JSON-RPC protocol."
 publish = false
 
 [dependencies]
 newen-agent = { path = "../newen-agent" }
 serde_json.workspace = true
-# The images of a prompt, base64-encoded in a data URL (as quill-agent-claude does).
+# The images of a prompt, base64-encoded in a data URL (as newen-agent-claude does).
 base64 = "0.22"

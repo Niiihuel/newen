@@ -1,5 +1,5 @@
-//! quill's own icons: line drawings on a 20 × 20 grid with a 1.25 stroke ([`STROKE`]), round
-//! caps and joins and no fill, in the quiet, thin style of Claude Desktop's icons. They are drawn for quill, not
+//! Newen's own icons: line drawings on a 20 × 20 grid with a 1.25 stroke ([`STROKE`]), round
+//! caps and joins and no fill, in the quiet, thin style of Claude Desktop's icons. They are drawn for Newen, not
 //! taken from that font, which is Anthropic's own. Each is an SVG in `currentColor`, which
 //! limn tints like its own icons through `Icon::Custom`.
 
@@ -230,7 +230,7 @@ pub const HOURGLASS: &str = icon!(
     "<path d='M5 2.75h10M5 17.25h10'/><path d='M6.25 2.75v1.5c0 2.25 3.75 3.5 3.75 5.75s-3.75 3.5-3.75 5.75v1.5M13.75 2.75v1.5c0 2.25-3.75 3.5-3.75 5.75s3.75 3.5 3.75 5.75v1.5'/>"
 );
 
-/// The greeting's mark: an eight-ray spark, quill's own.
+/// The greeting's mark: an eight-ray spark, Newen's own.
 pub const SPARK: &str =
     icon!("<path d='M10 2.5v15M2.5 10h15M4.7 4.7l10.6 10.6M15.3 4.7L4.7 15.3'/>");
 

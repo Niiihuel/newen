@@ -1,4 +1,4 @@
-//! quill's interface: the state the engine's events build ([`Store::apply`]), what the person
+//! Newen's interface: the state the engine's events build ([`Store::apply`]), what the person
 //! is doing ([`Ui`]), what their actions ask ([`update`]) and the window ([`view`]).
 //! Layout and colors follow Claude Desktop's Code surface (docs/ui.md, features/code-*.md).
 
@@ -83,7 +83,7 @@ pub enum Item {
         /// The turn failed because the person is not signed in: its row offers Sign in.
         sign_in: bool,
     },
-    /// Something quill left out of a message, shown where the message is.
+    /// Something Newen left out of a message, shown where the message is.
     Notice { text: String },
     /// What one request changed in the folder, and whether it was rewound since.
     Changes {
@@ -1018,7 +1018,7 @@ pub fn palette_hover(store: &Store, ui: &mut Ui, id: &str) {
 }
 
 /// The banner an engine event earns, when its session is not in view: the level from
-/// Settings and the banner, with the session's title, the notice's text and quill's sound
+/// Settings and the banner, with the session's title, the notice's text and Newen's sound
 /// for it when Settings has one. A permission request, a question or a finished turn of a
 /// session the person is not looking at; a side chat's turn is not.
 pub fn notice(
@@ -1054,7 +1054,7 @@ pub fn notice(
     let title = s
         .map(|s| s.title.clone())
         .filter(|title| !title.is_empty())
-        .unwrap_or_else(|| "quill".into());
+        .unwrap_or_else(|| "Newen".into());
     let chime = if text == NOTICE_DONE {
         Chime::Done
     } else {
@@ -1069,7 +1069,7 @@ pub fn notice(
     Some((level, banner))
 }
 
-/// A click on a session's banner opens it, as a click on its row does. Session 0 is quill's
+/// A click on a session's banner opens it, as a click on its row does. Session 0 is Newen's
 /// own notice (an update is ready): the window coming up is all it does.
 pub fn banner_clicked(store: &Store, ui: &mut Ui, session: SessionId) -> Vec<Intent> {
     if session == 0 {
@@ -1311,7 +1311,7 @@ pub struct Ui {
     /// The right panel's width, on a spring to 0 or its own width as it closes and opens.
     /// When the welcome was first drawn: what comes in under its word is timed from it.
     pub welcome_since: std::cell::OnceCell<std::time::Instant>,
-    /// The host runs quill with a stand-in agent and no settings kept (tests, captures): the
+    /// The host runs Newen with a stand-in agent and no settings kept (tests, captures): the
     /// welcome is not shown, unless `NEWEN_WELCOME` asks for it.
     pub skip_welcome: bool,
     /// The tour's step, from zero, while it runs (`tour`).
@@ -1367,7 +1367,7 @@ pub struct Ui {
     pub account: account::Account,
     /// GitHub through `gh`: the person's identity (github.rs).
     pub github: github::Github,
-    /// quill's own update, as the engine last reported it.
+    /// Newen's own update, as the engine last reported it.
     pub update: newen_model::UpdateState,
     /// When the last check for it ended (seconds since 1970), and why it failed if it did.
     pub update_checked: Option<(u64, Option<String>)>,
@@ -1449,7 +1449,7 @@ pub struct Ui {
     pub settings_page: Option<String>,
     pub settings_query: String,
     pub settings_menu: Option<String>,
-    /// Where quill keeps its data and how much it takes, as last measured.
+    /// Where Newen keeps its data and how much it takes, as last measured.
     pub storage: Option<(PathBuf, u64)>,
     /// Why the last change in Settings was not kept, until the next one.
     pub settings_error: Option<String>,
@@ -1457,7 +1457,7 @@ pub struct Ui {
     pub extensions: std::collections::HashMap<String, Extensions>,
     /// Customize › Connectors.
     pub connectors: Connectors,
-    /// quill's "All agents" servers and skills, and how each agent treats them.
+    /// Newen's "All agents" servers and skills, and how each agent treats them.
     pub global: newen_model::GlobalState,
     /// "New skill" or "Import skill" for "All agents", as typed.
     pub skill_dialog: Option<SkillDialog>,
@@ -1479,7 +1479,7 @@ pub struct Ui {
     /// Tool permissions changed on a connector's page, kept a moment after the last change.
     pub tool_changes: Vec<newen_model::ToolChoice>,
     pub tool_changed: Option<std::time::Instant>,
-    /// Things quill moves itself jump to where they go, as limn's do under reduced motion.
+    /// Things Newen moves itself jump to where they go, as limn's do under reduced motion.
     pub reduced_motion: bool,
     /// How many of each session's items the person has had in view.
     pub seen: std::collections::HashMap<SessionId, usize>,
@@ -1523,7 +1523,7 @@ pub enum Allow {
     Always,
 }
 
-/// Whether a link opens on the computer rather than in quill's browser: any web link while
+/// Whether a link opens on the computer rather than in Newen's browser: any web link while
 /// "Open links in built-in browser" is off, and a pull request's while "Open pull requests in
 /// browser" is on. The UI and the host both ask this, so they cannot disagree.
 pub fn opens_outside(settings: &newen_model::Settings, url: &str) -> bool {
@@ -1534,7 +1534,7 @@ pub fn opens_outside(settings: &newen_model::Settings, url: &str) -> bool {
 
 /// What the branch bar asks of the agent to open a pull request: commit what is left, push,
 /// open it with `gh`, as a draft when that kind was chosen, and give its address. Desktop
-/// sends its own request of the same steps; these words are quill's.
+/// sends its own request of the same steps; these words are Newen's.
 fn pr_request(draft: bool, prefix: &str) -> String {
     let (kind, open) = if draft {
         ("as a draft", "`gh pr create --draft`")
@@ -4707,7 +4707,7 @@ pub struct AddServer {
     pub headers: String,
     /// Where it goes, by agent; an agent's first scope without one.
     pub scopes: std::collections::BTreeMap<String, String>,
-    /// Added to quill's "All agents" layer instead (`agents` is then not used).
+    /// Added to Newen's "All agents" layer instead (`agents` is then not used).
     pub all: bool,
     /// For "All agents": an address that speaks the older SSE transport.
     pub sse: bool,
@@ -4773,7 +4773,7 @@ impl AddServer {
         })
     }
 
-    /// The server for quill's "All agents" layer: the plain lines as they are, the secret ones
+    /// The server for Newen's "All agents" layer: the plain lines as they are, the secret ones
     /// marked so the engine keeps them in the keychain.
     pub fn global(&self) -> Option<newen_model::GlobalServer> {
         let server = self.server().filter(|_| self.all)?;
@@ -5310,7 +5310,7 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
                 ..AddServer::default()
             });
         }
-        // "All agents" is a choice of its own: quill adds it to each session.
+        // "All agents" is a choice of its own: Newen adds it to each session.
         ("to", "*") => {
             let adding = c.adding.as_mut()?;
             adding.all = !adding.all;
@@ -5385,7 +5385,7 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
 pub const MCP_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A question the agent goes on without waits this long untouched, then counts down this long
-/// on its card, then is answered with nothing (quill's timing, docs/codex.md).
+/// on its card, then is answered with nothing (Newen's timing, docs/codex.md).
 const QUESTION_QUIET: std::time::Duration = std::time::Duration::from_secs(60);
 const QUESTION_COUNTDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 

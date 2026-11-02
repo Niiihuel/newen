@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "quill's interface: state, view and update over limn, testable without a window."
+description = "Newen's interface: state, view and update over limn, testable without a window."
 publish = false
 
 [dependencies]

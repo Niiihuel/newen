@@ -1,4 +1,4 @@
-//! quill's "All agents" layer: MCP servers and skills that quill keeps in its own folder and
+//! Newen's "All agents" layer: MCP servers and skills that Newen keeps in its own folder and
 //! adds to each session, without writing the agents' files (docs/agents.md "All agents").
 //!
 //! - `extensions.json` holds the servers; secrets are in the system keychain, the file only
@@ -241,7 +241,7 @@ impl Layer {
 
     /// Whole or not at all: written beside the file, then moved over it.
     fn write(&self, file: &File) -> Result<(), String> {
-        let path = self.file.as_ref().ok_or("quill has no folder for this")?;
+        let path = self.file.as_ref().ok_or("Newen has no folder for this")?;
         let mut file = file.clone();
         file.version = 1;
         file.servers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -257,7 +257,7 @@ impl Layer {
         self.root().map(|r| r.join("skills"))
     }
 
-    /// The skills in quill's folder, by name.
+    /// The skills in Newen's folder, by name.
     fn skills(&self, file: &File) -> Vec<GlobalSkill> {
         let Some(dir) = self.skills_dir() else {
             return vec![];
@@ -439,7 +439,7 @@ impl Layer {
     fn skill_dir(&self, name: &str) -> Result<PathBuf, String> {
         let dir = self
             .skills_dir()
-            .ok_or("quill has no folder for this")?
+            .ok_or("Newen has no folder for this")?
             .join(name);
         if !valid_name(name) || !dir.join("SKILL.md").is_file() {
             return Err(format!("There is no skill named {name}"));
@@ -447,10 +447,10 @@ impl Layer {
         Ok(dir)
     }
 
-    /// A skill from a file (crate::skills): unpacked beside quill's skills, then moved in,
+    /// A skill from a file (crate::skills): unpacked beside Newen's skills, then moved in,
     /// over the one it replaces.
     fn upload_skill(&self, from: &Path, replace: Option<&str>) -> Result<(), String> {
-        let root = self.skills_dir().ok_or("quill has no folder for this")?;
+        let root = self.skills_dir().ok_or("Newen has no folder for this")?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let staged = root.join(".upload");
         let _ = std::fs::remove_dir_all(&staged);
@@ -516,7 +516,7 @@ impl Layer {
         }
         let dir = self
             .skills_dir()
-            .ok_or("quill has no folder for this")?
+            .ok_or("Newen has no folder for this")?
             .join(name);
         if dir.exists() {
             return Err(format!("There is already a skill named {name}"));
@@ -559,7 +559,7 @@ impl Layer {
                 Some(Applies::Excluded)
             } else if !agent.extras.servers {
                 Some(Applies::Refused(format!(
-                    "{} cannot take servers from quill",
+                    "{} cannot take servers from Newen",
                     agent.name
                 )))
             } else if server.sse && !agent.extras.sse {
@@ -595,7 +595,7 @@ impl Layer {
             let applies = if skill.except.iter().any(|a| a == agent.id) {
                 Applies::Excluded
             } else if !agent.extras.skills {
-                Applies::Refused(format!("{} cannot take skills from quill", agent.name))
+                Applies::Refused(format!("{} cannot take skills from Newen", agent.name))
             } else if own.skills.as_ref().is_some_and(|s| s.contains(&skill.name)) {
                 Applies::Replaced
             } else {
@@ -796,7 +796,7 @@ mod tests {
         let dir = tempdir::Dir::new();
         let secrets = Arc::new(MemorySecrets::default());
         (
-            Layer::new(Some(dir.0.join("quill/extensions.json")), secrets.clone()),
+            Layer::new(Some(dir.0.join("newen/extensions.json")), secrets.clone()),
             dir,
             secrets,
         )
@@ -811,7 +811,7 @@ mod tests {
                     .unwrap()
                     .as_nanos();
                 let dir = std::env::temp_dir().join(format!(
-                    "quill-global-{n}-{:?}",
+                    "newen-global-{n}-{:?}",
                     std::thread::current().id()
                 ));
                 std::fs::create_dir_all(&dir).unwrap();
@@ -871,7 +871,7 @@ mod tests {
     fn a_secret_is_in_the_keychain_and_not_in_the_file() {
         let (layer, dir, secrets) = layer();
         layer.op(GlobalOp::SetServer(github())).unwrap();
-        let text = std::fs::read_to_string(dir.0.join("quill/extensions.json")).unwrap();
+        let text = std::fs::read_to_string(dir.0.join("newen/extensions.json")).unwrap();
         assert!(
             !text.contains("ghp_secret") && text.contains("warn"),
             "{text}"

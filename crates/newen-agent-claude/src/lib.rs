@@ -1,4 +1,4 @@
-//! quill's adapter for the Claude Code CLI: stream-json in and out, plus its control
+//! Newen's adapter for the Claude Code CLI: stream-json in and out, plus its control
 //! protocol (docs/engine.md §2–3). Shapes are the ones captured from CLI 2.1.310
 //! (`fixtures/2.1.310/`, docs/engine.md §11.4).
 
@@ -13,13 +13,13 @@ use newen_agent::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// The PostToolUse hook quill registers: each call reports a tool's end with its prompt.
+/// The PostToolUse hook Newen registers: each call reports a tool's end with its prompt.
 const POST_TOOL_HOOK: &str = "newen_post_tool";
 
 /// Permission modes the CLI accepts at launch (`auto` stays out of the MVP, spec.md §6).
 const MODES: [&str; 3] = ["default", "acceptEdits", "plan"];
 
-/// Message types that carry nothing quill shows yet; not `Unknown`, not events.
+/// Message types that carry nothing Newen shows yet; not `Unknown`, not events.
 const QUIET: [&str; 2] = ["command_lifecycle", "auth_status"];
 
 #[derive(Default)]
@@ -53,7 +53,7 @@ pub struct Claude {
     task_tokens: HashMap<String, u64>,
     /// The CLI's `/effort` takes `ultracode`: it is offered as the slider's last stop.
     ultracode: bool,
-    /// quill's tool calls waiting for the engine: the control request's id and the JSON-RPC id
+    /// Newen's tool calls waiting for the engine: the control request's id and the JSON-RPC id
     /// the answer goes back under.
     host_calls: HashMap<String, Value>,
     /// `set_permission_mode` requests waiting for their answers, with the mode asked for.
@@ -62,7 +62,7 @@ pub struct Claude {
     remote_request: Option<(String, bool)>,
     /// Remote Control is on, as the CLI last said.
     remote: bool,
-    /// quill's own prompts, until the CLI echoes them back (`--replay-user-messages`).
+    /// Newen's own prompts, until the CLI echoes them back (`--replay-user-messages`).
     prompts: std::collections::HashSet<String>,
     /// `initialize` asks for a suggested next prompt after each turn, as the session's options
     /// said at launch.
@@ -117,7 +117,7 @@ impl Claude {
     fn control_request(&mut self, id: Value, request: &Value, decoded: &mut Decoded) {
         let id_text = id.as_str().unwrap_or_default().to_owned();
         match request["subtype"].as_str() {
-            // quill's own tools are quill's to run: they never ask the person (an
+            // Newen's own tools are Newen's to run: they never ask the person (an
             // `own_initiative` call only proposes, and its card is where the person answers).
             Some("can_use_tool")
                 if [SERVER, BROWSER_SERVER].iter().any(|server| {
@@ -170,7 +170,7 @@ impl Claude {
                 });
                 decoded.replies.push(success(&id, json!({})));
             }
-            // Elicitations, dialogs and token refreshes: quill offers none (engine.md §3.3).
+            // Elicitations, dialogs and token refreshes: Newen offers none (engine.md §3.3).
             _ => {
                 decoded.events.push(AgentEvent::Unknown(request.clone()));
                 decoded.replies.push(
@@ -182,7 +182,7 @@ impl Claude {
         }
     }
 
-    /// One JSON-RPC message for quill's in-process MCP server: the handshake and the tool list
+    /// One JSON-RPC message for Newen's in-process MCP server: the handshake and the tool list
     /// are answered here, a tool call goes to the engine (verified on CLI 2.1.310,
     /// [F:sessions]; the protocol is the CLI's `mcp_message`, as `initialize.sdkMcpServers`
     /// names the server).
@@ -357,7 +357,7 @@ impl AgentAdapter for Claude {
             "--thinking-display",
             "summarized",
             "--setting-sources=user,project,local",
-            // Without it a message sent from the phone over Remote Control reaches quill as
+            // Without it a message sent from the phone over Remote Control reaches Newen as
             // its id alone (2.1.316 [F:remote]).
             "--replay-user-messages",
         ]
@@ -397,7 +397,7 @@ impl AgentAdapter for Claude {
             }
         }
         args.extend(inject::args(spec));
-        // Same switches Desktop sets; quill does not claim to be Desktop (spec.md D2).
+        // Same switches Desktop sets; Newen does not claim to be Desktop (spec.md D2).
         let env = [
             ("CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL", "true"),
             ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
@@ -478,7 +478,7 @@ impl AgentAdapter for Claude {
     // As Desktop does, through the CLI's own commands (`plugin list --json --available`,
     // `plugin install … --scope`), never
     // editing its files.
-    // Sign-in is the CLI's own `claude auth …` (Claude Code 2.1.312, observed): quill drives
+    // Sign-in is the CLI's own `claude auth …` (Claude Code 2.1.312, observed): Newen drives
     // it and never holds a token. Its login prints the page address and then waits on stdin
     // for `CODE#STATE`, the code the manual page shows, while a local callback also listens.
     fn sign_in_methods(&self) -> Choices {
@@ -1095,7 +1095,7 @@ impl AgentAdapter for Claude {
                 if msg["state"] == "ready" || msg["state"] == "connected" =>
             {
                 // Connected without being asked: a resumed session reconnects by itself, as
-                // the CLI's docs say (inferred for quill's launch).
+                // the CLI's docs say (inferred for Newen's launch).
                 if self.remote_request.is_none() && !std::mem::replace(&mut self.remote, true) {
                     decoded.events.push(AgentEvent::Remote {
                         on: true,
@@ -1190,7 +1190,7 @@ impl AgentAdapter for Claude {
             }
             ("system", _) => {}
             ("stream_event", _) => {
-                // Thinking shows as it starts; the finished block carries nothing quill shows.
+                // Thinking shows as it starts; the finished block carries nothing Newen shows.
                 if msg["event"]["content_block"]["type"] == "thinking" {
                     decoded.events.push(AgentEvent::Thinking { parent });
                 } else if msg["event"]["delta"]["type"] == "thinking_delta" {
@@ -1259,8 +1259,8 @@ impl AgentAdapter for Claude {
                     }
                 }
             }
-            // A message from another device comes back as quill's own do, but as a person's
-            // and under an id quill never sent (2.1.316 [F:remote]).
+            // A message from another device comes back as Newen's own do, but as a person's
+            // and under an id Newen never sent (2.1.316 [F:remote]).
             ("user", _) if msg["isReplay"] == true => {
                 let request = text(&msg["uuid"]);
                 if !self.prompts.remove(&request) && msg["origin"]["kind"] == "human" {
@@ -1275,7 +1275,7 @@ impl AgentAdapter for Claude {
                 }
             }
             ("user", _) => {
-                // Echoes of quill's own prompts carry no tool result and are skipped.
+                // Echoes of Newen's own prompts carry no tool result and are skipped.
                 for block in msg["message"]["content"].as_array().into_iter().flatten() {
                     if block["type"] == "tool_result" {
                         let event = self.tool_result(block, &msg["tool_use_result"]);
@@ -1362,18 +1362,18 @@ fn success(id: &Value, response: Value) -> String {
 /// The id of the `initialize` that asks the CLI for its models outside a session.
 const MODELS_REQUEST: &str = "newen-models";
 
-/// The in-process MCP server that carries quill's own tools ([`HOST_TOOLS`]); the agent sees
+/// The in-process MCP server that carries Newen's own tools ([`HOST_TOOLS`]); the agent sees
 /// them as `mcp__sessions__…`.
 const SERVER: &str = "sessions";
 /// Where a project keeps its dev servers, as Claude Desktop does.
 const LAUNCH_FILE: &str = ".claude/launch.json";
-/// The launch file's place and format, for preview_start, in quill's words.
+/// The launch file's place and format, for preview_start, in Newen's words.
 const LAUNCH_GUIDE: &str = "# Dev servers\n\npreview_start {name} runs a dev server from .claude/launch.json and opens it in the built-in browser. If the file does not exist, create it in this format:\n{\n  \"version\": \"0.0.1\",\n  \"configurations\": [\n    { \"name\": \"dev\", \"runtimeExecutable\": \"npm\", \"runtimeArgs\": [\"run\", \"dev\"], \"port\": 5173 }\n  ]\n}\nThe server gets its port in PORT. An optional \"url\" opens the preview there instead of http://localhost:<port>.";
 /// The in-process MCP server of the built-in browser's tools ([`BROWSER_TOOLS`]):
 /// `mcp__browser__navigate` and the rest.
 const BROWSER_SERVER: &str = "browser";
 
-/// When to start or propose another session, appended to the agent's system prompt. quill's
+/// When to start or propose another session, appended to the agent's system prompt. Newen's
 /// words for what Desktop says in its own section on starting other sessions.
 const SESSIONS_GUIDE: &str = "# Other sessions\n\nWith start_session you can start a separate session for a task of its own, or propose one. A session is for work that outlives this turn and ends in something of its own (a branch, a PR, a change elsewhere); searching or reading widely, independent parts of one change, and testing or checking what you built stay here or go to a subagent. When the user asks in words for separate, parallel or background work, start it (initiation \"user_asked\"). When your work turns up follow-up that belongs in its own session and the user has not asked for it, propose it (initiation \"own_initiative\") rather than only mentioning it: the user sees a card and starts it with a click. Give every session a brief that stands alone. When the user says something meant for a session you started (a change to its task, a detail it needs, an answer it waits for), pass it on with send_to_session instead of doing that part here. Sessions you start report back to you in a message when their turn ends; then carry on with what their results unblock, or tell the user the outcome in a line or two. Start nothing the user did not ask for.";
 
@@ -1720,7 +1720,7 @@ fn marketplace_source(pasted: &str) -> String {
 
 /// The answer to `mcp_status` (CLI 2.1.311): each server with its status, where it came
 /// from (`source`, else `scope`), why it failed and its tools. A plugin's server is named
-/// `plugin:{plugin}:{server}`; quill's own in-process ones are `sdk`.
+/// `plugin:{plugin}:{server}`; Newen's own in-process ones are `sdk`.
 fn mcp_servers(body: &Value) -> Vec<McpServer> {
     let servers = body["mcpServers"].as_array().into_iter().flatten();
     servers
@@ -1770,7 +1770,7 @@ fn mcp_servers(body: &Value) -> Vec<McpServer> {
         .collect()
 }
 
-/// Rules and mode switches arrive mixed ([F:always]); quill keeps them apart so
+/// Rules and mode switches arrive mixed ([F:always]); Newen keeps them apart so
 /// "Always allow" never changes the mode by accident (engine.md §11.4).
 fn suggestions(value: &Value) -> Vec<Suggestion> {
     value

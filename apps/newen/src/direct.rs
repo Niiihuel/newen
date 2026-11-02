@@ -1,7 +1,7 @@
 //! The browser's page presented straight to the compositor (docs/browser.md §8, "Direct"): a
-//! Wayland subsurface of quill's own, beneath its window, shows a native tab's GPU paints in
-//! buffers quill allocates (GBM), and the window is cleared to transparent where the page is
-//! (`Punch`), so the page shows through and whatever quill draws there stays above it. A paint
+//! Wayland subsurface of Newen's own, beneath its window, shows a native tab's GPU paints in
+//! buffers Newen allocates (GBM), and the window is cleared to transparent where the page is
+//! (`Punch`), so the page shows through and whatever Newen draws there stays above it. A paint
 //! reaches the screen without waiting for the window's next frame.
 
 use eframe::egui;
@@ -30,7 +30,7 @@ use wayland_protocols::wp::viewporter::client::{
 const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258;
 /// Paints in flight at most: one shown, one queued, one being drawn.
 const BUFFERS: usize = 3;
-/// How far the subsurface reaches past the hole under quill's opaque pixels, in logical
+/// How far the subsurface reaches past the hole under Newen's opaque pixels, in logical
 /// pixels: a compositor that rounds every surface's corners (Hyprland) rounds them out of
 /// sight, not inside the hole.
 const MARGIN: i32 = 32;
@@ -92,7 +92,7 @@ impl Inner {
         (width > 0 && height > 0).then_some([place.at[0], place.at[1], width, height])
     }
 
-    /// Crop the paint to what is visible, reaching past it under quill wherever the window
+    /// Crop the paint to what is visible, reaching past it under Newen wherever the window
     /// has room, or unmap it when nothing is visible; `true` if that changed what is shown,
     /// which takes a commit.
     fn show_visible(&mut self) -> bool {
@@ -308,7 +308,7 @@ impl Direct {
             match allocate(inner, &self.device, buffer_size) {
                 Ok(buffers) => inner.buffers = buffers,
                 Err(error) => {
-                    eprintln!("quill: the page is drawn by the window: {error}");
+                    eprintln!("newen: the page is drawn by the window: {error}");
                     return false;
                 }
             }
@@ -455,7 +455,7 @@ fn allocate(
 
 /// The paint limn adds where the page is: the window cleared to transparent where the
 /// compositor shows the page, exactly, replacing what is under it rather than blending over it.
-/// Where the page does not reach (a paint still of the size before a resize), quill's own
+/// Where the page does not reach (a paint still of the size before a resize), Newen's own
 /// pixels stay, never the desktop.
 pub fn punch(direct: &Arc<Direct>) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(egui::Rect::NOTHING, Punch(direct.clone()))
@@ -603,7 +603,7 @@ impl Dispatch<WlBuffer, usize> for Wl {
     }
 }
 
-/// Objects whose events quill has no use for.
+/// Objects whose events Newen has no use for.
 macro_rules! ignore {
     ($($t:ty),*) => {$(
         impl Dispatch<$t, ()> for Wl {

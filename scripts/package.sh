@@ -23,7 +23,7 @@ else
 fi
 
 # CEF's runtime files, without its headers, wrapper sources, import libraries and the
-# sandbox's executables quill does not use.
+# sandbox's executables Newen does not use.
 runtime() {
   local into=$1
   mkdir -p "$into"
@@ -77,14 +77,14 @@ macos)
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
-  <key>CFBundleIconFile</key><string>quill</string>
+  <key>CFBundleIconFile</key><string>newen</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><$([ "$4" = 1 ] && echo true || echo false)/>
   <key>LSEnvironment</key><dict><key>MallocNanoZone</key><string>0</string></dict>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-  <key>NSCameraUsageDescription</key><string>A page in quill's browser asks for the camera.</string>
-  <key>NSMicrophoneUsageDescription</key><string>A page in quill's browser asks for the microphone.</string>
+  <key>NSCameraUsageDescription</key><string>A page in Newen's browser asks for the camera.</string>
+  <key>NSMicrophoneUsageDescription</key><string>A page in Newen's browser asks for the microphone.</string>
 </dict>
 </plist>
 PLIST
@@ -100,8 +100,8 @@ PLIST
     id=$(echo "$kind" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')
     plist "$helper/Contents/Info.plist" "$name" "dev.newen.newen.helper${id:+.$id}" 1 "$name"
   done
-  # quill's icon, from its PNGs.
-  iconset=$(mktemp -d)/quill.iconset
+  # Newen's icon, from its PNGs.
+  iconset=$(mktemp -d)/newen.iconset
   mkdir -p "$iconset"
   icons=$root/apps/newen/assets/icons
   for size in 16 32 128 256 512; do
@@ -110,7 +110,7 @@ PLIST
       cp "$icons/quill-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
     fi
   done
-  iconutil -c icns "$iconset" -o "$app/Contents/Resources/quill.icns"
+  iconutil -c icns "$iconset" -o "$app/Contents/Resources/newen.icns"
   ;;
 *)
   echo "usage: $0 linux|windows|macos <release dir> <out dir>" >&2

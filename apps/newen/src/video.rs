@@ -1,4 +1,4 @@
-//! The clip of a release's announcement (quill-ui's whats_new.rs): Cisco's codec loaded once the
+//! The clip of a release's announcement (newen-ui's whats_new.rs): Cisco's codec loaded once the
 //! engine has it and the person allows it, the clip read and parsed, both off the window's
 //! thread; the player made when the card opens and dropped when it closes. A codec that does
 //! not load (on NixOS, without libstdc++ for Cisco's library) leaves the poster, said in the log.
@@ -44,7 +44,7 @@ impl Clips {
                         ctx.request_repaint();
                     }
                     Err(error) => eprintln!(
-                        "quill: video codec {} does not load ({error}): clips show their poster",
+                        "newen: video codec {} does not load ({error}): clips show their poster",
                         path.display()
                     ),
                 });
@@ -75,7 +75,7 @@ impl Clips {
                         ctx.request_repaint();
                     }
                     Err(error) => eprintln!(
-                        "quill: what's new: clip {} not played ({error}): its poster shows",
+                        "newen: what's new: clip {} not played ({error}): its poster shows",
                         path.display()
                     ),
                 }

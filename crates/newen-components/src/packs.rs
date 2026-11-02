@@ -1,4 +1,4 @@
-//! The icons of files and folders, from the pack chosen in Settings: quill's own line drawings,
+//! The icons of files and folders, from the pack chosen in Settings: Newen's own line drawings,
 //! the Material set limn embeds, or a VS Code icon theme found on this computer, as an
 //! extension installs it (its `package.json` names the theme's JSON).
 
@@ -43,7 +43,7 @@ pub struct Offered {
 }
 
 impl Pack {
-    /// The icon of `path`, and the ink to draw it in: the text's for quill's drawings, white
+    /// The icon of `path`, and the ink to draw it in: the text's for Newen's drawings, white
     /// for artwork in its own colors, which limn's tint then leaves as they are.
     pub fn icon(&self, path: &Path, dir: bool, open: bool) -> (Icon, Color) {
         let name = path
@@ -63,7 +63,7 @@ impl Pack {
             Pack::Material => (limn::file_icon(&name), true),
             Pack::Theme(theme) => match theme.svg(&name, dir, open) {
                 Some(svg) => (Icon::Custom(svg), true),
-                // A theme without a default falls back on quill's drawings.
+                // A theme without a default falls back on Newen's drawings.
                 None => return Pack::Newen.icon(path, dir, open),
             },
         };
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn a_vs_code_theme_is_found_and_resolves_as_vs_code_does() {
-        let root = std::env::temp_dir().join(format!("quill-ide-packs-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-ide-packs-{}", std::process::id()));
         let extension = root.join("someone.icons-1.0.0");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(extension.join("icons")).unwrap();

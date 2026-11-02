@@ -1,6 +1,6 @@
 //! The logos of connectors and plugins (docs/engine.md): looked up by name on svgl.app, else
-//! the server's own site, and kept as PNG files under quill's data folder. Blocking: it fetches,
-//! decodes and rasterizes, so it runs on a blocking thread. quill ships no logo.
+//! the server's own site, and kept as PNG files under Newen's data folder. Blocking: it fetches,
+//! decodes and rasterizes, so it runs on a blocking thread. Newen ships no logo.
 
 use newen_model::LogoWanted;
 use std::io::Cursor;
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn a_kept_logo_is_answered_from_disk() {
-        let dir = std::env::temp_dir().join(format!("quill-logos-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-logos-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mcp-figma-light.png"), b"png").unwrap();
         let wanted = LogoWanted {
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_fresh_marker_is_answered_without_a_lookup() {
-        let dir = std::env::temp_dir().join(format!("quill-logos-none-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-logos-none-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("plugin-nothing.none"), b"").unwrap();
         let wanted = LogoWanted {
@@ -304,11 +304,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// One real lookup over the network: `cargo test -p quill-engine live_lookup -- --ignored`.
+    /// One real lookup over the network: `cargo test -p newen-engine live_lookup -- --ignored`.
     #[test]
     #[ignore]
     fn live_lookup_finds_figma_vercel_and_context7() {
-        let dir = std::env::temp_dir().join(format!("quill-logos-live-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-logos-live-{}", std::process::id()));
         let cases = [
             ("plugin:figma", "figma", None),
             ("plugin:vercel", "vercel", None),

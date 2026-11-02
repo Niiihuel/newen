@@ -425,11 +425,11 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
                 ..Default::default()
             },
         ],
-        skill_roots: vec!["/cfg/quill/injected/codex/skills".into()],
+        skill_roots: vec!["/cfg/newen/injected/codex/skills".into()],
         ..Default::default()
     });
     codex.encode(AgentCommand::Start);
-    let init = codex.decode(r#"{"id":1,"result":{"userAgent":"quill/0.163.0 (Linux)"}}"#);
+    let init = codex.decode(r#"{"id":1,"result":{"userAgent":"newen/0.163.0 (Linux)"}}"#);
     let sent: Vec<Value> = init
         .replies
         .iter()
@@ -447,7 +447,7 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
     );
     assert_eq!(
         sent[2]["params"]["extraRoots"][0],
-        "/cfg/quill/injected/codex/skills"
+        "/cfg/newen/injected/codex/skills"
     );
     let servers = &sent[3]["params"]["config"]["mcp_servers"];
     assert_eq!(servers["github"]["command"], "npx");
@@ -497,7 +497,7 @@ fn tool_permissions_are_the_threads_approval_modes_and_disabled_tools() {
         ..Default::default()
     });
     codex.encode(AgentCommand::Start);
-    let init = codex.decode(r#"{"id":1,"result":{"userAgent":"quill/0.163.0 (Linux)"}}"#);
+    let init = codex.decode(r#"{"id":1,"result":{"userAgent":"newen/0.163.0 (Linux)"}}"#);
     let thread: Value = (init.replies.iter())
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
         .find(|m| m["method"] == "thread/start")

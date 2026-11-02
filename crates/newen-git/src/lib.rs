@@ -353,7 +353,7 @@ mod tests {
     use std::process::Command;
 
     fn folder(name: &str) -> (PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("quill-git-{}-{name}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("newen-git-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (root, work) = (base.join("shadow"), base.join("work"));
         fs::create_dir_all(&work).unwrap();

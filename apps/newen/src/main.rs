@@ -1,5 +1,5 @@
-//! quill's window: limn paints quill-ui's view; quill-engine runs the agents.
-//! `quill [folder]` opens new sessions in `folder` (the current directory without one).
+//! Newen's window: limn paints newen-ui's view; newen-engine runs the agents.
+//! `newen [folder]` opens new sessions in `folder` (the current directory without one).
 
 // A window, not a console program: Windows opens no console beside it (`--install` prints
 // nothing there).
@@ -110,7 +110,7 @@ struct App {
     frames: newen_engine::Frames,
     /// The page presented beneath the window, where the compositor allows (direct.rs).
     direct: Option<Arc<direct::Direct>>,
-    /// Chromium in quill's process, whose loop the window pumps on macOS.
+    /// Chromium in Newen's process, whose loop the window pumps on macOS.
     native: Option<newen_engine::Native>,
     /// The texture each surface shows from the GPU, as registered with egui's renderer.
     textures: HashMap<String, (egui::TextureId, eframe::wgpu::Texture)>,
@@ -120,7 +120,7 @@ struct App {
     browser_shown: Option<(SessionId, newen_model::BrowserView)>,
     /// What the address bar was last set to.
     address: Option<String>,
-    /// Messages from quill-ide since the last frame, and the socket they come on while quill
+    /// Messages from newen-ide since the last frame, and the socket they come on while Newen
     /// listens on it.
     linked: Arc<Mutex<Vec<newen_link::Message>>>,
     _link: Option<newen_link::Listener>,
@@ -156,7 +156,7 @@ impl App {
             match request {
                 TerminalRequest::New => {
                     if let Err(error) = tabs.open(&folder, cols, rows, wake()) {
-                        eprintln!("quill: no terminal in {}: {error}", folder.display());
+                        eprintln!("newen: no terminal in {}: {error}", folder.display());
                     }
                 }
                 TerminalRequest::Select(tab) => tabs.select(tab),
@@ -185,7 +185,7 @@ impl App {
                     let opened =
                         tabs.open_running(&folder, &follow, Some(name), cols, rows, wake());
                     if let Err(error) = opened {
-                        eprintln!("quill: no terminal for that output: {error}");
+                        eprintln!("newen: no terminal for that output: {error}");
                     }
                 }
             }
@@ -193,7 +193,7 @@ impl App {
         tabs.reap();
         if tabs.is_empty() && !had {
             if let Err(error) = tabs.open(&folder, cols, rows, wake()) {
-                eprintln!("quill: no terminal in {}: {error}", folder.display());
+                eprintln!("newen: no terminal in {}: {error}", folder.display());
             }
         }
         // Closing the last tab, or `exit` in it, hides the pane; opening it again starts fresh.
@@ -514,7 +514,7 @@ impl App {
     }
 
     /// Put `prompt` in the composer, its editor and the UI's copy alike, and give it the keys.
-    /// Code from quill-ide: its folder's session on screen, or a new one there, and the file
+    /// Code from newen-ide: its folder's session on screen, or a new one there, and the file
     /// and lines added to the message, for the person to say what they want of them.
     fn ask_from_editor(
         &mut self,
@@ -692,7 +692,7 @@ impl eframe::App for App {
         }
         for event in events {
             // A session that needs the person, or finished, while it is not in view shows a
-            // banner and flags quill, as Desktop's notifications and "Draw attention on
+            // banner and flags Newen, as Desktop's notifications and "Draw attention on
             // notifications".
             // What the engine retells of kept sessions at start is history, not news.
             if matches!(event, Event::Restored) {
@@ -702,7 +702,7 @@ impl eframe::App for App {
             if let Event::Update(newen_model::UpdateState::Installed { program, .. }) = &event {
                 match restart(program) {
                     Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                    Err(error) => eprintln!("quill: could not start the new version: {error}"),
+                    Err(error) => eprintln!("newen: could not start the new version: {error}"),
                 }
             }
             if let Some((level, banner)) = self
@@ -784,7 +784,7 @@ impl eframe::App for App {
             self.dispatch(intents);
         }
         self.apply_look(&ctx);
-        // Context menus read as quill's other menus, in the theme in force.
+        // Context menus read as Newen's other menus, in the theme in force.
         self.tree
             .set_context_menu_palette(newen_ui::look::menu_palette());
         self.tree
@@ -1232,7 +1232,7 @@ impl eframe::App for App {
                     ctx.copy_text(words);
                 }
                 // A link: its address copied, or opened on the computer, from its menu or, for
-                // what quill's browser and Files do not open (mail, another app's), its click.
+                // what Newen's browser and Files do not open (mail, another app's), its click.
                 if let Some(url) = id.strip_prefix(newen_ui::view::LINK_COPY) {
                     ctx.copy_text(url.to_owned());
                 }
@@ -1541,7 +1541,7 @@ impl eframe::App for App {
         if let Some(after) = self.tree.animation_repaint_after() {
             ctx.request_repaint_after(after);
         }
-        // The effort thumb's spring and the Ultracode field are quill's own, not the tree's.
+        // The effort thumb's spring and the Ultracode field are Newen's own, not the tree's.
         if let Some(after) = self.ui.repaint_after() {
             ctx.request_repaint_after(after);
         }
@@ -1606,16 +1606,16 @@ fn open_external(target: impl AsRef<std::ffi::OsStr>) {
     let command = newen_files::open_in_system(target);
     if let Err(error) = command {
         eprintln!(
-            "quill: could not open {}: {error}",
+            "newen: could not open {}: {error}",
             target.to_string_lossy()
         );
     }
 }
 
-/// `quill --open-url URL`: the agents' `$BROWSER` (the engine's bridge). A local page opens in
-/// the session's browser; anything else, or no quill to answer, in the desktop's own.
-/// `quill --install`: this copy becomes the installed version, which `current` names from then
-/// on (quill-update's install.rs). Returns where it is.
+/// `newen --open-url URL`: the agents' `$BROWSER` (the engine's bridge). A local page opens in
+/// the session's browser; anything else, or no Newen to answer, in the desktop's own.
+/// `newen --install`: this copy becomes the installed version, which `current` names from then
+/// on (newen-update's install.rs). Returns where it is.
 fn install_self() -> Result<String, String> {
     let install = newen_update::install::Install::locate()
         .ok_or("no folder to install Newen in (set HOME or NEWEN_UPDATE_ROOT)")?;
@@ -1627,7 +1627,7 @@ fn install_self() -> Result<String, String> {
     Ok(placed.display().to_string())
 }
 
-/// Before the window, in an installed copy quill updates: a start of the version on trial is
+/// Before the window, in an installed copy Newen updates: a start of the version on trial is
 /// counted, and after two that never ran a minute it is rolled back to the one before; else a
 /// newer version staged is activated. Either way the installed program then starts in place of
 /// this one. Returns the version on trial, to end it once this start proves healthy.
@@ -1704,7 +1704,7 @@ fn migrate_from_quill(
 
 /// A line in the update log (and on stderr).
 fn update_log(line: String) {
-    eprintln!("quill: update: {line}");
+    eprintln!("newen: update: {line}");
     if let Some(path) = newen_update::log::path() {
         newen_update::log::write(&path, &line);
     }
@@ -1759,7 +1759,7 @@ fn wait_for_restarter() {
 }
 
 fn open_url(url: &str) -> bool {
-    // The bridge to quill's own browser is a Unix socket; elsewhere the system opens it.
+    // The bridge to Newen's own browser is a Unix socket; elsewhere the system opens it.
     #[cfg(unix)]
     let handed = (|| -> Option<bool> {
         use std::io::{BufRead, Write};
@@ -1783,7 +1783,7 @@ fn open_url(url: &str) -> bool {
             .is_ok_and(|status| status.success())
 }
 
-/// Show `path` of the folder `root`, or the folder, in `editor` at `line` when given: quill-ide
+/// Show `path` of the folder `root`, or the folder, in `editor` at `line` when given: newen-ide
 /// in its window of that folder when one is open, else a new one; the others by their URL
 /// link, as Desktop opens them: `vscode://file/<path>:<line>`.
 fn open_in_editor(
@@ -1798,7 +1798,7 @@ fn open_in_editor(
         let shown = target.display().to_string();
         // As Desktop: a path the URL would have to escape is not sent at all.
         if shown.contains(['%', '#', '?', '\\']) || shown.chars().any(char::is_whitespace) {
-            eprintln!("quill: {shown} cannot go to {editor} as a link");
+            eprintln!("newen: {shown} cannot go to {editor} as a link");
             return;
         }
         let at = line.map_or(String::new(), |line| format!(":{line}"));
@@ -1815,7 +1815,7 @@ fn open_in_editor(
             None => newen_files::open_in_system(url),
         };
         if let Err(error) = opened {
-            eprintln!("quill: {editor} did not open: {error}");
+            eprintln!("newen: {editor} did not open: {error}");
         }
         return;
     }
@@ -1828,7 +1828,7 @@ fn open_in_editor(
     if newen_link::send(&newen_link::ide_socket(root), &open).is_ok() {
         return;
     }
-    // Beside quill when they were built together, else the one on PATH.
+    // Beside Newen when they were built together, else the one on PATH.
     let program = std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.join(newen_ui::view::NEWEN_IDE)))
@@ -1843,7 +1843,7 @@ fn open_in_editor(
         });
     }
     if let Err(error) = command.spawn() {
-        eprintln!("quill: newen-ide did not start: {error}");
+        eprintln!("newen: newen-ide did not start: {error}");
     }
 }
 
@@ -1878,7 +1878,7 @@ fn show_in_file_manager(folder: &std::path::Path) {
     }
 }
 
-/// quill's own icon for its window in the theme in force (X11, Windows); a Wayland desktop
+/// Newen's own icon for its window in the theme in force (X11, Windows); a Wayland desktop
 /// takes it by the app id from the icon theme instead (`scripts/install-desktop.sh`).
 fn window_icon(dark: bool) -> egui::IconData {
     let png: &[u8] = if dark {
@@ -1897,7 +1897,7 @@ fn window_icon(dark: bool) -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
-    // Chromium's own processes are quill run again; they do their work and leave.
+    // Chromium's own processes are Newen run again; they do their work and leave.
     if let Some(code) = newen_engine::native::subprocess() {
         std::process::exit(code);
     }
@@ -1912,11 +1912,11 @@ fn main() -> eframe::Result {
         if flag == "--install" {
             std::process::exit(match install_self() {
                 Ok(placed) => {
-                    println!("quill {} is installed at {placed}", newen_update::VERSION);
+                    println!("Newen {} is installed at {placed}", newen_update::VERSION);
                     0
                 }
                 Err(error) => {
-                    eprintln!("quill: --install: {error}");
+                    eprintln!("newen: --install: {error}");
                     1
                 }
             });
@@ -2034,7 +2034,7 @@ fn main() -> eframe::Result {
                         // real keychain while programs are stand-ins.
                         extensions: newen_engine::Config::default_database().extensions,
                         // A replay's pictures last as long as its sessions do.
-                        pictures: Some(std::env::temp_dir().join("quill-pictures")),
+                        pictures: Some(std::env::temp_dir().join("newen-pictures")),
                         secrets: Some(Arc::new(newen_engine::MemorySecrets::default())),
                         ..Default::default()
                     },
@@ -2063,7 +2063,7 @@ fn main() -> eframe::Result {
                     }
                 });
             }
-            // quill-ide sends code to ask about; a second quill leaves the socket to the first.
+            // newen-ide sends code to ask about; a second Newen leaves the socket to the first.
             let linked: Arc<Mutex<Vec<newen_link::Message>>> = Arc::default();
             let link = {
                 let (linked, ctx) = (linked.clone(), creation.egui_ctx.clone());
@@ -2205,13 +2205,13 @@ fn start_direct(
             Some(direct)
         }
         Err(error) => {
-            eprintln!("quill: the page is drawn by the window: {error}");
+            eprintln!("newen: the page is drawn by the window: {error}");
             None
         }
     }
 }
 
-/// Whether the browser's pages are drawn by Chromium in quill's own process, rather than by
+/// Whether the browser's pages are drawn by Chromium in Newen's own process, rather than by
 /// a headless one's screencast: when Settings asks. `NEWEN_BROWSER=native` or `headless`
 /// decides instead.
 fn native_browser(settings: &newen_model::Settings) -> bool {
@@ -2236,7 +2236,7 @@ fn saved_settings() -> newen_model::Settings {
         .unwrap_or_default()
 }
 
-/// Start Chromium in quill's process, for native tabs, its paints copied on the window's
+/// Start Chromium in Newen's process, for native tabs, its paints copied on the window's
 /// `gpu` where it can; `None` keeps the headless one.
 fn start_native(
     frames: &newen_engine::Frames,
@@ -2245,11 +2245,11 @@ fn start_native(
     let data = newen_engine::Config::default_database()
         .database
         .and_then(|db| db.parent().map(|dir| dir.join("chromium")))
-        .unwrap_or_else(|| std::env::temp_dir().join("quill-chromium"));
+        .unwrap_or_else(|| std::env::temp_dir().join("newen-chromium"));
     match newen_engine::Native::start(&data, frames.clone(), gpu) {
         Ok(native) => Some(native),
         Err(error) => {
-            eprintln!("quill: the browser draws without native tabs: {error}");
+            eprintln!("newen: the browser draws without native tabs: {error}");
             None
         }
     }

@@ -1,6 +1,6 @@
 //! Every test replays a capture of the real CLI (`fixtures/0.163.0/`, docs/codex.md "Fase 1").
 //!
-//! A capture is driven the way the engine would: the lines quill sent become the commands
+//! A capture is driven the way the engine would: the lines Newen sent become the commands
 //! that make the adapter write them, and the lines Codex sent are decoded. What the adapter
 //! writes must be the capture's `out` lines, in number and order, because the fake agent
 //! waits for one line per `out`.
@@ -127,8 +127,8 @@ fn replay(run: &mut Run, entries: &[(String, Value)], from: usize) -> usize {
                 run.prompt(msg["params"]["input"][0]["text"].as_str().unwrap(), true)
             }
             ("out", Some("turn/interrupt")) => run.send(AgentCommand::Interrupt),
-            // A fork inside one process: quill forks by launching a new one (below).
-            // Asked by the capture's driver, not by quill: its answer is for no one.
+            // A fork inside one process: Newen forks by launching a new one (below).
+            // Asked by the capture's driver, not by Newen: its answer is for no one.
             ("out", Some("thread/compact/start" | "review/start")) => {
                 run.codex.pending.insert(key(&msg["id"]), Pending::Ignore);
             }
@@ -425,10 +425,10 @@ fn a_prompt_before_the_thread_waits_for_it() {
     assert_eq!(turn["params"]["sandboxPolicy"]["type"], "workspaceWrite");
 }
 
-/// quill's own tools reach Codex as tools the client declares, and their calls come back to
+/// Newen's own tools reach Codex as tools the client declares, and their calls come back to
 /// the engine as `HostTool` (the shapes are the schema's, inferred: no capture).
 #[test]
-fn quill_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() {
+fn newen_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() {
     let mut run = Run::started(SessionSpec::default());
     run.feed(&entries("simple")[1].1);
     let thread = (run.written.iter()).find(|m| m["method"] == "thread/start");
@@ -466,7 +466,7 @@ fn quill_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() 
         &json!({ "id": 7, "result": {
             "contentItems": [{ "type": "inputText", "text": "Waiting." }], "success": true } })
     );
-    // Its item is drawn as quill's own tool.
+    // Its item is drawn as Newen's own tool.
     run.feed(
         &json!({ "method": "item/started", "params": { "threadId": "t1", "item": {
         "type": "dynamicToolCall", "id": "c1", "tool": "wait_for_session",
@@ -980,7 +980,7 @@ fn resume_is_a_second_process_that_starts_over_and_lists_its_turns() {
 #[test]
 fn a_fork_continues_a_copy_of_the_thread() {
     let all = entries("fork");
-    // The capture forks inside the process; quill launches a new one with `fork` set, so the
+    // The capture forks inside the process; Newen launches a new one with `fork` set, so the
     // second half is checked on its own, after the first.
     let mut first = Run::started(SessionSpec::default());
     replay(&mut first, &all[..37], 0);
@@ -1090,7 +1090,7 @@ fn a_rewind_forks_the_thread_through_the_turn_before_the_message() {
 }
 
 #[test]
-fn codex_does_not_restore_files_so_quill_does() {
+fn codex_does_not_restore_files_so_newen_does() {
     let run = run_of("simple");
     let Ready { capabilities, .. } = &run.events[1] else {
         panic!()
@@ -1152,7 +1152,7 @@ fn account_models_become_the_pickers_and_the_unauthorized_turn_asks_to_sign_in()
 }
 
 #[test]
-fn what_codex_asks_that_quill_cannot_answer_is_refused_not_awaited() {
+fn what_codex_asks_that_newen_cannot_answer_is_refused_not_awaited() {
     let mut codex = Codex::new();
     let decoded = codex.decode(
         &json!({ "id": 7, "method": "item/permissions/requestApproval", "params": {} }).to_string(),
@@ -1175,7 +1175,7 @@ fn what_codex_asks_that_quill_cannot_answer_is_refused_not_awaited() {
             "{line}"
         );
     }
-    // Items quill does not draw yet stay whole.
+    // Items Newen does not draw yet stay whole.
     let item = json!({ "method": "item/started", "params": { "item": { "type": "hookPrompt", "id": "c", "fragments": [] } } });
     assert!(matches!(
         &codex.decode(&item.to_string()).events[..],
@@ -1473,7 +1473,7 @@ fn an_image_read_is_a_read_and_a_made_one_has_its_prompt_and_file() {
 
 #[test]
 fn a_tool_the_client_declared_is_a_step_by_its_name() {
-    // Inferred from the schema: quill declares no dynamic tools, so no capture has one.
+    // Inferred from the schema: Newen declares no dynamic tools, so no capture has one.
     let mut run = run_of("simple");
     let item = |done: bool| {
         json!({ "method": if done { "item/completed" } else { "item/started" },
@@ -1560,7 +1560,7 @@ fn a_shared_session_is_reached_from_the_phone() {
         panic!("{:?}", run.events)
     };
     assert!(capabilities.remote && capabilities.remote_pairing);
-    // On, runtime-only: quill keeps the choice.
+    // On, runtime-only: Newen keeps the choice.
     run.send(AgentCommand::Remote {
         on: true,
         name: None,
@@ -1604,7 +1604,7 @@ fn a_shared_session_is_reached_from_the_phone() {
     );
     assert!(run.events.iter().any(|e| matches!(e,
         AgentEvent::Prompt { request, text } if request == "m1" && text == "hola desde el celular")));
-    // An approval the phone answered leaves quill's card.
+    // An approval the phone answered leaves Newen's card.
     run.feed(
         &json!({ "id": 7, "method": "item/commandExecution/requestApproval",
         "params": { "threadId": "t1", "turnId": "u1", "itemId": "c1", "command": "touch x" } }),

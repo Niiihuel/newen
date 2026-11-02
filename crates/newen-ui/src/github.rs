@@ -1,9 +1,9 @@
 //! GitHub as the person's identity: the state `gh` reports, the sidebar foot and its menu, the
 //! sign-in with its one-time code, and the question before signing out. GitHub is not an
-//! agent: the engine asks the `gh` program (`quill-engine/src/github.rs`), which keeps the
+//! agent: the engine asks the `gh` program (`newen-engine/src/github.rs`), which keeps the
 //! credentials; this shows what it reports. Desktop shows GitHub only as a connector row,
 //! "Signed in as @{login}" with Disconnect and Reconnect; the foot's use of it as the
-//! person's identity is quill's (inferred).
+//! person's identity is Newen's (inferred).
 
 use crate::Ui;
 use limn::{Component, Element};
@@ -192,7 +192,7 @@ pub(crate) fn clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
 }
 
 /// The foot's person: initials, name, and the avatar's file when GitHub is connected. Not
-/// connected, it is the quill user's name.
+/// connected, it is the Newen user's name.
 pub(crate) fn identity(ui: &Ui) -> (String, String, Option<PathBuf>) {
     if let Some((login, name, avatar)) = signed_in(ui) {
         let shown = name.unwrap_or(login);

@@ -1,7 +1,7 @@
-//! The line between quill and quill-ide: Unix sockets in the person's runtime folder (on
+//! The line between Newen and newen-ide: Unix sockets in the person's runtime folder (on
 //! Windows, a loopback TCP port and a secret kept in a file of that folder, as Windows has no
 //! such sockets in std), one JSON message a line. Each IDE window listens on its folder's socket, so a file of a
-//! folder already open goes to that window; quill listens on its own.
+//! folder already open goes to that window; Newen listens on its own.
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn a_message_sent_is_heard_once_and_a_live_socket_is_not_taken() {
-        let dir = std::env::temp_dir().join(format!("quill-link-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-link-test-{}", std::process::id()));
         let socket = dir.join("a.sock");
         let (tell, told) = mpsc::channel();
         let listening = listen(&socket, move |m| tell.send(m).unwrap()).unwrap();

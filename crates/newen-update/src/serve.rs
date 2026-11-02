@@ -1,5 +1,5 @@
 //! A file server on the loopback interface, for the tests and the local test feed
-//! (`tools/quill-release`): HTTP/1.1 `GET`, one request per connection, `Range: bytes={start}-`,
+//! (`tools/newen-release`): HTTP/1.1 `GET`, one request per connection, `Range: bytes={start}-`,
 //! and faults to try a client against: a connection cut partway through a body, a slow body,
 //! no ranges. Never for anything but this machine.
 
@@ -13,7 +13,7 @@ use std::time::Duration;
 /// What the server holds and how it misbehaves.
 #[derive(Clone, Debug, Default)]
 pub struct Files {
-    /// By path, `/quill-update.json` and so on.
+    /// By path, `/newen-update.json` and so on.
     pub files: HashMap<String, Arc<Vec<u8>>>,
     /// Cut the first body sent for this path at this many bytes; later requests are served whole.
     pub cut: Option<(String, u64)>,
@@ -90,7 +90,7 @@ pub fn publish_files(
 ) -> crate::Artifact {
     use sha2::Digest as _;
     let out = std::env::temp_dir().join(format!(
-        "quill-feed-{}-{}",
+        "newen-feed-{}-{}",
         std::process::id(),
         server.address.port()
     ));

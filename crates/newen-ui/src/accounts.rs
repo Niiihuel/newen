@@ -1,10 +1,10 @@
 //! Settings' Accounts page: GitHub (who is signed in, and the last year of contributions as a
 //! heatmap) and one section per agent (its sign-in, and the usage its sessions reported). The
 //! heatmap's design is openADE's (`settings_ui/activity_charts.rs`, the user's own code, MIT OR
-//! Apache-2.0): `contribution_scale`, `calendar_chart` and `github_card`, with quill's strings
+//! Apache-2.0): `contribution_scale`, `calendar_chart` and `github_card`, with Newen's strings
 //! in English. Desktop's Settings shows GitHub as a connector row, "Signed in as @{login}",
 //! and usage rows "5-hour limit" and "Weekly · all models" with 4 px bars; the grouping by
-//! agent is quill's.
+//! agent is Newen's.
 
 use crate::github::{self, Calendar};
 use crate::view;
@@ -190,8 +190,8 @@ fn github_rows(ui: &Ui, palette: ComponentPalette) -> Vec<Setting> {
         )],
         (Some(GithubState::SignedOut), _) => vec![setting(
             "GitHub",
-            "Connect your account to show who you are in quill and your activity here. \
-             quill signs in through the GitHub CLI, which keeps the credentials.",
+            "Connect your account to show who you are in Newen and your activity here. \
+             Newen signs in through the GitHub CLI, which keeps the credentials.",
             buttons(&[(github::CONNECT, "Connect GitHub")]),
         )],
         (Some(GithubState::Unknown(why)), _) => vec![setting(

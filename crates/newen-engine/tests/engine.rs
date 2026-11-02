@@ -1,4 +1,4 @@
-//! The engine driving a fake agent that replays real captures (crates/quill-agent-claude/fixtures).
+//! The engine driving a fake agent that replays real captures (crates/newen-agent-claude/fixtures).
 
 use newen_engine::Engine;
 use newen_model::{AgentEvent, Decision, Event, Intent, Lane, NewSession, SessionStatus};
@@ -33,7 +33,7 @@ fn engine() -> (Engine, Receiver<Event>) {
 /// A working directory whose `.fake-agent` names the capture the fake agent replays.
 fn workdir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "quill-engine-{}-{name}-{}",
+        "newen-engine-{}-{name}-{}",
         std::process::id(),
         uuid_like()
     ));
@@ -121,11 +121,11 @@ fn a_message_keeps_its_images_and_a_text_file_among_them_is_left_out() {
 fn a_tool_s_pictures_are_on_disk_and_stored_before_the_ui_hears_of_them() {
     use base64::Engine as _;
     let root = std::env::temp_dir().join(format!(
-        "quill-engine-{}-pictures-{}",
+        "newen-engine-{}-pictures-{}",
         std::process::id(),
         uuid_like()
     ));
-    let (database, pictures) = (root.join("quill.db"), root.join("pictures"));
+    let (database, pictures) = (root.join("newen.db"), root.join("pictures"));
     // simple.jsonl's turn, in which a tool answers with a picture before the turn's result.
     let mut png = std::io::Cursor::new(vec![]);
     image::RgbImage::new(4, 3)
@@ -338,7 +338,7 @@ fn sessions_stream_turns_and_wait_for_decisions() {
 
 #[test]
 fn a_kept_session_comes_back_and_continues() {
-    let database = std::env::temp_dir().join(format!("quill-test-{}.db", std::process::id()));
+    let database = std::env::temp_dir().join(format!("newen-test-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&database);
     let start = || {
         let (tx, rx) = channel();
@@ -460,7 +460,7 @@ fn a_request_is_attributed_and_its_undo_puts_files_back() {
         "claude".to_string(),
         env!("CARGO_BIN_EXE_fake-agent").to_string(),
     )]);
-    let snapshots = std::env::temp_dir().join(format!("quill-snapshots-{}", uuid_like()));
+    let snapshots = std::env::temp_dir().join(format!("newen-snapshots-{}", uuid_like()));
     let config = newen_engine::Config {
         programs,
         database: None,
@@ -510,7 +510,7 @@ fn a_request_is_attributed_and_its_undo_puts_files_back() {
 
 #[test]
 fn a_name_and_a_pin_are_kept_and_a_deleted_session_is_gone() {
-    let database = std::env::temp_dir().join(format!("quill-test-delete-{}.db", uuid_like()));
+    let database = std::env::temp_dir().join(format!("newen-test-delete-{}.db", uuid_like()));
     let start = || {
         let (tx, rx) = channel();
         let programs = HashMap::from([(
@@ -984,10 +984,10 @@ fn a_queued_message_can_be_removed_sent_now_or_taken_back() {
 }
 
 /// A message taken back to the composer is the moment's: after a restart it is not told
-/// again, or the composer would fill with words the person deleted before closing quill.
+/// again, or the composer would fill with words the person deleted before closing Newen.
 #[test]
 fn a_message_taken_back_is_not_told_again_after_a_restart() {
-    let database = std::env::temp_dir().join(format!("quill-test-taken-{}.db", uuid_like()));
+    let database = std::env::temp_dir().join(format!("newen-test-taken-{}.db", uuid_like()));
     let start = || {
         let (tx, rx) = channel();
         let programs = HashMap::from([(
@@ -1057,7 +1057,7 @@ fn quiet(rx: &Receiver<Event>, millis: u64) -> Vec<Event> {
 
 #[test]
 fn a_queue_kept_across_a_restart_comes_back_held_and_waits_for_the_person() {
-    let database = std::env::temp_dir().join(format!("quill-test-queue-{}.db", uuid_like()));
+    let database = std::env::temp_dir().join(format!("newen-test-queue-{}.db", uuid_like()));
     let start = || {
         let (tx, rx) = channel();
         let programs = HashMap::from([(
@@ -1615,15 +1615,15 @@ fn a_codex_session_is_told_its_skills_once_it_is_ready() {
     assert!(skills.iter().any(|s| s.name == "review"));
 }
 
-/// quill's "All agents" layer: kept (and written) before it is announced, shadowed by an agent's
+/// Newen's "All agents" layer: kept (and written) before it is announced, shadowed by an agent's
 /// own server of the same name, added to the sessions of the agents that can use it with the
 /// secret only in the process's environment, and excluded per agent.
 #[test]
 fn global_servers_are_kept_then_injected_per_session_with_secrets_only_in_the_environment() {
     use newen_model::{Applies, GlobalOp, GlobalServer, GlobalVar};
     let dir = workdir("simple");
-    let config_dir = std::env::temp_dir().join(format!("quill-global-{}", uuid_like()));
-    let file = config_dir.join("quill/extensions.json");
+    let config_dir = std::env::temp_dir().join(format!("newen-global-{}", uuid_like()));
+    let file = config_dir.join("newen/extensions.json");
     let link = |program: &str| {
         let path = dir.join(program);
         #[cfg(unix)]
@@ -1735,13 +1735,13 @@ fn global_servers_are_kept_then_injected_per_session_with_secrets_only_in_the_en
     let _ = std::fs::remove_dir_all(config_dir);
 }
 
-/// Global skills live in quill's folder; a session gets them through a plugin (Claude) or an
+/// Global skills live in Newen's folder; a session gets them through a plugin (Claude) or an
 /// extra root (Codex), and an agent's own skill of the same name wins.
 #[test]
 fn global_skills_are_made_and_added_to_the_session() {
     use newen_model::{Applies, GlobalOp};
     let dir = workdir("simple");
-    let config_dir = std::env::temp_dir().join(format!("quill-global-{}", uuid_like()));
+    let config_dir = std::env::temp_dir().join(format!("newen-global-{}", uuid_like()));
     let (tx, rx) = channel();
     let engine = Engine::start_with(
         move |event| drop(tx.send(event)),
@@ -1750,7 +1750,7 @@ fn global_skills_are_made_and_added_to_the_session() {
                 "claude".to_string(),
                 env!("CARGO_BIN_EXE_fake-agent").to_string(),
             )]),
-            extensions: Some(config_dir.join("quill/extensions.json")),
+            extensions: Some(config_dir.join("newen/extensions.json")),
             secrets: Some(std::sync::Arc::new(newen_engine::MemorySecrets::default())),
             ..Default::default()
         },
@@ -1831,7 +1831,7 @@ fn global_skills_are_made_and_added_to_the_session() {
 
 fn global_skill_file(config_dir: &std::path::Path, name: &str) -> bool {
     config_dir
-        .join(format!("quill/skills/{name}/SKILL.md"))
+        .join(format!("newen/skills/{name}/SKILL.md"))
         .is_file()
 }
 
@@ -1843,7 +1843,7 @@ fn a_session_reached_from_a_phone_shows_its_messages_as_the_persons() {
         "claude".to_string(),
         env!("CARGO_BIN_EXE_fake-agent").to_string(),
     )]);
-    let snapshots = std::env::temp_dir().join(format!("quill-snapshots-{}", uuid_like()));
+    let snapshots = std::env::temp_dir().join(format!("newen-snapshots-{}", uuid_like()));
     let config = newen_engine::Config {
         programs,
         database: None,
@@ -1913,7 +1913,7 @@ fn a_session_reached_from_a_phone_shows_its_messages_as_the_persons() {
             _ => None,
         })
         .expect("the phone's first message");
-    // Its permission, approved on the phone, leaves quill's card, and its turn is its own.
+    // Its permission, approved on the phone, leaves Newen's card, and its turn is its own.
     assert!(events.iter().any(|e| matches!(
         e,
         Event::Agent {
@@ -2518,7 +2518,7 @@ fn woken(rx: &Receiver<Event>) -> newen_model::Report {
 
 #[test]
 fn a_wait_is_kept_across_a_restart_and_wakes_its_session_when_the_other_finishes() {
-    let database = std::env::temp_dir().join(format!("quill-test-wait-{}.db", uuid_like()));
+    let database = std::env::temp_dir().join(format!("newen-test-wait-{}.db", uuid_like()));
     let start = || {
         let (tx, rx) = channel();
         let programs = HashMap::from([(
@@ -2666,7 +2666,7 @@ fn the_video_codec_is_fetched_only_after_a_yes_that_is_kept_first() {
         });
     }
     let dir = std::env::temp_dir().join(format!(
-        "quill-codec-{}-{}",
+        "newen-codec-{}-{}",
         std::process::id(),
         uuid_like()
     ));

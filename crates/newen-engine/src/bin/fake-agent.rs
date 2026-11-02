@@ -2,16 +2,16 @@
 //! working directory (each test session gets its own directory, so tests run side by side).
 //! The file tools it replays (Write, Edit, Bash) really run there, so the folder changes as
 //! it did live and the engine attribution can be tested.
-//! Prints each line the real CLI sent, and where quill sent a line in the capture it
+//! Prints each line the real CLI sent, and where Newen sent a line in the capture it
 //! waits for one on stdin, so the engine's writes pace the replay as they did live.
 //! `NEWEN_FAKE_PACE=<factor>` also keeps the capture's time between lines, scaled, so a
 //! person can watch a turn run.
 //!
-//! It also answers what quill asks of a program outside a session (`mod ext`): `mcp` and
+//! It also answers what Newen asks of a program outside a session (`mod ext`): `mcp` and
 //! `plugin` subcommands, in the words of Claude Code or of Codex by the name it is run as
 //! (`fake-codex` is Codex; anything else is Claude Code), and, without a capture in the working
-//! directory, the app-server and control requests that list skills. A line quill sends with an
-//! id that starts `quill-` is answered on its own and does not count as one of the capture's.
+//! directory, the app-server and control requests that list skills. A line Newen sends with an
+//! id that starts `newen-` is answered on its own and does not count as one of the capture's.
 
 use std::io::{BufRead, Write};
 
@@ -71,7 +71,7 @@ fn main() {
             _ => {}
         }
     }
-    // The real CLI stays until its stdin closes, answering what quill asks of it on its own.
+    // The real CLI stays until its stdin closes, answering what Newen asks of it on its own.
     for line in input.map_while(Result::ok) {
         if let Some(answer) = ext::answer(&line, false) {
             writeln!(out, "{answer}").unwrap();
@@ -80,7 +80,7 @@ fn main() {
     }
 }
 
-/// `NEWEN_FAKE_APP_SERVER`: a Codex app-server for any number of threads, as the one quill's
+/// `NEWEN_FAKE_APP_SERVER`: a Codex app-server for any number of threads, as the one Newen's
 /// Codex sessions share (docs/remote-control.md §3). Each turn answers "echo: <its text>".
 fn app_server() {
     use serde_json::json;
@@ -130,7 +130,7 @@ fn app_server() {
     }
 }
 
-/// The next line quill wrote that belongs to the capture: the ones with ids of quill's own
+/// The next line Newen wrote that belongs to the capture: the ones with ids of Newen's own
 /// (`ext::answer`) are answered on the way.
 fn next_line(input: &mut impl Iterator<Item = std::io::Result<String>>) -> Option<String> {
     loop {
@@ -507,7 +507,7 @@ mod ext {
         }
     }
 
-    /// The answer to a line quill wrote, if it is one this answers. `bare` is on when no
+    /// The answer to a line Newen wrote, if it is one this answers. `bare` is on when no
     /// capture is being replayed: only then are all of Claude Code's control requests these
     /// (the skills' list is answered always: no capture asks it).
     pub fn answer(line: &str, bare: bool) -> Option<String> {
@@ -515,7 +515,7 @@ mod ext {
         let id = msg["id"].as_str();
         let result = match (msg["method"].as_str(), id) {
             (Some("initialize"), Some("newen-ext")) => json!({
-                "userAgent": "quill/0.163.0 (Fake; x86_64)", "codexHome": "/home/fake/.codex",
+                "userAgent": "newen/0.163.0 (Fake; x86_64)", "codexHome": "/home/fake/.codex",
                 "platformFamily": "unix", "platformOs": "linux"}),
             (Some("skills/list"), Some(_)) => {
                 let off = kept()
@@ -628,7 +628,7 @@ mod ext {
             }
             _ => return None,
         };
-        // Only ids of quill's own are answered in a replay; a control request has none.
+        // Only ids of Newen's own are answered in a replay; a control request has none.
         id.map(|id| json!({"id": id, "result": result}).to_string())
     }
 }

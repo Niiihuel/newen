@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "quill's engine: one actor per session owning its agent's process."
+description = "Newen's engine: one actor per session owning its agent's process."
 publish = false
 
 [dependencies]
@@ -24,9 +24,9 @@ serde.workspace = true
 # Processes, pipes, one actor per session, and the $BROWSER bridge's unix socket.
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time", "net"] }
 # Sizing the images a message attaches: decode, resize, and JPEG (PNG, JPEG, GIF, WebP only);
-# ICO too, for a site's favicon.ico (a logo, quill-engine's logos.rs).
+# ICO too, for a site's favicon.ico (a logo, newen-engine's logos.rs).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "ico"] }
-# quill's own updates: the signed manifest, the download and the installation (update.rs).
+# Newen's own updates: the signed manifest, the download and the installation (update.rs).
 newen-update = { path = "../newen-update" }
 # Fetching a connector's or plugin's logo over https, with a ten-second limit (logos.rs).
 ureq = "3"

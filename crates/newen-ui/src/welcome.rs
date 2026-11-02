@@ -1,7 +1,7 @@
-//! The first screen: quill's pen writes "welcome", as the icon's pen writes its line, then
-//! a line about quill and Get started. Desktop's own first screen is its mark, a title, a
+//! The first screen: Newen's pen writes "welcome", as the icon's pen writes its line, then
+//! a line about Newen and Get started. Desktop's own first screen is its mark, a title, a
 //! subtitle and one wide button near the bottom; the
-//! written word is quill's.
+//! written word is Newen's.
 
 use crate::Ui;
 use limn::{Component, Element, Size};
@@ -34,7 +34,7 @@ pub fn view(ui: &Ui, window: Size) -> Element {
         .once()
         .duration(2.8)
         .render()
-        .accessibility_label("Welcome to quill");
+        .accessibility_label("Welcome to Newen");
     let since = *ui.welcome_since.get_or_init(std::time::Instant::now);
     let shown = since.elapsed().as_secs_f64() >= REVEAL;
     let below = shown.then(|| {
@@ -230,7 +230,7 @@ const WELCOME: [&[(f32, f32)]; 8] = [
     ],
 ];
 
-/// The icon's pen (`apps/quill/assets/icons/quill.svg`), 24 px from nib to tip, its nib at
+/// The icon's pen (`apps/newen/assets/icons/quill.svg`), 24 px from nib to tip, its nib at
 /// (0, 0): the feather, its shaft, the ferrule and the nib.
 const PEN: [&[(f32, f32)]; 4] = [
     &[

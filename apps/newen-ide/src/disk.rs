@@ -28,7 +28,7 @@ pub fn run(job: Job) -> Loaded {
             // shortcut: a failed save of Settings is only said on stderr; worth a line in
             // Settings if it ever happens.
             if let Err(error) = save_prefs(&prefs) {
-                eprintln!("quill-ide: Settings not saved: {error}");
+                eprintln!("newen-ide: Settings not saved: {error}");
             }
             Loaded::PrefsSaved
         }
@@ -78,7 +78,7 @@ pub fn run(job: Job) -> Loaded {
         Job::SaveSession(root, session) => {
             // shortcut: a session that fails to save is only said on stderr, as Settings.
             if let Err(error) = crate::session::save(&root, &session) {
-                eprintln!("quill-ide: the open files not kept: {error}");
+                eprintln!("newen-ide: the open files not kept: {error}");
             }
             Loaded::SessionSaved
         }
@@ -199,7 +199,7 @@ fn write(path: &Path, snapshot: &BufferSnapshot) -> io::Result<Stamp> {
         return Err(io::Error::other("not a file's path"));
     };
     let temporary = dir.join(format!(
-        ".{}.quill-ide-{}",
+        ".{}.newen-ide-{}",
         name.to_string_lossy(),
         std::process::id()
     ));
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn the_branch_is_read_from_head_in_a_repository_and_in_a_worktree() {
-        let dir = std::env::temp_dir().join(format!("quill-ide-head-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-ide-head-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (main, linked) = (dir.join("main"), dir.join("linked"));
         std::fs::create_dir_all(main.join(".git/worktrees/linked")).unwrap();
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_folder_lists_as_git_sees_it() {
-        let dir = std::env::temp_dir().join(format!("quill-ide-list-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-ide-list-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for d in ["src", ".git", "target"] {
             std::fs::create_dir_all(dir.join(d)).unwrap();
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn a_save_through_a_link_replaces_the_file_whole_and_keeps_its_mode_and_the_link() {
         use std::os::unix::fs::{symlink, PermissionsExt};
-        let dir = std::env::temp_dir().join(format!("quill-ide-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-ide-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (file, link) = (dir.join("run.sh"), dir.join("link.sh"));

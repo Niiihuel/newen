@@ -1,6 +1,6 @@
 //! The native view end to end, as `tests/chromium.rs` checks the headless one: CEF can only
 //! run in a program of its own (its processes are this one run again), so it is an example.
-//! `cargo run -p quill-browser --example native [out-dir]` from shell.nix; it saves the frames
+//! `cargo run -p newen-browser --example native [out-dir]` from shell.nix; it saves the frames
 //! it saw as PPM in `out-dir` when given one. The frames stay on a GPU device of its own, as
 //! they do on the window's, where its driver allows; `NEWEN_NO_GPU=1` checks the CPU's path.
 
@@ -14,14 +14,14 @@ const PAGE: &str = "<!doctype html><title>Acme</title><body style='margin:0;back
 <input id=email style='position:absolute;left:10px;top:10px;width:200px;height:30px'>\
 <select id=pick style='position:absolute;left:10px;top:60px;width:150px'>\
 <option>one<option>two<option>three</select>\
-<p style='position:absolute;top:100px;left:10px;font:20px sans-serif'>hello quill</p></body>";
+<p style='position:absolute;top:100px;left:10px;font:20px sans-serif'>hello Newen</p></body>";
 
 fn main() {
     if let Some(code) = newen_browser::native::subprocess() {
         std::process::exit(code);
     }
     let out = std::env::args().nth(1).map(std::path::PathBuf::from);
-    let dir = std::env::temp_dir().join(format!("quill-native-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-native-{}", std::process::id()));
     let frames = Frames::default();
     frames.set_scale(2.0);
     let gpu = std::env::var_os("NEWEN_NO_GPU")
@@ -212,7 +212,7 @@ fn save(out: &Option<std::path::PathBuf>, name: &str, frame: &Frame, rgba: &[u8]
 
 type Gpu = Option<(wgpu::Device, wgpu::Queue)>;
 
-/// A Vulkan device that can import Chromium's buffers, as quill asks eframe for; `None`
+/// A Vulkan device that can import Chromium's buffers, as Newen asks eframe for; `None`
 /// without one.
 fn gpu() -> Gpu {
     let wanted = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;

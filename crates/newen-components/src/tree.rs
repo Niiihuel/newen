@@ -1,4 +1,4 @@
-//! A folder's file tree, as quill-ide and quill's Files pane show it: folders that open in
+//! A folder's file tree, as newen-ide and Newen's Files pane show it: folders that open in
 //! place, each row's menu (something new, rename, copy, cut, paste, its path, the trash), the
 //! keys nvim's trees take, and the dialogs those ask for. It holds no files and touches no
 //! disk: it says what to list and which operation to run (`Job`, run by the host beside the
@@ -24,7 +24,7 @@ pub const ERROR_DISMISS: &str = "file-error:dismiss";
 pub const ROW: f32 = 26.0;
 const DESKTOP_ROW: f32 = 24.0;
 
-/// How the tree is drawn: quill-ide's, with its icon pack, or Desktop's in its file tile,
+/// How the tree is drawn: newen-ide's, with its icon pack, or Desktop's in its file tile,
 /// quieter: 24 px rows, a folder's chevron alone and a file's plain glyph. Both draw depth guides.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Look {

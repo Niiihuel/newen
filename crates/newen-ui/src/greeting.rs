@@ -1,4 +1,4 @@
-//! The new-session page's greeting: quill's own words, by the local hour and day. One is
+//! The new-session page's greeting: Newen's own words, by the local hour and day. One is
 //! picked from the day's date and the part of the day, so it holds still through a frame, a
 //! session and a day's part, and changes with the next. Inferred, not Desktop's.
 

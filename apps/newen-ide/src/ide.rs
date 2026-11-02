@@ -1,4 +1,4 @@
-//! quill-ide's state, what the person's clicks and keys ask of it, and the window (`view`).
+//! newen-ide's state, what the person's clicks and keys ask of it, and the window (`view`).
 //! The disk is the host's: `update` returns `Job`s, and what they find comes back to `loaded`.
 
 use crate::complete::{self, Offer};
@@ -49,7 +49,7 @@ const MINIMAP: &str = "editor:minimap";
 pub const PREVIEW_TOGGLE: &str = "doc:toggle";
 const MD_LINK: &str = "md-link:";
 const MD_DIAGRAM: &str = "md-diagram:";
-/// The terminal's share of the window under the editor, its type and its insets, as quill's.
+/// The terminal's share of the window under the editor, its type and its insets, as Newen's.
 const TERMINAL_HEIGHT: f32 = 0.36;
 pub const TERMINAL_FONT: f32 = 12.0;
 const TERMINAL_PADDING: [f32; 2] = [12.0, 8.0];
@@ -386,9 +386,9 @@ impl Buffer {
 
 pub struct Ide {
     pub root: PathBuf,
-    /// The files' tree, which slides shut and peeks as quill's sidebar.
+    /// The files' tree, which slides shut and peeks as Newen's sidebar.
     pub sidebar: Sidebar,
-    /// The folder's files, as quill's Files pane shows them.
+    /// The folder's files, as Newen's Files pane shows them.
     pub tree: FileTree,
     pub buffers: Vec<Buffer>,
     pub active: Option<usize>,
@@ -454,7 +454,7 @@ pub struct Ide {
     /// Each language's server, for the footer, and those to start again.
     pub lsp_servers: HashMap<limn_language::Language, Server>,
     pub lsp_restart: Vec<limn_language::Language>,
-    /// What waits to go to quill, and how the last went.
+    /// What waits to go to Newen, and how the last went.
     pub link_out: Vec<newen_link::Message>,
     pub link_note: Option<String>,
     /// The "···" menu over the editor is open; the diagrams of a preview shown as source; an
@@ -1500,7 +1500,7 @@ impl Ide {
     /// Move what moves on its own: the tree's springs and its peek.
     pub fn tick(&mut self) {
         let now = std::time::Instant::now();
-        // The pace of limn's own opening and closing slots, as quill's.
+        // The pace of limn's own opening and closing slots, as Newen's.
         let motion = limn::SpringMotion::settling_in(std::time::Duration::from_millis(
             u64::from(limn::tokens().motion.move_ms) * 3 / 2,
         ));
@@ -1782,7 +1782,7 @@ impl Ide {
         list
     }
 
-    /// The selection, or the file when nothing is selected, sent to quill for the person to
+    /// The selection, or the file when nothing is selected, sent to Newen for the person to
     /// ask an agent about.
     fn ask_agent(&mut self) {
         let Some(buffer) = self.active_buffer() else {
@@ -1919,7 +1919,7 @@ pub fn view(ide: &Ide, window: Size) -> Element {
     }
     body.push(Element::column(column).flex(1.0));
     let body = Element::row(body).size(Some(window.width), Some(below));
-    // Shut, the tree peeks over the editor under the pointer, as quill's sidebar does.
+    // Shut, the tree peeks over the editor under the pointer, as Newen's sidebar does.
     let body = ide
         .sidebar
         .peeking(body, with_line, Size::new(window.width, below));
@@ -2094,7 +2094,7 @@ pub fn view(ide: &Ide, window: Size) -> Element {
     }
 }
 
-/// The tree's toggle, then the open files as quill's terminal tabs: pills, the one on screen
+/// The tree's toggle, then the open files as Newen's terminal tabs: pills, the one on screen
 /// filled, with a dot while a file has changes not saved; Settings at the end.
 fn top_bar(ide: &Ide) -> Element {
     let open = ide.sidebar.open;
@@ -2128,7 +2128,7 @@ fn top_bar(ide: &Ide) -> Element {
         if let Some(color) = mark {
             items.push(limn::StatusDot::new(color).size(6.0).render().centered_y());
         }
-        // Two hovers, as quill's rows: the tab's, and over it the close's, a step darker than
+        // Two hovers, as Newen's rows: the tab's, and over it the close's, a step darker than
         // whatever the tab is filled with.
         let active = ide.active == Some(i);
         let (tab_hover, close_hover) = if active {
@@ -2394,7 +2394,7 @@ fn editor(ide: &Ide, width: f32, height: f32) -> Element {
     Element::column(column)
 }
 
-/// The name for something new, or for a rename, in quill's search: its field, then what Enter
+/// The name for something new, or for a rename, in Newen's search: its field, then what Enter
 /// does or why it can't.
 /// The offers under the word being completed, at the caret as it was drawn when it began.
 fn completion_list(
@@ -2569,7 +2569,7 @@ fn crumb_bar(ide: &Ide, buffer: &Buffer, width: f32) -> Element {
     ])
 }
 
-/// A Markdown file rendered, in a reading column, as quill renders its conversation: code in
+/// A Markdown file rendered, in a reading column, as Newen renders its conversation: code in
 /// its inks, diagrams drawn, links that open.
 fn markdown_preview(ide: &Ide, text: &str, width: f32, height: f32) -> Element {
     let ids = code::PreviewIds {
@@ -2587,7 +2587,7 @@ fn terminal_height(window: Size) -> f32 {
         .max(120.0)
 }
 
-/// The folder's shells under the editor, as quill's terminal pane: "Terminal" and
+/// The folder's shells under the editor, as Newen's terminal pane: "Terminal" and
 /// the folder while there is one, pills once there are more, then its new and its close.
 fn terminal_pane(ide: &Ide, width: f32, height: f32) -> Element {
     let palette = look::palette();
@@ -2672,7 +2672,7 @@ fn terminal_pane(ide: &Ide, width: f32, height: f32) -> Element {
         .size(Some(width), Some(height));
     }
     let body = match &terminal.screen {
-        // Its cursor in the palette's text: quill's is the blue of its ANSI palette.
+        // Its cursor in the palette's text: Newen's is the blue of its ANSI palette.
         Some(screen) => limn::TerminalView::new(
             TERMINAL,
             screen.clone(),
@@ -2779,7 +2779,7 @@ fn problems_list(ide: &Ide, problems: &[Problem], width: f32, height: f32) -> El
 }
 
 /// The server's diagnostics of `path` as the editor underlines them, if they came for
-/// `revision`: errors in quill's failed red, warnings in its amber, the rest muted.
+/// `revision`: errors in Newen's failed red, warnings in its amber, the rest muted.
 fn diagnostics(ide: &Ide, path: &Path, revision: u64) -> Vec<limn::CodeDiagnostic> {
     let Some(found) = ide.diagnostics.get(path).and_then(|d| d.at(revision)) else {
         return vec![];
@@ -2827,7 +2827,7 @@ fn structure_controls(
     (folds, scopes)
 }
 
-/// The gutter's marks, as editors draw them: added rows in quill's added green, changed rows
+/// The gutter's marks, as editors draw them: added rows in Newen's added green, changed rows
 /// in its cursor blue, removed lines in its removed red.
 fn change_marks(changes: &[(std::ops::Range<usize>, Change)]) -> Vec<limn::CodeChangeMark> {
     changes
@@ -2874,7 +2874,7 @@ pub fn indent_style(prefs: &Prefs) -> limn_editor::IndentStyle {
     }
 }
 
-/// The line under the editor, quiet as quill's pane headers: the Vim mode, the file and
+/// The line under the editor, quiet as Newen's pane headers: the Vim mode, the file and
 /// whether it is saved, then the caret, the language, the line ending and the branch.
 fn footer(ide: &Ide, width: f32) -> Element {
     let small = |s: String| muted(s).font_size(SMALL).centered_y();
@@ -3028,7 +3028,7 @@ fn footer_row(ide: &Ide, lead: Vec<Element>, mut tail: Vec<Element>, width: f32)
     ])
 }
 
-/// A footer item that does something, as quill's composer chips: filled under
+/// A footer item that does something, as Newen's composer chips: filled under
 /// the pointer, with what it does, its keys and more in its tooltip.
 fn chip(
     id: &str,

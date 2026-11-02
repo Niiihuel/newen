@@ -66,7 +66,7 @@ const MAX_SIGNATURES: usize = 8 * 1024;
 /// No artifact is larger: a manifest that says so is refused.
 pub const MAX_ARTIFACT: u64 = 1 << 30;
 
-/// The release key's public half, base64, written by `quill-release keygen`. Empty until the
+/// The release key's public half, base64, written by `newen-release keygen`. Empty until the
 /// owner made one: then nothing is trusted, and no update is ever installed.
 const PUBLIC_KEY: &str = include_str!("../release-key.pub");
 /// The backup key's public half: its private half is kept offline, for when the release key is
@@ -165,7 +165,7 @@ pub struct Release {
     pub files: Option<Artifact>,
 }
 
-/// Why a check, a download or an installation did not go through. Each leaves quill as it was.
+/// Why a check, a download or an installation did not go through. Each leaves Newen as it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// This build has no release key: nothing can be trusted.
@@ -179,7 +179,7 @@ pub enum Error {
     Incomplete,
     Digest,
     Disk,
-    /// This copy is not one `quill --install` placed (a build from source, say).
+    /// This copy is not one `newen --install` placed (a build from source, say).
     NotInstalled,
     /// The manifest's sequence is lower than one seen before: an old release served again.
     Replayed,
@@ -208,7 +208,7 @@ impl Error {
             Self::NotInstalled => "This copy of Newen was not installed with newen --install: update it from where you built it.".into(),
             Self::Replayed => "The update server offered an older release than one it offered before: nothing was installed.".into(),
             Self::Expired => "The update's description has expired: nothing was installed.".into(),
-            Self::Foreign => "The update is not one of quill's stable releases: nothing was installed.".into(),
+            Self::Foreign => "The update is not one of Newen's stable releases: nothing was installed.".into(),
             Self::Interrupted => "The update was interrupted. Retry to finish it.".into(),
         }
     }
@@ -306,7 +306,7 @@ pub fn verify_signed(
     }
     // Signed by the owner, so its fields are safe to name in the log.
     let mut read: Manifest = serde_json::from_slice(manifest).map_err(|error| {
-        eprintln!("quill: update: unreadable manifest: {error}");
+        eprintln!("newen: update: unreadable manifest: {error}");
         Error::Manifest
     })?;
     if !read.next_keys.is_empty() {
@@ -316,7 +316,7 @@ pub fn verify_signed(
             .ok_or(Error::Manifest)?;
         let new = next.iter().filter(|key| !trusted.contains(key));
         if !new.clone().all(signed_by) {
-            eprintln!("quill: update: a rotation not signed by its new keys");
+            eprintln!("newen: update: a rotation not signed by its new keys");
             return Err(Error::Signature);
         }
         if new.count() > 0 || trusted.iter().any(|key| !next.contains(key)) {
@@ -440,7 +440,7 @@ pub fn offer(manifest: Manifest, installed: &Version, platform: &str) -> Option<
     })
 }
 
-/// An address quill may download from: HTTPS (or a test feed on this machine), a size within
+/// An address Newen may download from: HTTPS (or a test feed on this machine), a size within
 /// bounds and a digest.
 pub(crate) fn usable(artifact: &Artifact) -> bool {
     let https = artifact.url.starts_with("https://")
@@ -628,12 +628,12 @@ fn read_limited(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, Error> 
 }
 
 fn network(error: impl fmt::Display) -> Error {
-    eprintln!("quill: update: {error}");
+    eprintln!("newen: update: {error}");
     Error::Network
 }
 
 pub(crate) fn disk(error: io::Error) -> Error {
-    eprintln!("quill: update: {error}");
+    eprintln!("newen: update: {error}");
     Error::Disk
 }
 

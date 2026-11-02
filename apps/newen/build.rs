@@ -16,7 +16,7 @@ fn main() {
     winresource::WindowsResource::new()
         .set_icon("assets/icons/quill.ico")
         // The systems it supports, as CEF's own programs declare them.
-        .set_manifest(include_str!("assets/quill.exe.manifest"))
+        .set_manifest(include_str!("assets/newen.exe.manifest"))
         .compile()
-        .expect("quill's icon goes into the Windows executable");
+        .expect("Newen's icon goes into the Windows executable");
 }

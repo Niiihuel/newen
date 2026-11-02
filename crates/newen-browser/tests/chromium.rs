@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 const PAGE: &str = "<!doctype html><title>Acme</title><body style='margin:0'>\
 <input id=email style='position:absolute;left:10px;top:10px;width:200px;height:30px'>\
-<p id=words style='position:absolute;top:80px'>hello quill</p>\
+<p id=words style='position:absolute;top:80px'>hello Newen</p>\
 <script>console.log('ready', 42)</script></body>";
 
 /// The person allows every site once.
@@ -58,7 +58,7 @@ async fn until<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_opens_a_page_sees_its_frames_and_types_into_it() {
-    let dir = std::env::temp_dir().join(format!("quill-browser-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-browser-test-{}", std::process::id()));
     let frames = Frames::default();
     let heard: Arc<Mutex<Vec<(u64, BrowserUpdate)>>> = Arc::default();
     let log = heard.clone();
@@ -160,7 +160,7 @@ async fn a_session_opens_a_page_sees_its_frames_and_types_into_it() {
         .lock()
         .unwrap()
         .iter()
-        .any(|(_, u)| *u == BrowserUpdate::Copied("hello quill".into())));
+        .any(|(_, u)| *u == BrowserUpdate::Copied("hello Newen".into())));
     // The tab says who set its size: the agent's resize, or the person's Viewport menu.
     let sized = || {
         heard
@@ -265,7 +265,7 @@ fn words(content: &[newen_model::ToolContent]) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_agent_reads_fills_clicks_and_sees_a_page() {
     use serde_json::json;
-    let dir = std::env::temp_dir().join(format!("quill-browser-tools-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-browser-tools-{}", std::process::id()));
     let browser = Browser::new(
         Options {
             program: None,
@@ -380,7 +380,7 @@ async fn the_agent_reads_fills_clicks_and_sees_a_page() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pages_file_field_asks_for_files_and_takes_the_ones_chosen() {
     use serde_json::json;
-    let dir = std::env::temp_dir().join(format!("quill-browser-files-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-browser-files-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("logo.txt");
     std::fs::write(&file, "acme").unwrap();
@@ -447,7 +447,7 @@ async fn a_pages_file_field_asks_for_files_and_takes_the_ones_chosen() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sessions_tabs_from_before_open_again_with_its_browser() {
-    let dir = std::env::temp_dir().join(format!("quill-browser-kept-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-browser-kept-{}", std::process::id()));
     let heard: Arc<Mutex<Vec<(u64, BrowserUpdate)>>> = Arc::default();
     let log = heard.clone();
     let browser = Browser::new(

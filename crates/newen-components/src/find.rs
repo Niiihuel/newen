@@ -1,4 +1,4 @@
-//! Finding in the file on screen, for quill-ide's editor and quill's Files pane: limn's
+//! Finding in the file on screen, for newen-ide's editor and Newen's Files pane: limn's
 //! FindBar over the editor, its matches marked, and the caret taken from one to the next.
 
 use limn::{EditorController, FindOptions};

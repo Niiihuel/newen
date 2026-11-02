@@ -1,10 +1,10 @@
 //! Customize as a page of its own, in the conversation's place (docs/extensiones.md §12): a
-//! header with the layer it shows (every agent with quill's "All agents" first, or one agent),
+//! header with the layer it shows (every agent with Newen's "All agents" first, or one agent),
 //! the tabs Skills, Connectors and Plugins, breadcrumbs inside an item, and each tab's search,
 //! Discover and "Add ▾". A tab none of the agents shown takes part in is off, with why.
 //!
 //! A connector's page lists its tools by what they do, each with when the agent may use it
-//! (Always allow, Needs approval, Blocked); quill keeps the choice a moment after the last
+//! (Always allow, Needs approval, Blocked); Newen keeps the choice a moment after the last
 //! change and each agent's adapter says it in that agent's own permission settings.
 
 use crate::view::{self, SETTINGS_CONNECTORS, SETTINGS_PLUGINS, SETTINGS_SKILLS};
@@ -24,7 +24,7 @@ pub const KEEP_AFTER: std::time::Duration = std::time::Duration::from_millis(500
 pub struct Page {
     /// Its tab: [`SETTINGS_SKILLS`], [`SETTINGS_CONNECTORS`] or [`SETTINGS_PLUGINS`].
     pub tab: String,
-    /// The layer shown: every agent, quill's "All agents" first (`None`), or one agent.
+    /// The layer shown: every agent, Newen's "All agents" first (`None`), or one agent.
     pub layer: Option<String>,
     /// The item open under the breadcrumbs.
     pub detail: Option<Detail>,
@@ -35,7 +35,7 @@ pub struct Page {
     pub source: Option<String>,
 }
 
-/// An item open on its own page, by its agent (empty for quill's "All agents").
+/// An item open on its own page, by its agent (empty for Newen's "All agents").
 #[derive(Clone, Debug, PartialEq)]
 pub enum Detail {
     Connector { agent: String, name: String },
@@ -91,8 +91,8 @@ pub fn tab_off(ui: &Ui, tab: &str) -> Option<String> {
     }
     Some(
         match (shown.as_slice(), ui.customize.as_ref()?.layer.is_some()) {
-            ([one], true) => format!("{} has no {what} quill can manage.", one.name),
-            _ => format!("None of your agents has {what} quill can manage."),
+            ([one], true) => format!("{} has no {what} Newen can manage.", one.name),
+            _ => format!("None of your agents has {what} Newen can manage."),
         },
     )
 }
@@ -594,7 +594,7 @@ fn header(ui: &Ui, width: f32) -> Element {
     let mut entries: Vec<limn::DropdownMenuEntry> =
         vec![limn::DropdownMenuItem::new("czp:layer:=", "All agents")
             .icon(icons::of(icons::GLOBE))
-            .description("quill's own layer first, then each agent's")
+            .description("Newen's own layer first, then each agent's")
             .radio(layer.is_none())
             .into()];
     entries.extend(ui.agents.iter().map(|a| {
@@ -946,7 +946,7 @@ fn connectors(ui: &Ui, page: &Page, width: f32) -> Vec<Block> {
                 &mut column,
                 customize::empty(
                     icons::CONNECTORS,
-                    &format!("{} has no connectors quill can manage.", agent.name),
+                    &format!("{} has no connectors Newen can manage.", agent.name),
                     width,
                 ),
             );
@@ -1233,8 +1233,8 @@ fn added_by(source: McpSource, agent: &str) -> String {
         McpSource::Managed => "Your organization".into(),
         McpSource::Plugin => "A plugin".into(),
         McpSource::Account => "Your account".into(),
-        McpSource::App => "quill, for its own tools".into(),
-        McpSource::Global => "quill, for all agents".into(),
+        McpSource::App => "Newen, for its own tools".into(),
+        McpSource::Global => "Newen, for all agents".into(),
         McpSource::Other => format!("{agent}\u{2019}s settings"),
     }
 }
@@ -1318,7 +1318,7 @@ fn connector(store: &Store, ui: &Ui, agent: &str, name: &str, width: f32) -> Ele
             .icon(icons::of(icons::RELOAD))
             .into(),
     );
-    // On and off is the agent's own, per session (/mcp); quill's layer is per agent.
+    // On and off is the agent's own, per session (/mcp); Newen's layer is per agent.
     let switch = limn::Switch::new("czp:connector-switch", true, look::palette())
         .size(limn::ControlSize::Dense)
         .disabled()
@@ -1541,7 +1541,7 @@ fn permissions(
 // Skills and plugins.
 
 /// A skill's page: its head with its switch, what it is, and what can be done with it: an
-/// "All agents" skill is quill's own file, saved, replaced or deleted here; an agent's stays
+/// "All agents" skill is Newen's own file, saved, replaced or deleted here; an agent's stays
 /// in that agent's folder.
 fn skill(ui: &Ui, agent: &str, name: &str, width: f32) -> Element {
     let mut column = vec![];
@@ -1595,7 +1595,7 @@ fn skill(ui: &Ui, agent: &str, name: &str, width: f32) -> Element {
         column.push(customize::fact(
             "czp:fact:by",
             icons::AGENTS,
-            "Added by you, kept by quill",
+            "Added by you, kept by Newen",
             None,
         ));
         if !off_in.is_empty() {
@@ -1655,7 +1655,7 @@ fn skill(ui: &Ui, agent: &str, name: &str, width: f32) -> Element {
 }
 
 /// A plugin's page: what its marketplace says of it, who it comes from, what it can do as
-/// far as quill sees, and the connectors and skills it brings.
+/// far as Newen sees, and the connectors and skills it brings.
 fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
     let known = ui.extensions.get(agent);
     let Some(plugin) = known.and_then(|k| k.list.plugins.iter().find(|p| p.id == id)) else {
@@ -1731,7 +1731,7 @@ fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
         .collect();
     column.push(Element::spacer().size(None, Some(8.0)));
     column.push(section_title("What it can do"));
-    let worked_out = "Worked out from the connectors and skills quill sees it bring; hooks and commands it may carry aren\u{2019}t listed, so it may do more.";
+    let worked_out = "Worked out from the connectors and skills Newen sees it bring; hooks and commands it may carry aren\u{2019}t listed, so it may do more.";
     let mut lines = vec![];
     if servers.is_empty() && !skills.is_empty() {
         lines.push((icons::FILE, "Only adds instructions"));
@@ -1743,7 +1743,7 @@ fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
         lines.push((icons::GLOBE, "Can send data to other services"));
     }
     if lines.is_empty() {
-        lines.push((icons::INFO, "quill can\u{2019}t see what it brings yet"));
+        lines.push((icons::INFO, "Newen can\u{2019}t see what it brings yet"));
     }
     column.extend((lines.into_iter().enumerate()).map(|(at, (icon, words))| {
         customize::fact(&format!("czp:trust:{at}"), icon, words, Some(worked_out))
@@ -1751,7 +1751,7 @@ fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
     column.push(Element::spacer().size(None, Some(8.0)));
     column.push(section_title("Connectors & tools"));
     if servers.is_empty() && skills.is_empty() {
-        column.push(muted("None that quill can see.").font_size(SMALL));
+        column.push(muted("None that Newen can see.").font_size(SMALL));
     }
     for server in servers {
         let menu = format!("cz:more:srv:{agent}:{}", server.name);

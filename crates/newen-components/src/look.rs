@@ -1,5 +1,5 @@
-//! quill's tokens. Neutrals measured from Claude Desktop's Code surface at 1408×844
-//! git colors from its static tokens; the accent is quill's own (spec.md §6).
+//! Newen's tokens. Neutrals measured from Claude Desktop's Code surface at 1408×844
+//! git colors from its static tokens; the accent is Newen's own (spec.md §6).
 
 use limn::{Color, Theme};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

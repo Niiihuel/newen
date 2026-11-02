@@ -1,5 +1,5 @@
-//! quill-ide's window: limn paints `ide::view`; listing folders and reading files run beside it.
-//! `quill-ide [folder | file]` opens the folder (a file's own, and the file), the current
+//! newen-ide's window: limn paints `ide::view`; listing folders and reading files run beside it.
+//! `newen-ide [folder | file]` opens the folder (a file's own, and the file), the current
 //! directory without one.
 
 // A window, not a console program: Windows opens no console beside it.
@@ -43,20 +43,20 @@ struct App {
     shells: newen_pty::Tabs,
     /// The language servers.
     lsp: lsp::Lsp,
-    /// What quill sent since the last frame, and the folder's socket while this window
+    /// What Newen sent since the last frame, and the folder's socket while this window
     /// listens on it.
     linked: Arc<Mutex<Vec<newen_link::Message>>>,
     _link: Option<newen_link::Listener>,
 }
 
 impl App {
-    /// Code to ask about goes to quill; with none running, it starts and is sent once quill
+    /// Code to ask about goes to Newen; with none running, it starts and is sent once Newen
     /// listens.
-    fn send_to_quill(&mut self) {
+    fn send_to_newen(&mut self) {
         for message in std::mem::take(&mut self.ide.link_out) {
             let socket = newen_link::newen_socket();
             if newen_link::send(&socket, &message).is_ok() {
-                self.ide.link_note = Some("Sent to quill".into());
+                self.ide.link_note = Some("Sent to Newen".into());
                 continue;
             }
             // Beside the IDE when they were built together, else the one on PATH.
@@ -66,10 +66,10 @@ impl App {
                 .filter(|p| p.is_file())
                 .unwrap_or_else(|| "newen".into());
             if let Err(error) = newen_files::command(&program).spawn() {
-                self.ide.link_note = Some(format!("quill did not start: {error}"));
+                self.ide.link_note = Some(format!("Newen did not start: {error}"));
                 continue;
             }
-            self.ide.link_note = Some("Starting quill…".into());
+            self.ide.link_note = Some("Starting Newen…".into());
             std::thread::spawn(move || {
                 for _ in 0..100 {
                     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -82,7 +82,7 @@ impl App {
     }
 
     /// Start, size and read the shells while their pane shows, and do what was asked of
-    /// them, as quill does for a session's folder.
+    /// them, as Newen does for a session's folder.
     fn sync_terminal(&mut self, ctx: &egui::Context, window: Size) {
         let (cols, rows) = self.ide.terminal_grid(window);
         let pane = &mut self.ide.terminal;
@@ -101,7 +101,7 @@ impl App {
             match request {
                 ide::TerminalRequest::New => {
                     if let Err(error) = self.shells.open(&root, cols, rows, wake()) {
-                        eprintln!("quill-ide: no terminal in {}: {error}", root.display());
+                        eprintln!("newen-ide: no terminal in {}: {error}", root.display());
                     }
                 }
                 ide::TerminalRequest::Select(tab) => self.shells.select(tab),
@@ -112,7 +112,7 @@ impl App {
         // A shell is started when the shells are shown, not the problems.
         if self.shells.is_empty() && !had && !pane.problems {
             if let Err(error) = self.shells.open(&root, cols, rows, wake()) {
-                eprintln!("quill-ide: no terminal in {}: {error}", root.display());
+                eprintln!("newen-ide: no terminal in {}: {error}", root.display());
             }
         }
         // The last one closed, or `exit` in it, hides the pane; opening it again starts one.
@@ -183,7 +183,7 @@ impl eframe::App for App {
         }
         let jobs = self.ide.marks_due();
         self.run(jobs);
-        // A file quill shows here: opened at its place, the window brought up.
+        // A file Newen shows here: opened at its place, the window brought up.
         for message in std::mem::take(&mut *self.linked.lock().unwrap()) {
             if let newen_link::Message::Open {
                 path, line, column, ..
@@ -247,9 +247,9 @@ impl eframe::App for App {
             self.fonts_attached = false;
             ctx.request_repaint();
         }
-        // Context menus read as quill's other menus, in the theme in force.
+        // Context menus read as Newen's other menus, in the theme in force.
         self.tree.set_context_menu_palette(look::menu_palette());
-        // The editor's menu has more rows than quill's: all of them show, no rail taking width.
+        // The editor's menu has more rows than Newen's: all of them show, no rail taking width.
         self.tree.set_context_menu_sizing(limn::SelectorSizing {
             max_visible_items: 16,
             ..newen_components::pieces::menu_sizing(240.0)
@@ -277,13 +277,13 @@ impl eframe::App for App {
         self.sync_terminal(&ctx, window);
         self.tree.set_root(ide::view(&self.ide, window));
         self.tree.layout(window);
-        // Ctrl+` shows and hides the terminal, as in quill; limn has no key for it.
+        // Ctrl+` shows and hides the terminal, as in Newen; limn has no key for it.
         let mut toggled = false;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Backtick)) {
             toggled = true;
         }
         let mut actions = vec![];
-        // Ctrl+, opens Settings, as quill's; limn has no key for it.
+        // Ctrl+, opens Settings, as Newen's; limn has no key for it.
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)) {
             actions.push(limn::UiAction::Clicked {
                 id: newen_components::settings::SETTINGS_OPEN.into(),
@@ -563,7 +563,7 @@ impl eframe::App for App {
                 }
             }
             let jobs = self.ide.update(&action);
-            self.send_to_quill();
+            self.send_to_newen();
             self.run(jobs);
         }
         self.ide.tick();
@@ -736,7 +736,7 @@ fn main() -> eframe::Result {
         Box::new(move |creation| {
             limn::set_fonts(newen_components::fonts(true, ""));
             limn_egui::install_fonts(&creation.egui_ctx);
-            // `NEWEN_THEME=dark|light`, else the system's, else dark, as quill.
+            // `NEWEN_THEME=dark|light`, else the system's, else dark, as Newen.
             let dark = match newen_files::env("THEME")
                 .as_deref()
                 .and_then(|v| v.to_str())

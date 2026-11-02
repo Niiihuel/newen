@@ -1,4 +1,4 @@
-//! The release side of quill's updates, for the owner's machine and the
+//! The release side of Newen's updates, for the owner's machine and the
 //! release workflow (`docs/UPDATES.md`):
 //!
 //! ```text
@@ -348,7 +348,7 @@ fn build_files(
         let (bundle, blobs) = files::pack(tree, version, platform, base, &known, out)
             .map_err(|error| format!("{}: {error}", tree.display()))?;
         if !files::valid(&bundle) {
-            return Err(format!("{platform}: a path or link quill would refuse"));
+            return Err(format!("{platform}: a path or link Newen would refuse"));
         }
         let new: u64 = (bundle.files.iter())
             .filter(|file| {
@@ -405,7 +405,7 @@ fn signing_key(text: &str) -> Option<SigningKey> {
     Some(SigningKey::from_bytes(&seed))
 }
 
-/// The signature of the manifest at `file`, base64, once it reads as one quill accepts.
+/// The signature of the manifest at `file`, base64, once it reads as one Newen accepts.
 fn signature_of(file: &Path, key: &SigningKey) -> Result<String> {
     let bytes = std::fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
     serde_json::from_slice::<Manifest>(&bytes)
@@ -434,7 +434,7 @@ fn sign(file: &Path) -> Result<()> {
         .map_err(|_| "NEWEN_UPDATE_SIGNING_KEY is not set")?;
     let key = signing_key(&seed)
         .ok_or("NEWEN_UPDATE_SIGNING_KEY is not a key from `newen-release keygen`")?;
-    // Only what quill would accept is signed.
+    // Only what Newen would accept is signed.
     let signature = signature_of(file, &key)?;
     std::fs::write(signature_path(file), format!("{signature}\n"))
         .map_err(|error| error.to_string())
@@ -473,7 +473,7 @@ fn verify(file: &Path) -> Result<()> {
 }
 
 /// The list `entry` names for `platform`, beside the manifest in `folder`, is what was signed
-/// and quill would accept it, and each blob it names at this release's address is in `folder`
+/// and Newen would accept it, and each blob it names at this release's address is in `folder`
 /// and unpacks to its file. How many such blobs, and how many files come from earlier
 /// releases.
 fn check_files(
@@ -487,7 +487,7 @@ fn check_files(
         .map_err(|error| format!("{platform}'s list of files: {error}"))?;
     if bundle.version != manifest.version || bundle.platform != platform || !files::valid(&bundle) {
         return Err(format!(
-            "{platform}'s list of files is not one quill accepts"
+            "{platform}'s list of files is not one Newen accepts"
         ));
     }
     let base = entry.url.rsplit_once('/').map_or("", |(base, _)| base);
@@ -556,7 +556,7 @@ struct WrittenMedium {
     poster: Option<String>,
 }
 
-/// The longest a title, a body and a line may be, as quill shows them, and the most points.
+/// The longest a title, a body and a line may be, as Newen shows them, and the most points.
 const TITLE: usize = 60;
 const BODY: usize = 280;
 const LINE: usize = 160;
@@ -575,7 +575,7 @@ fn build_whats_new_for(tag: &str, base: &str, out: &Path) -> Result<()> {
 
 /// `whats-new.json` for `version` from the notes written in `notes` and the media in `media`,
 /// each medium copied into `out` under the name it is served by, beside it. The files written,
-/// `whats-new.json` first. A line too long or a medium too large stops it: quill would cut it.
+/// `whats-new.json` first. A line too long or a medium too large stops it: Newen would cut it.
 fn build_whats_new(
     version: &Version,
     date: &str,
@@ -735,7 +735,7 @@ file = "browser.png"
         )
         .unwrap();
         let version = Version::parse("0.2.0").unwrap();
-        let base = "https://github.com/Niiihuel/quill/releases/download/v0.2.0";
+        let base = "https://github.com/Niiihuel/newen/releases/download/v0.2.0";
         let files = build_whats_new(
             &version,
             "2026-11-10T12:00:00-03:00",
@@ -772,7 +772,7 @@ file = "browser.png"
         assert_eq!(check_whats_new(&read, out.path()), Ok(Some(2)));
         std::fs::write(out.path().join("whats-new-browser.png"), b"another").unwrap();
         assert!(check_whats_new(&read, out.path()).is_err());
-        // A title quill would cut stops the release instead.
+        // A title Newen would cut stops the release instead.
         std::fs::write(
             &notes,
             format!("[announcement]\ntitle = \"{}\"\n", "x".repeat(61)),
@@ -798,14 +798,14 @@ file = "browser.png"
         let work = tempfile::tempdir().unwrap();
         let key = SigningKey::from_bytes(&[9; 32]);
         let base = |version: &str| {
-            format!("https://github.com/Niiihuel/quill/releases/download/v{version}")
+            format!("https://github.com/Niiihuel/newen/releases/download/v{version}")
         };
         let (one, two) = (Version::new(1, 0, 0), Version::new(2, 0, 0));
         let tree = work.path().join("tree-1");
         write_tree(
             &tree,
             &[
-                ("quill", b"\x7fELF one"),
+                ("newen", b"\x7fELF one"),
                 ("libcef.so", b"cef"),
                 ("locales/en-US.pak", b"en"),
             ],
@@ -859,7 +859,7 @@ file = "browser.png"
         write_tree(
             &linux,
             &[
-                ("quill", b"\x7fELF two"),
+                ("newen", b"\x7fELF two"),
                 ("libcef.so", b"cef"),
                 ("locales/en-US.pak", b"en"),
             ],
@@ -867,7 +867,7 @@ file = "browser.png"
         let windows = work.path().join("tree-2w");
         write_tree(
             &windows,
-            &[("quill.exe", b"MZ two"), ("locales/en-US.pak", b"en")],
+            &[("newen.exe", b"MZ two"), ("locales/en-US.pak", b"en")],
         );
         let out = work.path().join("out-2");
         let written = build_files(
@@ -896,9 +896,9 @@ file = "browser.png"
                 .clone()
         };
         let (linux, windows) = (list_of("linux-x86_64"), list_of("windows-x86_64"));
-        assert!(url_of(&linux, "quill").starts_with(&base("2.0.0")));
+        assert!(url_of(&linux, "newen").starts_with(&base("2.0.0")));
         assert!(url_of(&linux, "libcef.so").starts_with(&base("1.0.0")));
-        assert!(url_of(&windows, "quill.exe").starts_with(&base("2.0.0")));
+        assert!(url_of(&windows, "newen.exe").starts_with(&base("2.0.0")));
         assert_eq!(
             url_of(&windows, "locales/en-US.pak"),
             url_of(&linux, "locales/en-US.pak")

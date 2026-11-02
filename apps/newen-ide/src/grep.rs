@@ -1,4 +1,4 @@
-//! Finding text in every file of the folder: quill-files' `grep`, behind the dialog's ids.
+//! Finding text in every file of the folder: newen-files' `grep`, behind the dialog's ids.
 
 pub use newen_files::find::{grep, Hit, LIMIT};
 

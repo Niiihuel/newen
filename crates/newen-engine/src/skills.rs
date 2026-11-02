@@ -1,5 +1,5 @@
 //! A skill as a file the person picks or saves: a `.md` that is its SKILL.md, or a `.zip`
-//! (`.skill` is the same) of its folder. Unpacked into a folder of its own before quill's
+//! (`.skill` is the same) of its folder. Unpacked into a folder of its own before Newen's
 //! skills take it (global.rs), and never outside that folder.
 
 use std::io::{Read, Write};
@@ -145,7 +145,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("quill-skills-{tag}-{n}"))
+        std::env::temp_dir().join(format!("newen-skills-{tag}-{n}"))
     }
 
     #[test]

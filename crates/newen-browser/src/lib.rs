@@ -1,4 +1,4 @@
-//! quill's built-in browser (docs/browser.md): one Chromium, launched when first needed and
+//! Newen's built-in browser (docs/browser.md): one Chromium, launched when first needed and
 //! driven over the DevTools protocol, with a browser context per session so cookies stay
 //! apart. The person sees the tab on screen through a screencast into a limn surface and
 //! drives it with the pointer and keys; the agent drives the same tabs with its tools.
@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Whose tabs: quill's session id.
+/// Whose tabs: Newen's session id.
 pub type Owner = u64;
 
 /// Where updates go, for the engine to pass to the UI.
@@ -72,7 +72,7 @@ pub struct Options {
     pub frames: Frames,
     /// Asks the person before the agent opens or uses a site that is not local nor allowed.
     pub permit: Permit,
-    /// Chromium in quill's own process, when the host started it: tabs paint into their
+    /// Chromium in Newen's own process, when the host started it: tabs paint into their
     /// surfaces directly, and no Chromium is launched.
     pub native: Option<Native>,
 }
@@ -94,7 +94,7 @@ struct Inner {
     allowed: Mutex<Vec<String>>,
     /// The Chromium Settings names, for the next launch.
     program: Mutex<Option<PathBuf>>,
-    /// Each session's tabs from when quill last ran, opened again with its browser.
+    /// Each session's tabs from when Newen last ran, opened again with its browser.
     remembered: Mutex<HashMap<Owner, Vec<String>>>,
     /// Since when no session has a tab open, while Chromium runs.
     idle_since: Mutex<Option<Instant>>,
@@ -106,7 +106,7 @@ pub(crate) struct Run {
     /// Closed on purpose: its going is not a failure to report.
     closing: std::sync::atomic::AtomicBool,
     pub(crate) state: Mutex<State>,
-    /// The launched Chromium; none inside quill's window.
+    /// The launched Chromium; none inside Newen's window.
     child: Mutex<Option<std::process::Child>>,
     native: Option<Native>,
     decode: std::sync::mpsc::Sender<Shot>,
@@ -260,7 +260,7 @@ impl Browser {
         browser
     }
 
-    /// `owner`'s tabs from when quill last ran: they open again the first time its browser
+    /// `owner`'s tabs from when Newen last ran: they open again the first time its browser
     /// does without an address.
     pub fn remember(&self, owner: Owner, urls: Vec<String>) {
         if !urls.is_empty() {
@@ -351,7 +351,7 @@ impl Browser {
         let options = &self.inner.options;
         let scale = options.frames.scale();
         let (events, heard) = tokio::sync::mpsc::unbounded_channel();
-        // Inside quill's window the same stream is answered by the Chromium already running.
+        // Inside Newen's window the same stream is answered by the Chromium already running.
         let (cdp, child) = match &options.native {
             Some(native) => {
                 let (reader, writer) = native.pipe();
@@ -375,7 +375,7 @@ impl Browser {
         let (decoder, shots) = std::sync::mpsc::channel::<Shot>();
         let (frames, acks) = (options.frames.clone(), cdp.clone());
         std::thread::Builder::new()
-            .name("quill-browser-frames".into())
+            .name("newen-browser-frames".into())
             .spawn(move || {
                 use base64::Engine;
                 while let Ok(shot) = shots.recv() {
@@ -447,7 +447,7 @@ impl Browser {
                     (Some(url), _) => drop(self.new_tab(&run, owner, Some(&url)).await?),
                     (None, Some(_)) => {}
                     (None, None) => {
-                        // A session's tabs from before quill restarted come back.
+                        // A session's tabs from before Newen restarted come back.
                         let before = self.inner.remembered.lock().unwrap().remove(&owner);
                         let urls = before.unwrap_or_default();
                         if urls.is_empty() {
@@ -611,7 +611,7 @@ impl Browser {
             ("Page.enable", json!({})),
             ("Runtime.enable", json!({})),
             ("Network.enable", json!({})),
-            // A page's file field asks quill, which shows the desktop's dialog.
+            // A page's file field asks Newen, which shows the desktop's dialog.
             (
                 "Page.setInterceptFileChooserDialog",
                 json!({ "enabled": true }),
@@ -1517,7 +1517,7 @@ async fn picked(browser: &Browser, run: &Arc<Run>, session: &str, node: i64) {
 fn keep_pick(png: &str) -> Option<PathBuf> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD.decode(png).ok()?;
-    let dir = std::env::temp_dir().join(format!("quill-picks-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("newen-picks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

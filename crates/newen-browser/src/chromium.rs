@@ -82,7 +82,7 @@ const QUIET: [&str; 12] = [
 pub fn launch(_: &Path, _: &Path, _: f32) -> std::io::Result<Process> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "quill's browser does not drive Chromium on this system yet",
+        "Newen's browser does not drive Chromium on this system yet",
     ))
 }
 
@@ -111,7 +111,7 @@ pub fn launch(program: &Path, profile: &Path, scale: f32) -> std::io::Result<Pro
             if libc::dup2(read_fd, 3) < 0 || libc::dup2(write_fd, 4) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // Chromium goes with quill even when quill is killed. Linux sends it when the
+            // Chromium goes with Newen even when Newen is killed. Linux sends it when the
             // forking thread ends: one of the engine's runtime threads, which live as long.
             #[cfg(target_os = "linux")]
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);

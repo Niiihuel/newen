@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "quill's terminal: a shell on a PTY, its output parsed into the cells limn's TerminalView paints."
+description = "Newen's terminal: a shell on a PTY, its output parsed into the cells limn's TerminalView paints."
 publish = false
 
 [dependencies]

@@ -80,7 +80,7 @@ pub fn fetch_bundle(
         return Err(Error::Digest);
     }
     let bundle: Bundle = serde_json::from_slice(&bytes).map_err(|error| {
-        eprintln!("quill: update: unreadable list of files: {error}");
+        eprintln!("newen: update: unreadable list of files: {error}");
         Error::Manifest
     })?;
     if bundle.version != *version || bundle.platform != platform || !valid(&bundle) {
@@ -90,7 +90,7 @@ pub fn fetch_bundle(
 }
 
 /// Every path is a relative one inside the bundle, named once; every link points inside it;
-/// sizes, digests and addresses are ones quill downloads.
+/// sizes, digests and addresses are ones Newen downloads.
 pub fn valid(bundle: &Bundle) -> bool {
     let mut seen = std::collections::HashSet::new();
     let mut paths = (bundle.files.iter().map(|file| &file.path))

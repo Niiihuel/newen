@@ -1,5 +1,5 @@
 //! A local feed of a made-up release, signed with a throwaway key, to try
-//! quill's updates before there is a real one (`docs/UPDATES.md`):
+//! Newen's updates before there is a real one (`docs/UPDATES.md`):
 //!
 //! ```text
 //! cargo run -p newen-release --bin newen-test-feed -- \
@@ -8,16 +8,16 @@
 //! ```
 //!
 //! It prints the `NEWEN_UPDATE_FEED` and `NEWEN_UPDATE_KEY` a debug build of
-//! quill needs to use it, and serves until it is stopped. `--artifact` is
+//! Newen needs to use it, and serves until it is stopped. `--artifact` is
 //! what the release installs, made as the release workflow makes it (Linux's
 //! bundle as a `.tar.gz`, Windows' and macOS' as a `.zip`) from a build of
-//! quill with that version; without it the artifact is a stand-in that is
+//! Newen with that version; without it the artifact is a stand-in that is
 //! not an archive, which installing refuses. `--slow` paces the download,
 //! `--corrupt` signs a digest the artifact does not have. `--platform` serves
-//! another system than this one (a quill under Wine updating from a feed on
+//! another system than this one (a Newen under Wine updating from a feed on
 //! Linux). `--tree` serves the bundle unpacked in that folder file by file
 //! too (as the release's archive holds it; macOS: the folder holding
-//! `quill.app`), which a copy tries before the artifact.
+//! `Newen.app`), which a copy tries before the artifact.
 
 use std::time::Duration;
 

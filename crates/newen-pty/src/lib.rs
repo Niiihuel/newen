@@ -31,7 +31,7 @@ const ANSI: [Color; 16] = [
 ];
 const FOREGROUND: Color = Color::rgb(0x1a, 0x1a, 0x1a);
 // shortcut: Desktop keeps 10000 lines; all of them are copied on new output, so
-// quill keeps fewer until the view reads vt100's rows in place.
+// Newen keeps fewer until the view reads vt100's rows in place.
 const SCROLLBACK: usize = 1000;
 
 pub struct Terminal {
@@ -506,11 +506,11 @@ mod tests {
     fn a_shell_runs_and_its_output_arrives() {
         let dir = std::env::temp_dir();
         let mut terminal = Terminal::spawn(&dir, 40, 5, || {}).unwrap();
-        terminal.write(b"echo quill-$((40+2))\r");
+        terminal.write(b"echo newen-$((40+2))\r");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let text: String = terminal.screen().cells.iter().map(|c| c.ch).collect();
-            if text.contains("quill-42") {
+            if text.contains("newen-42") {
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "no output: {text}");

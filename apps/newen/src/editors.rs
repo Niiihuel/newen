@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn an_editor_is_found_by_the_scheme_its_desktop_file_handles_with_its_icon() {
-        let root = std::env::temp_dir().join(format!("quill-editors-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-editors-{}", std::process::id()));
         let (home, system) = (root.join("home"), root.join("system"));
         let write = |path: PathBuf, text: &[u8]| {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

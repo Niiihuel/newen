@@ -1,5 +1,5 @@
 //! What was open in each folder, to open it again: kept in
-//! `$XDG_DATA_HOME/quill-ide/sessions.json`, by folder.
+//! `$XDG_DATA_HOME/newen-ide/sessions.json`, by folder.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

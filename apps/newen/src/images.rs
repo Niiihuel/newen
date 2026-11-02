@@ -6,12 +6,12 @@ use limn::{RasterImage, RasterImageFormat, Size, SketchMark};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Where pasted images are saved: `attachments/` beside quill's database.
+/// Where pasted images are saved: `attachments/` beside Newen's database.
 fn attachments_dir() -> PathBuf {
     newen_engine::Config::default_database()
         .database
         .and_then(|db| db.parent().map(|dir| dir.join("attachments")))
-        .unwrap_or_else(|| std::env::temp_dir().join("quill-attachments"))
+        .unwrap_or_else(|| std::env::temp_dir().join("newen-attachments"))
 }
 
 /// Saves a pasted picture (RGBA, as egui-winit read it off the clipboard) as PNG on a thread
@@ -38,7 +38,7 @@ pub fn paste(
                 .map_err(std::io::Error::other)
         });
         if let Err(error) = saved {
-            eprintln!("quill: the pasted image was not saved: {error}");
+            eprintln!("newen: the pasted image was not saved: {error}");
             return;
         }
         pasted.lock().unwrap().push(path);
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn a_taken_name_gets_a_number() {
-        let dir = std::env::temp_dir().join(format!("quill-free-name-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-free-name-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(free_name(&dir, "a-annotated"), dir.join("a-annotated.png"));
         std::fs::write(dir.join("a-annotated.png"), b"").unwrap();
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn the_viewer_gets_a_screenshot_at_its_own_size_and_a_huge_one_within_limn() {
-        let dir = std::env::temp_dir().join(format!("quill-full-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-full-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // A 2880 by 1800 screenshot goes as its own file, not its 256 px thumbnail.
         let shot = dir.join("shot.png");

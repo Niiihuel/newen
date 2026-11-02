@@ -1,4 +1,4 @@
-//! A sidebar as quill's: it slides shut and open on a spring, and while shut it peeks over the
+//! A sidebar as Newen's: it slides shut and open on a spring, and while shut it peeks over the
 //! page under the pointer, as Desktop's does.
 
 use limn::{Element, Point, ScalarSpring, SpringMotion};

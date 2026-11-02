@@ -4,7 +4,7 @@
 //! (the engine runs it); this shows what it reports. Desktop's account menu is modeled on what it
 //! shows: its avatar shows the first and
 //! last word's initials with `?` as the fallback, its menu opens with the identity, and Sign
-//! out is the last entry. Its sign-in screen is a web page; this one is quill's own (inferred).
+//! out is the last entry. Its sign-in screen is a web page; this one is Newen's own (inferred).
 
 use crate::Ui;
 use limn::{Component, Element, Size};
@@ -266,7 +266,7 @@ fn wide(id: &str, label: &str, primary: bool) -> Element {
     }
 }
 
-/// The sign-in screen, full window like the welcome: quill's mark, the agent's name, and the
+/// The sign-in screen, full window like the welcome: Newen's mark, the agent's name, and the
 /// steps of signing in through its program.
 pub fn screen(ui: &Ui, window: Size) -> Element {
     let palette = look::palette();
@@ -302,7 +302,7 @@ pub fn screen(ui: &Ui, window: Size) -> Element {
             column.push(Element::spacer().size(None, Some(8.0)));
             // Centered by hand: limn's text has no alignment, so each line is its own.
             column.push(centered(muted(format!(
-                "quill uses {program}\u{2019}s own sign-in;"
+                "Newen uses {program}\u{2019}s own sign-in;"
             ))));
             column.push(centered(muted("your account stays with it.")));
             column.push(Element::spacer().size(None, Some(28.0)));

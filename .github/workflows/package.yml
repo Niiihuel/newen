@@ -49,7 +49,7 @@ jobs:
       - name: limn beside the workspace, where its path says
         run: ln -s "$PWD/limn-quill-integration" ../limn-quill-integration
       # The distribution's libraries, not Nix's: the program must find them where every
-      # distribution keeps them. The equivalents of quill's shell.nix.
+      # distribution keeps them. The equivalents of Newen's shell.nix.
       - name: build dependencies
         run: |
           sudo apt-get update
@@ -207,8 +207,8 @@ jobs:
           fi
           app=dist/Newen.app
           framework="$app/Contents/Frameworks/Chromium Embedded Framework.framework"
-          entitlements=apps/newen/assets/quill.entitlements
-          # From the inside out: the framework's libraries, the framework, the helpers, quill.
+          entitlements=apps/newen/assets/newen.entitlements
+          # From the inside out: the framework's libraries, the framework, the helpers, Newen.
           find "$framework" -name '*.dylib' -print0 |
             xargs -0 codesign --force --options runtime "${sign[@]}"
           codesign --force --options runtime "${sign[@]}" "$framework"

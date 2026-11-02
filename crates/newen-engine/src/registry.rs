@@ -1,4 +1,4 @@
-//! The public MCP registry (registry.modelcontextprotocol.io), where quill's Customize ›
+//! The public MCP registry (registry.modelcontextprotocol.io), where Newen's Customize ›
 //! Connectors finds servers to add for any agent that speaks MCP: what it lists for some words,
 //! each turned into how to run it.
 

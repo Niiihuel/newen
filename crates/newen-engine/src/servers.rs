@@ -145,7 +145,7 @@ impl Servers {
             .kill_on_drop(true);
         #[cfg(unix)]
         process.process_group(0);
-        // It goes with quill even when quill is killed rather than closed: Linux signals it
+        // It goes with Newen even when Newen is killed rather than closed: Linux signals it
         // when the forking thread, one of the engine's runtime threads, ends.
         // SAFETY: only an async-signal-safe call between fork and exec.
         #[cfg(target_os = "linux")]
@@ -314,7 +314,7 @@ impl Servers {
     }
 }
 
-/// Servers stop with quill.
+/// Servers stop with Newen.
 impl Drop for Servers {
     fn drop(&mut self) {
         if let Ok(list) = self.list.get_mut() {
@@ -409,7 +409,7 @@ pub async fn tool(
                 Ok(config) => config,
                 Err(text) => return failed(text),
             };
-            // The person approves what a configuration runs, once or for as long as quill runs.
+            // The person approves what a configuration runs, once or for as long as Newen runs.
             let print = fingerprint(&cwd, &config);
             if !servers.approved(print) {
                 let input = serde_json::json!({
@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_server_starts_listens_logs_and_stops() {
-        let dir = std::env::temp_dir().join(format!("quill-servers-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-servers-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()

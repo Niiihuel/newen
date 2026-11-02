@@ -1,4 +1,4 @@
-//! quill's own updates in the window: Settings' Updates group, the strip over the account
+//! Newen's own updates in the window: Settings' Updates group, the strip over the account
 //! button (a version ready; or found, and downloading, when the person downloads by hand),
 //! the account menu's "Restart to update", and the dialogs (agents still working, a mandatory
 //! version). The engine checks, downloads and announces a ready version by the system when
@@ -282,10 +282,10 @@ pub(crate) fn toggle_dot(ui: &Ui, toggle: Element) -> Element {
 /// The version and what it says about itself, for the state line.
 fn state_line(state: &UpdateState) -> String {
     match state {
-        UpdateState::Idle => "quill has not checked for updates yet.".into(),
+        UpdateState::Idle => "Newen has not checked for updates yet.".into(),
         UpdateState::Checking => "Checking for updates\u{2026}".into(),
         UpdateState::UpToDate { checked_at } => {
-            format!("quill is up to date \u{b7} Checked {}", ago(*checked_at))
+            format!("Newen is up to date \u{b7} Checked {}", ago(*checked_at))
         }
         UpdateState::Available { version, .. } => format!("Version {version} is available"),
         UpdateState::Downloading {
@@ -378,7 +378,7 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
             palette,
         ));
     }
-    // The version row is the "quill" group's, above.
+    // The version row is the "Newen" group's, above.
     let mut out = vec![setting(
         "Updates",
         &description(ui),
@@ -433,13 +433,13 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
 /// The question a restart with agents at work raises, and the dialog a mandatory version
 /// puts up, over `base`.
 pub(crate) fn dialogs(ui: &Ui, base: Element, palette: ComponentPalette) -> Element {
-    // Desktop asks "Claude is still working"; quill names no vendor, so
+    // Desktop asks "Claude is still working"; Newen names no vendor, so
     // "agents". Wait is the primary button here (Desktop's is Update anyway; the spec's choice).
     let base = limn::Modal::new(
         base,
         ui.update_asking,
         "Agents are still working",
-        "Updating now stops them. You can wait and quill restarts as soon as they finish.",
+        "Updating now stops them. You can wait and Newen restarts as soon as they finish.",
         UPDATE_ASK_CANCEL,
         palette,
     )
@@ -480,13 +480,13 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, palette: ComponentPalette) -> Elem
                 *done as f32 / *total as f32
             };
             (
-                "quill needs this version before it opens. It is downloading now.".to_owned(),
+                "Newen needs this version before it opens. It is downloading now.".to_owned(),
                 limn::Progress::new(fraction, palette).render(),
                 None,
             )
         }
         _ => (
-            "Restart quill to finish updating. It opens in the new version.".to_owned(),
+            "Restart Newen to finish updating. It opens in the new version.".to_owned(),
             hgap(0.0),
             Some(Element::row(vec![
                 Element::spacer().flex(1.0),
@@ -497,7 +497,7 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, palette: ComponentPalette) -> Elem
     let modal = limn::Modal::new(
         base,
         true,
-        format!("quill {version} is required"),
+        format!("Newen {version} is required"),
         description,
         UPDATE_HOLD,
         palette,

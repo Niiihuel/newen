@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "The line between quill and quill-ide: Unix sockets (loopback TCP on Windows) carrying one JSON message a line."
+description = "The line between Newen and newen-ide: Unix sockets (loopback TCP on Windows) carrying one JSON message a line."
 publish = false
 
 [dependencies]

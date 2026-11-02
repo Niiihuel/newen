@@ -1,4 +1,4 @@
-//! A search as quill's, Desktop's Ctrl+K: a field over what it found in
+//! A search as Newen's, Desktop's Ctrl+K: a field over what it found in
 //! titled sections, the row Enter opens filled and marked ↵, and "Close Esc" under them.
 
 use crate::look::{self, SMALL};

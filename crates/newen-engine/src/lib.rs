@@ -1,4 +1,4 @@
-//! quill's engine: one Tokio actor per session, owning its agent's process and adapter
+//! Newen's engine: one Tokio actor per session, owning its agent's process and adapter
 //! (spec.md D6, engine.md §1). The UI sends [`Intent`]s with [`Engine::send`]; the engine
 //! reports [`Event`]s through the sink given to [`Engine::start`]. Nothing here blocks.
 
@@ -38,7 +38,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
 
 /// Site permissions the browser waits on: by card, the site and where the answer goes.
-/// Questions quill itself asks on a permission card: by card, what for (a site, whose
+/// Questions Newen itself asks on a permission card: by card, what for (a site, whose
 /// "Always" joins Settings, or a dev server) and where the answer goes.
 /// Each session's agent and permission mode, as last told.
 type Modes = Arc<Mutex<HashMap<SessionId, (String, String)>>>;
@@ -54,7 +54,7 @@ type SiteWaits = Arc<
     >,
 >;
 
-/// Ask the person on a permission card of quill's own; `site` is the site a yes "Always"
+/// Ask the person on a permission card of Newen's own; `site` is the site a yes "Always"
 /// keeps, if it is one.
 pub(crate) type Ask = Arc<
     dyn Fn(
@@ -66,10 +66,10 @@ pub(crate) type Ask = Arc<
         + Sync,
 >;
 
-/// The agents quill has adapters for, as Settings lists them.
+/// The agents Newen has adapters for, as Settings lists them.
 const AGENTS: [&str; 2] = ["claude", "codex"];
 
-/// The adapter for an agent id; `None` for agents quill does not have yet.
+/// The adapter for an agent id; `None` for agents Newen does not have yet.
 fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
     match agent {
         "claude" => Some(Box::new(newen_agent_claude::Claude::new())),
@@ -110,12 +110,12 @@ pub struct Config {
     pub extensions: Option<PathBuf>,
     /// Where those servers' secrets are kept; `None` is the system keychain.
     pub secrets: Option<Arc<dyn global::Secrets>>,
-    /// Whether quill looks for its own updates (update.rs): the app does, the tests do not.
+    /// Whether Newen looks for its own updates (update.rs): the app does, the tests do not.
     pub updates: bool,
     /// Where each release's notes and media are kept once downloaded with its update; `None`
     /// keeps none.
     pub whats_new: Option<PathBuf>,
-    /// The update log (quill-update's `log`); `None` keeps none.
+    /// The update log (newen-update's `log`); `None` keeps none.
     pub update_log: Option<PathBuf>,
     /// The video codec this platform downloads, once the person allows it, and where it is
     /// kept; `None` for either plays no clip (codec.rs).
@@ -173,7 +173,7 @@ impl Engine {
     pub fn start_with(sink: impl Fn(Event) + Send + Sync + 'static, config: Config) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
-            .thread_name("quill-engine")
+            .thread_name("newen-engine")
             .enable_all()
             .build()
             .expect("tokio runtime");
@@ -190,7 +190,7 @@ impl Engine {
     }
 }
 
-/// Opens the record, falling back to memory so a broken file never stops quill.
+/// Opens the record, falling back to memory so a broken file never stops Newen.
 fn open_store(config: &Config, sink: &Sink) -> newen_store::Store {
     let opened = match &config.database {
         Some(path) => newen_store::Store::open(path),
@@ -207,7 +207,7 @@ fn open_store(config: &Config, sink: &Sink) -> newen_store::Store {
 
 /// What actors tell the router, apart from the events everyone sees.
 enum Internal {
-    /// The agent called one of quill's own tools.
+    /// The agent called one of Newen's own tools.
     HostTool {
         session: SessionId,
         id: String,
@@ -363,7 +363,7 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
     }
 }
 
-/// The engine's own state: each session's actor and what quill knows of how sessions
+/// The engine's own state: each session's actor and what Newen knows of how sessions
 /// relate (which started which, what each proposed, what waits to be reported).
 struct Router {
     store: Arc<Mutex<newen_store::Store>>,
@@ -412,7 +412,7 @@ struct Router {
     /// Site permissions the browser waits on, by the card's id: the site and where the
     /// answer goes.
     site_waits: SiteWaits,
-    /// Asks the person on a card of quill's own.
+    /// Asks the person on a card of Newen's own.
     ask: Ask,
     /// The dev servers agents started with preview_start.
     servers: Arc<servers::Servers>,
@@ -426,7 +426,7 @@ struct Router {
         tokio::task::JoinHandle<()>,
     )>,
     settings: newen_model::Settings,
-    /// quill's "All agents" servers and skills.
+    /// Newen's "All agents" servers and skills.
     global: global::Layer,
     /// What each agent has of its own, as its lists were last read: what the global layer
     /// leaves to it.
@@ -435,7 +435,7 @@ struct Router {
     awake: Option<Child>,
     /// The process each agent's sessions share, for an agent that runs them so.
     shared: HashMap<String, shared::Shared>,
-    /// quill's own updates: checked, downloaded and installed off this thread (update.rs).
+    /// Newen's own updates: checked, downloaded and installed off this thread (update.rs).
     updates: update::Updates,
     /// Each agent's sign-in under way: where the person's code or cancel goes.
     logins: HashMap<String, UnboundedSender<auth::Login>>,
@@ -500,7 +500,7 @@ impl Router {
             })
         };
         let site_waits: SiteWaits = Arc::default();
-        // What quill asks itself (a site, a dev server) is a card, as a permission is.
+        // What Newen asks itself (a site, a dev server) is a card, as a permission is.
         let ask: Ask = {
             let (sink, ui, waits) = (sink.clone(), ui.clone(), site_waits.clone());
             let modes = modes.clone();
@@ -554,7 +554,7 @@ impl Router {
                 newen_browser::Options {
                     program: None,
                     profile: config.browser.clone().unwrap_or_else(|| {
-                        std::env::temp_dir().join(format!("quill-browser-{}", std::process::id()))
+                        std::env::temp_dir().join(format!("newen-browser-{}", std::process::id()))
                     }),
                     downloads: home.join("Downloads"),
                     frames: config.frames.clone(),
@@ -575,7 +575,7 @@ impl Router {
             )
         };
         // Settings are read after this, and say whether a found version downloads at once.
-        // A click on the system's notice of a ready update brings quill up; no session has id 0.
+        // A click on the system's notice of a ready update brings Newen up; no session has id 0.
         let announce: update::Notifier = {
             let sink = sink.clone();
             Arc::new(move |title, body| {
@@ -645,7 +645,7 @@ impl Router {
         }
     }
 
-    /// The settings in force and the agents quill can run, for the UI.
+    /// The settings in force and the agents Newen can run, for the UI.
     fn announce_settings(&self) {
         self.browser
             .allow_sites(self.settings.browser_sites.clone());
@@ -785,8 +785,8 @@ impl Router {
         let Some(mut command) = self.account_command(&agent, &run.args) else {
             return;
         };
-        // quill opens the page itself, so the program's own opening of a browser is made a
-        // no-op (`BROWSER` is the convention for it); the code is pasted into quill.
+        // Newen opens the page itself, so the program's own opening of a browser is made a
+        // no-op (`BROWSER` is the convention for it); the code is pasted into Newen.
         command.env("BROWSER", "true");
         let status = adapter
             .auth_query()
@@ -1328,7 +1328,7 @@ impl Router {
 
     /// What a session `parent` starts for `proposal` runs as: the parent's own agent, model,
     /// effort, mode and folder, or, when it names another agent, that agent's defaults in the
-    /// parent's folder. Refused (the words for the tool's error) for an agent quill cannot run,
+    /// parent's folder. Refused (the words for the tool's error) for an agent Newen cannot run,
     /// or a fork into another agent.
     fn child_new(
         &self,
@@ -1409,7 +1409,7 @@ impl Router {
                     ui(Event::Codec(match path {
                         Ok(path) => newen_model::CodecState::Ready(path),
                         Err(reason) => {
-                            eprintln!("quill: video codec: {reason}");
+                            eprintln!("newen: video codec: {reason}");
                             newen_model::CodecState::Failed(reason)
                         }
                     }));
@@ -1949,7 +1949,7 @@ impl Router {
                 }
                 return;
             }
-            // quill's own updates: the checks and the install run off this thread (update.rs).
+            // Newen's own updates: the checks and the install run off this thread (update.rs).
             Intent::CheckUpdates => {
                 self.updates.check();
                 return;
@@ -2469,7 +2469,7 @@ impl Router {
         }
     }
 
-    /// One of quill's own tools, called by `session`'s agent ([`newen_agent::HOST_TOOLS`]):
+    /// One of Newen's own tools, called by `session`'s agent ([`newen_agent::HOST_TOOLS`]):
     /// what to answer it, and whether that is an error.
     async fn host_tool(
         &mut self,
@@ -2745,7 +2745,7 @@ struct Restored {
     proposals: Vec<newen_model::Proposal>,
     /// The session it was forked from, and the message the fork starts after.
     forked: Option<(SessionId, Option<String>)>,
-    /// Its browser's tabs when quill last ran.
+    /// Its browser's tabs when Newen last ran.
     browser_tabs: Vec<String>,
     /// The pull request its agent last named, and whether it is archived.
     pull_request: Option<String>,
@@ -2763,7 +2763,7 @@ struct Restored {
     /// failed, with its tasks left, a plan for the person, or still running at the last exit.
     progress: Progress,
     unfinished: bool,
-    /// What it was to be told of waits that ended, and had not heard when quill last ran.
+    /// What it was to be told of waits that ended, and had not heard when Newen last ran.
     unheard: Vec<newen_model::Report>,
 }
 
@@ -3761,7 +3761,7 @@ impl Actor {
         let decoded = self.adapter.decode(line);
         self.write_lines(decoded.replies).await;
         for event in decoded.events {
-            // quill's own tools are the router's to run; the call itself shows as its step.
+            // Newen's own tools are the router's to run; the call itself shows as its step.
             if let AgentEvent::HostTool { id, name, input } = event {
                 self.tell(Internal::HostTool {
                     session: self.id,
@@ -3953,7 +3953,7 @@ fn next_send(queue: &mut Vec<QueuedMessage>) -> Option<QueuedMessage> {
     Some(first)
 }
 
-/// The message that tells a session what the sessions it started said, in quill's words for
+/// The message that tells a session what the sessions it started said, in Newen's words for
 /// what Desktop sends.
 /// The settings kept at `path`; the defaults when there is none or it does not read.
 /// Settings' "Environment variables", `KEY=value` a line, as a process's pairs; a line
@@ -4000,7 +4000,7 @@ fn write_settings(
 }
 
 /// The process that holds idle sleep off while it lives; none where there is no such tool.
-/// `systemd-inhibit` on Linux, `caffeinate -i` (idle sleep) tied to quill's pid on macOS;
+/// `systemd-inhibit` on Linux, `caffeinate -i` (idle sleep) tied to Newen's pid on macOS;
 /// Windows has none without FFI (`SetThreadExecutionState`), so it stays degraded.
 fn awake_command() -> Option<Command> {
     if cfg!(target_os = "macos") {
@@ -4124,7 +4124,7 @@ fn installed_program() -> Option<std::path::PathBuf> {
 }
 
 /// The bytes the files under `path` take.
-/// Show a banner with the computer's own notifier, silent (quill plays its own sound), and
+/// Show a banner with the computer's own notifier, silent (Newen plays its own sound), and
 /// wait for it to be clicked: true if the person clicked it. A missing notifier (none
 /// installed) just shows nothing.
 async fn notify(title: &str, body: &str) -> bool {
@@ -4205,7 +4205,7 @@ fn notifier(title: &str, body: &str) -> (&'static str, Vec<String>, Vec<(&'stati
         ("osascript", vec!["-e".into(), script], vec![])
     } else if cfg!(windows) {
         // shortcut: the toast carries PowerShell's own AppUserModelID, so it is titled as
-        // PowerShell; upgrade when quill registers its own. Its click reaches this PowerShell
+        // PowerShell; upgrade when Newen registers its own. Its click reaches this PowerShell
         // while it waits (ten minutes at most), not after.
         let script = "[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
              $x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);\
@@ -4557,7 +4557,7 @@ async fn read_aloud(
     });
 }
 
-/// quill's note on the sessions a message names, appended to what the agent gets: each mention
+/// Newen's note on the sessions a message names, appended to what the agent gets: each mention
 /// is numbered and mapped to its session id. A title cannot close the tag, so its angle
 /// brackets become look-alikes.
 fn mention_note(mentions: &[(SessionId, String)]) -> String {
@@ -5267,7 +5267,7 @@ mod tests {
 
     #[test]
     fn list_sessions_keeps_this_project_s_sessions() {
-        let here = std::env::temp_dir().join(format!("quill-list-{}", std::process::id()));
+        let here = std::env::temp_dir().join(format!("newen-list-{}", std::process::id()));
         let rows = vec![
             (2, here.clone(), "session 2".to_owned()),
             (3, here.join("elsewhere"), "session 3".to_owned()),
@@ -5324,7 +5324,7 @@ mod tests {
 
     #[test]
     fn settings_are_kept_whole_and_an_unknown_key_reads_as_defaults() {
-        let dir = std::env::temp_dir().join(format!("quill-settings-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-settings-{}", std::process::id()));
         let path = dir.join("settings.json");
         assert_eq!(read_settings(Some(&path)), newen_model::Settings::default());
         let mut settings = newen_model::Settings {
@@ -5347,7 +5347,7 @@ mod tests {
 
     #[test]
     fn settings_saved_before_the_fonts_read_as_system_and_the_desktops_monospace() {
-        let dir = std::env::temp_dir().join(format!("quill-fonts-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("newen-fonts-{}", std::process::id()));
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, r#"{"text_size": "large"}"#).unwrap();
@@ -5521,7 +5521,7 @@ mod tests {
 
     #[test]
     fn a_document_stays_inside_its_sessions_folder() {
-        let root = std::env::temp_dir().join(format!("quill-doc-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("newen-doc-{}", std::process::id()));
         std::fs::create_dir_all(root.join("docs")).unwrap();
         write_text(&root, "docs/notes.md", "# Notes\n").unwrap();
         assert_eq!(

@@ -1,4 +1,4 @@
-//! The small pieces quill's views are built from, for every app of quill to draw the same.
+//! The small pieces Newen's views are built from, for every app of Newen to draw the same.
 
 use crate::look::{self, BODY, SMALL};
 use limn::{Component, ComponentPalette, Element, FontFamily};
@@ -161,7 +161,7 @@ pub fn side_row(id: String, content: Vec<Element>, selected: bool, height: f32) 
     }
 }
 
-/// The measures of quill's menus, `width` wide: Desktop's rows are 28 px with 14 px labels
+/// The measures of Newen's menus, `width` wide: Desktop's rows are 28 px with 14 px labels
 /// and 13 px captions. Context menus take them too.
 pub fn menu_sizing(width: f32) -> limn::SelectorSizing {
     limn::SelectorSizing {

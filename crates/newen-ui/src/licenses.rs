@@ -1,4 +1,4 @@
-//! Settings › System › Licenses: the terms of third-party software quill uses that ask to be
+//! Settings › System › Licenses: the terms of third-party software Newen uses that ask to be
 //! shown, for now Cisco's OpenH264 binary, which plays the clips of What's new.
 
 use crate::Ui;

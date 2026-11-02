@@ -1,5 +1,5 @@
-//! What the person chose in Settings, kept in `$XDG_CONFIG_HOME/quill-ide/settings.json`, and
-//! Settings' pages, drawn as quill's.
+//! What the person chose in Settings, kept in `$XDG_CONFIG_HOME/newen-ide/settings.json`, and
+//! Settings' pages, drawn as Newen's.
 
 use newen_components::icons;
 use newen_components::packs::{self, Offered};
@@ -199,7 +199,7 @@ pub fn pages(
                 vec![
                     setting(
                         "Icon theme",
-                        "quill's drawings, the Material set, or a VS Code icon theme found \
+                        "Newen's drawings, the Material set, or a VS Code icon theme found \
                          among your editors' extensions.",
                         pick("icons", packs, &prefs.icons),
                     ),

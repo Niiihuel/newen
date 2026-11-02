@@ -1,4 +1,4 @@
-//! The contract between quill's UI and its engine (spec.md D7): the UI sends [`Intent`]s,
+//! The contract between Newen's UI and its engine (spec.md D7): the UI sends [`Intent`]s,
 //! the engine answers with [`Event`]s. Neither side knows the other's crate.
 
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ pub struct GlobalVar {
     pub secret: bool,
 }
 
-/// An MCP server of the "All agents" layer (`extensions.json`, docs/agents.md): quill adds it
+/// An MCP server of the "All agents" layer (`extensions.json`, docs/agents.md): Newen adds it
 /// to the sessions of every agent that can use it, but the agents' own files stay as they are.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalServer {
@@ -40,7 +40,7 @@ pub struct GlobalServer {
     pub except: Vec<String>,
 }
 
-/// A skill in quill's own folder (`<config>/quill/skills/<name>/SKILL.md`).
+/// A skill in Newen's own folder (`<config>/newen/skills/<name>/SKILL.md`).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalSkill {
     pub name: String,
@@ -109,7 +109,7 @@ pub enum GlobalOp {
         agent: String,
         on: bool,
     },
-    /// Copy a folder with a `SKILL.md` into quill's skills.
+    /// Copy a folder with a `SKILL.md` into Newen's skills.
     ImportSkill(PathBuf),
     NewSkill {
         name: String,
@@ -134,9 +134,9 @@ pub enum GlobalOp {
     Tools(Vec<ToolChoice>),
 }
 
-/// quill's own id of a session.
+/// Newen's own id of a session.
 pub type SessionId = u64;
-/// quill's own id of one message the person sent; the agent receives it as the prompt's id.
+/// Newen's own id of one message the person sent; the agent receives it as the prompt's id.
 pub type RequestId = String;
 
 /// What a new session starts with.
@@ -200,9 +200,9 @@ pub struct Repo {
     pub base: Option<String>,
 }
 
-/// How quill shows an event that needs the person while its session is not in view. Desktop's
+/// How Newen shows an event that needs the person while its session is not in view. Desktop's
 /// choices are Off, Badge only and Banners; its badge is the dock count,
-/// quill's is its own marks in the sidebar and on the window (inferred).
+/// Newen's is its own marks in the sidebar and on the window (inferred).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotifyLevel {
@@ -255,10 +255,10 @@ pub struct Settings {
     /// Keep the computer from idle sleep while an agent works.
     pub keep_awake: bool,
     /// Keep the computer awake while it runs on battery too;
-    /// off, quill lets it sleep on battery.
+    /// off, Newen lets it sleep on battery.
     pub keep_awake_on_battery: bool,
-    /// Ask the desktop to draw attention to quill when a session finishes or waits on the
-    /// person while quill is not in front.
+    /// Ask the desktop to draw attention to Newen when a session finishes or waits on the
+    /// person while Newen is not in front.
     pub attention: bool,
     /// How a permission request is shown when its session is not in view (Desktop's
     /// "Permission requests").
@@ -268,13 +268,13 @@ pub struct Settings {
     /// How a finished turn is shown when its session is not in view (Desktop's "Task
     /// complete"); it has no badge, so `Badge` reads as `Banner`.
     pub notify_done: NotifyLevel,
-    /// Whether a banner comes with quill's own sound (Desktop's "Notification sound", which
+    /// Whether a banner comes with Newen's own sound (Desktop's "Notification sound", which
     /// plays the system's).
     pub notification_sound: bool,
     /// A pull request opens as a draft unless the person picks otherwise.
     pub pr_draft: bool,
     /// The prefix of the branch names agents are asked to create, without its `/` (Desktop's
-    /// "Branch prefix", whose default is the app's own name); empty takes "quill".
+    /// "Branch prefix", whose default is the app's own name); empty takes "newen".
     pub branch_prefix: String,
     /// Open a pull request's link in the computer's default browser even while links open in
     /// the built-in one (Desktop's "Open pull requests in browser"); off is inferred.
@@ -282,7 +282,7 @@ pub struct Settings {
     /// Archive a session once its pull request is merged (Desktop's "Auto-archive after PR
     /// merge"); off is inferred.
     pub archive_on_merge: bool,
-    /// Start quill when the person logs in.
+    /// Start Newen when the person logs in.
     pub open_at_login: bool,
     /// Sites the agents may use in the built-in browser without asking; local addresses
     /// never ask (docs/browser.md §5).
@@ -290,7 +290,7 @@ pub struct Settings {
     /// The Chromium the built-in browser runs; `None` takes `NEWEN_CHROME` or the first on
     /// `PATH`.
     pub browser_program: Option<String>,
-    /// Draw the browser's pages with Chromium in quill's own process, without the headless
+    /// Draw the browser's pages with Chromium in Newen's own process, without the headless
     /// one's delay. From the next start.
     pub browser_native: bool,
     /// The editor files open in: the last chosen in Open in, "newen-ide" or an editor's URL
@@ -299,9 +299,9 @@ pub struct Settings {
     /// Each agent's own, by its id.
     pub agents: std::collections::BTreeMap<String, AgentSettings>,
     /// Look up logos of connectors and plugins (svgl.app, then the server's own site); off,
-    /// quill asks for none and shows its icons.
+    /// Newen asks for none and shows its icons.
     pub logos: bool,
-    /// Download a new version of quill in the background once one is out; installing always
+    /// Download a new version of Newen in the background once one is out; installing always
     /// waits for the person. A mandatory version downloads whatever this says.
     pub auto_update: bool,
     /// Make every new session reachable from another device as it starts, for agents that
@@ -310,7 +310,7 @@ pub struct Settings {
     /// Show a release's announcement before restarting into it and once after; off, the
     /// release notes are still a click away.
     pub whats_new: bool,
-    /// Whether the person let quill download Cisco's OpenH264 codec to play the clips of What's
+    /// Whether the person let Newen download Cisco's OpenH264 codec to play the clips of What's
     /// new: `None` while never asked, so nothing is downloaded until they say yes.
     pub video_codec: Option<bool>,
 }
@@ -364,11 +364,11 @@ impl Settings {
         self.agents.get(agent).cloned().unwrap_or_default()
     }
 
-    /// The branch prefix without its trailing `/`, or "quill" when none is set.
+    /// The branch prefix without its trailing `/`, or "newen" when none is set.
     pub fn branch_prefix(&self) -> &str {
         let prefix = self.branch_prefix.trim().trim_end_matches('/');
         if prefix.is_empty() {
-            "quill"
+            "newen"
         } else {
             prefix
         }
@@ -405,7 +405,7 @@ pub enum Width {
 }
 
 /// Desktop's "Interface font", which offers Anthropic Sans, System and
-/// OpenDyslexic. quill does not ship Anthropic's face: System is the desktop's sans-serif and
+/// OpenDyslexic. Newen does not ship Anthropic's face: System is the desktop's sans-serif and
 /// Ubuntu is the face limn bundles. OpenDyslexic is left out, as it would mean bundling it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -475,8 +475,8 @@ impl Default for CustomizeSupport {
     }
 }
 
-/// An agent quill can run: its id, its name for people, and the versions of its program
-/// quill was tested with.
+/// An agent Newen can run: its id, its name for people, and the versions of its program
+/// Newen was tested with.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentInfo {
     pub id: String,
@@ -550,7 +550,7 @@ pub enum GithubState {
     SignedIn {
         login: String,
         name: Option<String>,
-        /// The picture, kept as a PNG under quill's data folder once downloaded.
+        /// The picture, kept as a PNG under Newen's data folder once downloaded.
         avatar: Option<PathBuf>,
     },
     /// `gh` answered something that was not understood, kept as its words.
@@ -587,7 +587,7 @@ pub enum Intent {
         /// is told which session each is, while the stored text stays as typed.
         #[serde(default)]
         mentions: Vec<(SessionId, String)>,
-        /// Image files the message attaches (pasted ones saved under quill's data folder,
+        /// Image files the message attaches (pasted ones saved under Newen's data folder,
         /// or picked and dropped ones where they are); the engine reads and sizes them.
         #[serde(default)]
         images: Vec<PathBuf>,
@@ -708,7 +708,7 @@ pub enum Intent {
         session: SessionId,
         title: String,
     },
-    /// Show an OS banner about `session`, from the computer's own notifier, with quill's own
+    /// Show an OS banner about `session`, from the computer's own notifier, with Newen's own
     /// sound if any (the banner itself stays silent). A click on it is
     /// `Event::NotificationClicked`, where the system tells it.
     Notify {
@@ -732,7 +732,7 @@ pub enum Intent {
         session: SessionId,
         tasks: Vec<String>,
     },
-    /// Stop the session's agent and remove everything quill kept of it.
+    /// Stop the session's agent and remove everything Newen kept of it.
     Delete {
         session: SessionId,
     },
@@ -787,7 +787,7 @@ pub enum Intent {
     /// Keep these settings and act on them (start at login, keep awake…); answered by
     /// `Event::Settings`.
     SaveSettings(Settings),
-    /// How much room quill's own data takes; answered by `Event::Storage`.
+    /// How much room Newen's own data takes; answered by `Event::Storage`.
     MeasureStorage,
     /// Logos for connectors and plugins not yet kept, each by its key; answered by one
     /// `Event::Logo` per key, when it is found or not.
@@ -800,14 +800,14 @@ pub enum Intent {
         agent: String,
         folder: PathBuf,
     },
-    /// Change quill's "All agents" layer of servers and skills, or read it; answered by
+    /// Change Newen's "All agents" layer of servers and skills, or read it; answered by
     /// `Event::Global`.
     Global(GlobalOp),
-    /// Look for a newer quill now; answered by `Event::Update`.
+    /// Look for a newer Newen now; answered by `Event::Update`.
     CheckUpdates,
-    /// Download the newer quill found, if it is not here yet; answered by `Event::Update`.
+    /// Download the newer Newen found, if it is not here yet; answered by `Event::Update`.
     DownloadUpdate,
-    /// Install the downloaded quill and start it in place of this one; answered by
+    /// Install the downloaded Newen and start it in place of this one; answered by
     /// `Event::Update` with `Installed`, then the host restarts.
     InstallUpdate,
     /// Never offer the optional version found again (a newer one is offered); answered by
@@ -1182,7 +1182,7 @@ pub enum SessionStatus {
     Failed(String),
 }
 
-/// Where quill's own update stands, as Settings and the account menu show it. Never kept in
+/// Where Newen's own update stands, as Settings and the account menu show it. Never kept in
 /// the session log: it is the moment's.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum UpdateState {
@@ -1222,11 +1222,11 @@ pub enum UpdateState {
     },
     /// Built from source (under `target/`, or `NEWEN_NO_UPDATE` set): updated with `git pull`.
     FromSource,
-    /// A binary that `quill --install` never placed: nothing to update in place.
+    /// A binary that `newen --install` never placed: nothing to update in place.
     NotInstalled,
 }
 
-/// The release notes quill keeps (docs/UPDATES.md): each downloaded with its update, the
+/// The release notes Newen keeps (docs/UPDATES.md): each downloaded with its update, the
 /// media matched against their digests, kept in the data folder.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WhatsNew {
@@ -1293,7 +1293,7 @@ pub enum Media {
     },
 }
 
-/// quill's own sounds, made by the engine: one when a task completes, one when a session
+/// Newen's own sounds, made by the engine: one when a task completes, one when a session
 /// needs the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Chime {
@@ -1480,7 +1480,7 @@ pub enum Event {
         path: String,
         error: String,
     },
-    /// The settings in force, and the agents quill can run. Not a session's: it is sent at
+    /// The settings in force, and the agents Newen can run. Not a session's: it is sent at
     /// start and after each save.
     Settings {
         settings: Settings,
@@ -1488,14 +1488,14 @@ pub enum Event {
     },
     /// Every kept session has been told again: what follows is new, not history.
     Restored,
-    /// The logo kept for a connector or plugin `key`, as light and dark PNG files under quill's
+    /// The logo kept for a connector or plugin `key`, as light and dark PNG files under Newen's
     /// data folder; `None` where none was found. Not session state: never stored.
     Logo {
         key: String,
         light: Option<PathBuf>,
         dark: Option<PathBuf>,
     },
-    /// Where quill keeps its data and how many bytes it takes.
+    /// Where Newen keeps its data and how many bytes it takes.
     Storage {
         path: PathBuf,
         bytes: u64,
@@ -1504,15 +1504,15 @@ pub enum Event {
     SettingsNotSaved {
         error: String,
     },
-    /// Where quill's own update stands; not stored.
+    /// Where Newen's own update stands; not stored.
     Update(UpdateState),
-    /// A check for quill's updates ended at `at` (seconds since 1970), with `error` when it
+    /// A check for Newen's updates ended at `at` (seconds since 1970), with `error` when it
     /// failed; not stored.
     UpdateChecked {
         at: u64,
         error: Option<String>,
     },
-    /// The release notes quill keeps, and whether to announce this version; not stored.
+    /// The release notes Newen keeps, and whether to announce this version; not stored.
     WhatsNew(WhatsNew),
     /// Where the video codec stands on this computer; not stored.
     Codec(CodecState),
@@ -1686,7 +1686,7 @@ impl Event {
             | Event::WaitEnded { session, .. }
             | Event::Browser { session, .. }
             | Event::NotificationClicked { session } => *session,
-            // quill's own, not a session's: no session has id 0.
+            // Newen's own, not a session's: no session has id 0.
             Event::Settings { .. }
             | Event::Restored
             | Event::Logo { .. }

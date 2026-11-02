@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The script the page tools run in the page, quill's own: refs kept per element on the
+/// The script the page tools run in the page, Newen's own: refs kept per element on the
 /// page's window, so a ref read once still names its element later.
 const HELPER: &str = r#"(() => {
 const Q = window.__newen || (window.__newen = { next: 1, refs: new Map(), ids: new WeakMap() });

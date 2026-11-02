@@ -5,7 +5,7 @@ use super::*;
 use newen_agent::{PromptImage, WebSearchRun};
 use std::path::Path;
 
-/// Feed a fixture through a fresh adapter: lines quill sent become the same commands
+/// Feed a fixture through a fresh adapter: lines Newen sent become the same commands
 /// (so the adapter's state matches), lines the CLI sent are decoded.
 fn replay(name: &str) -> (Claude, Vec<AgentEvent>, Vec<String>) {
     replay_at("2.1.310", name)
@@ -31,7 +31,7 @@ fn replay_at(version: &str, name: &str) -> (Claude, Vec<AgentEvent>, Vec<String>
                     Some("mcp_reconnect") => drop(claude.encode(AgentCommand::McpReconnect(
                         super::text(&msg["request"]["serverName"]),
                     ))),
-                    // Requests quill does not send yet keep the ids of the ones after them in step.
+                    // Requests Newen does not send yet keep the ids of the ones after them in step.
                     Some("get_skills_dialog") => drop(claude.encode(AgentCommand::Skills)),
                     Some("reload_plugins") => drop(claude.encode(AgentCommand::ReloadPlugins)),
                     Some("reload_skills") => drop(claude.request(json!({}))),
@@ -333,7 +333,7 @@ fn signing_in_to_a_server_gives_its_page_or_why_not() {
     assert!(
         matches!(&events[..], [AgentEvent::McpSignIn { url: None, error: Some(e), .. }] if e.contains("stdio"))
     );
-    // Only an http or sse server not signed in by the account can be signed in from quill.
+    // Only an http or sse server not signed in by the account can be signed in from Newen.
     let (_, events, _) = replay_at("2.1.311", "extensions");
     let Some(AgentEvent::McpServers(servers)) = events
         .iter()
@@ -944,7 +944,7 @@ fn thinking_text_is_asked_for_at_launch() {
 }
 
 #[test]
-fn quills_own_tools_are_served_in_process_and_never_ask() {
+fn newens_own_tools_are_served_in_process_and_never_ask() {
     let (mut claude, events, replies) = replay("sessions");
     // The handshake and the tool list are answered by the adapter itself.
     let answered = |method: &str| {
@@ -953,7 +953,7 @@ fn quills_own_tools_are_served_in_process_and_never_ask() {
             let result = &reply["response"]["response"]["mcp_response"]["result"];
             match method {
                 "initialize" => result["serverInfo"]["name"] == "sessions",
-                // Every one of quill's tools, start_session first, with its `agent`.
+                // Every one of Newen's tools, start_session first, with its `agent`.
                 _ => {
                     result["tools"].as_array().map(Vec::len) == Some(newen_agent::HOST_TOOLS.len())
                         && result["tools"][0]["name"] == "start_session"
@@ -1386,7 +1386,7 @@ fn remote_control_turns_on_and_off_and_brings_the_phones_messages() {
             "Escribí una historia de 500 palabras sobre una pluma"
         ]
     );
-    // The permission approved on the phone is no longer quill's to answer.
+    // The permission approved on the phone is no longer Newen's to answer.
     let asked = (events.iter())
         .find_map(|e| match e {
             AgentEvent::PermissionRequest { id, .. } => Some(id.clone()),
@@ -1396,7 +1396,7 @@ fn remote_control_turns_on_and_off_and_brings_the_phones_messages() {
     assert!(events
         .iter()
         .any(|e| matches!(e, AgentEvent::Withdrawn { id } if *id == asked)));
-    // quill's own messages are not taken for the phone's.
+    // Newen's own messages are not taken for the phone's.
     let mine = claude.encode(AgentCommand::Prompt {
         request: "r1".into(),
         text: "hi".into(),
@@ -1521,7 +1521,7 @@ fn tool_permissions_are_the_sessions_allow_ask_and_deny_rules() {
             "deny": ["mcp__my_server__delete_repo"],
         })
     );
-    // None chosen, no permissions of quill's.
+    // None chosen, no permissions of Newen's.
     let plain = claude.launch(&SessionSpec::default()).args;
     assert!(!plain.iter().any(|a| a.contains("permissions")));
 }

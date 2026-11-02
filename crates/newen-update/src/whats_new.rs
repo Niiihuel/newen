@@ -48,7 +48,7 @@ pub struct Announcement {
     pub body: String,
     #[serde(default)]
     pub bullets: Vec<String>,
-    /// In order of preference: quill shows the first that downloads and matches.
+    /// In order of preference: Newen shows the first that downloads and matches.
     #[serde(default)]
     pub media: Vec<Medium>,
     /// Where "Try it" takes the person, from the list the interface knows; one it does not
@@ -97,7 +97,7 @@ pub fn fetch_whats_new(
     let entry = release.whats_new.as_ref().ok_or(Error::NoArtifact)?;
     let bytes = get(agent, entry, MAX_JSON)?;
     let whats_new: WhatsNew = serde_json::from_slice(&bytes).map_err(|error| {
-        eprintln!("quill: update: unreadable {FILE}: {error}");
+        eprintln!("newen: update: unreadable {FILE}: {error}");
         Error::Manifest
     })?;
     if whats_new.version != release.version {
@@ -122,7 +122,7 @@ pub fn fetch_whats_new(
                 })
             });
             kept.inspect_err(|error| {
-                eprintln!("quill: update: a medium of what's new was left out: {error}")
+                eprintln!("newen: update: a medium of what's new was left out: {error}")
             })
             .ok()
         });

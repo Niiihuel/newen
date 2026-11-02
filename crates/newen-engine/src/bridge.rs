@@ -1,7 +1,7 @@
-//! quill's `$BROWSER`, as Claude Desktop's shim: what a session's tools open
+//! Newen's `$BROWSER`, as Claude Desktop's shim: what a session's tools open
 //! (`gh`, a dev server, Python's `webbrowser`) shows in that session's browser when it is a page
 //! of this computer, and in the desktop's own browser otherwise. The agent runs with
-//! `BROWSER` set to a script that hands the address back to quill over a socket only quill
+//! `BROWSER` set to a script that hands the address back to Newen over a socket only Newen
 //! and the person can open, with a key that names the session.
 //!
 //! shortcut: any local port is taken, where Desktop takes only ports a process of the session
@@ -48,7 +48,7 @@ impl Bridge {
         let quoted = exe.display().to_string().replace('\'', r"'\''");
         std::fs::write(
             &shim,
-            format!("#!/bin/sh\n# quill's $BROWSER: a local page opens in the session's browser.\nexec '{quoted}' --open-url \"$@\"\n"),
+            format!("#!/bin/sh\n# Newen's $BROWSER: a local page opens in the session's browser.\nexec '{quoted}' --open-url \"$@\"\n"),
         )
         .ok()?;
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).ok()?;
