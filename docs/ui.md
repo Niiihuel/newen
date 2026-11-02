@@ -323,6 +323,8 @@ El punto azul aparece cuando un turno termina mientras la persona mira otra sesi
 
 **Interacciones:** Enter/Espacio sobre una fila la abre/cierra (estado por `tool_id` en `Ui`); clic en `+1 −1` o en la ruta abre el panel de diff en ese archivo; seleccionar texto + Ctrl+C → `CopyRequested`.
 
+**Selección:** la columna del transcript es un `Element::selection_scope()` de limn, así que se selecciona como un documento: arrastrar pasa de un párrafo a los siguientes (mensajes de la persona, respuestas con títulos, listas, código y links, y el texto de los pasos), Shift+clic extiende la selección, y Ctrl+A, con un clic previo en un texto del transcript y ningún campo enfocado, selecciona el transcript entero (no sólo el mensaje: cada mensaje ya tiene su botón de copiar). Ctrl+C copia texto plano con forma de markdown: una línea en blanco entre párrafos, mensajes y bloques; los ítems de una lista uno por línea con su marca (`• uno`, `1. dos`); el código con sus líneas tal cual, sin cerca de ```; el texto de un link, no su dirección. Un clic en un link o un botón sigue siendo un clic.
+
 | Usar de limn | Crear |
 |---|---|
 | `ScrollArea::measured_list` + `follow_end` (`scroll_area.rs`), `Markdown` (`markdown.rs`), `Collapsible` (`collapsible.rs`), `FramedCard` (`framed_card.rs`), `OutputBlock` (`output_block.rs`), `CodeBlock` (`code_block.rs`), `CodeDiff` (`code_diff.rs`), `DiffStat` (`list_row.rs`), `TextShimmer`, `Ticker` (`ticker.rs`), `MessageActions`, `Chip` (`chip.rs`), `Notice` (`notice.rs`), `Skeleton` | quill (`quill-components`): `UserBubble`, `TurnSummary`, `ToolRow` (catálogo tipo→verbo/cuerpo), `TodoCard`. limn: nada (`FramedCard::rows` + `Collapsible` alcanzan). |

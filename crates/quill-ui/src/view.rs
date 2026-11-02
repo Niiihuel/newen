@@ -2777,7 +2777,9 @@ fn transcript(
     if let Some(status) = status_line(session, running.as_ref(), ui, column, palette) {
         items.push(status);
     }
+    // Selected as one document: a drag runs across messages, paragraphs and steps.
     let content = Element::column(items)
+        .selection_scope()
         .gap(14.0)
         .size(Some(outer), None)
         .padding(16.0)
