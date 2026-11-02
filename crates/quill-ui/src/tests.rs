@@ -8389,6 +8389,43 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
     }
 }
 
+/// A background task's title, in the card and in its pane, is drawn in the face and size of
+/// the right panel's other rows, not the monospace an element has of its own.
+#[test]
+fn a_background_task_s_title_is_in_the_panel_s_face() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "t1".into(),
+            call: None,
+            description: "REA Discord stream".into(),
+            kind: "command".into(),
+        },
+    );
+    settle(&store, &mut ui);
+    let window = limn::Size::new(2000.0, 900.0);
+    let face = |frame: &limn::Frame, words: &str| {
+        frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::Text {
+                text,
+                font_family,
+                font_size,
+                ..
+            } if text == words => Some((*font_family, *font_size)),
+            _ => None,
+        })
+    };
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let row = face(&frame, "This computer").expect("the Environment row");
+    assert_eq!(row, (limn::FontFamily::Sans, look::BODY));
+    assert_eq!(face(&frame, "REA Discord stream"), Some(row), "the card's");
+    click(&store, &mut ui, view::TASKS_OPEN);
+    settle(&store, &mut ui);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert_eq!(face(&frame, "REA Discord stream"), Some(row), "the pane's");
+}
+
 /// A running task's Stop, in the Background tasks card and in its pane, is the composer's:
 /// the same 28 px button with the same square, and the card's row lights as a sidebar row
 /// does, as tall and as round.

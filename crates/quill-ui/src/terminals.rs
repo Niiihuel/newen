@@ -66,8 +66,10 @@ pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
                 }),
                 // One line that fades out at its end: a long description never runs into
                 // the time; the hint has it whole.
+                // In the interface face as the panel's other rows: an element's own is mono.
                 Element::faded_text(task.description.clone(), 24.0)
-                    .font_size(look::SMALL)
+                    .font_family(limn::FontFamily::Sans)
+                    .font_size(look::BODY)
                     .foreground(palette.text)
                     .size(None, Some(18.0))
                     .flex(1.0)
@@ -90,9 +92,7 @@ pub(crate) fn rows(session: &Session, width: f32) -> Option<Vec<Element>> {
                 crate::view::TASKS_OPEN.into(),
                 vec![
                     icon(icons::CHECK_CIRCLE),
-                    text(format!("{finished} finished"))
-                        .font_size(look::SMALL)
-                        .centered_y(),
+                    text(format!("{finished} finished")).centered_y(),
                 ],
                 false,
                 palette,
