@@ -17,9 +17,9 @@ Palette: sumi `#141413`, washi `#f2ebde`, beni `#c0605c`, dark tile `#1a1714`, r
 
 | File in `apps/newen/assets/icons/` | What it is | Used by |
 |---|---|---|
-| `newen.svg` | Light icon, ink cut, viewBox 1024 | `scripts/install-desktop.sh` (hicolor `scalable/apps`) |
+| `newen.svg` | Light icon, ink cut, viewBox 1024 | `scripts/install-desktop.sh` and the migration from quill, `crates/newen-engine/src/migrate.rs` (hicolor `scalable/apps`) |
 | `newen-dark.svg` | Dark icon, ink cut | nothing in code; kept beside the light one |
-| `newen-{16,24,32,48,64,128,256,512}.png` | Light icon PNGs, RGBA. Clean cut at 16–48, ink cut at 64–512 | `scripts/install-desktop.sh` (hicolor PNGs), `scripts/package.sh` (the macOS iconset: 16, 32, 128, 256, 512 and their @2x), `apps/newen/src/main.rs` (`newen-256.png`, the window icon) |
+| `newen-{16,24,32,48,64,128,256,512}.png` | Light icon PNGs, RGBA. Clean cut at 16–48, ink cut at 64–512 | `scripts/install-desktop.sh` (hicolor PNGs), `scripts/package.sh` (the macOS iconset: 16, 32, 128, 256, 512 and their @2x), `apps/newen/src/main.rs` (`newen-256.png`, the window icon), the migration from quill (`newen-256.png`, hicolor `256x256/apps`) |
 | `newen-dark-{same sizes}.png` | Dark icon PNGs | `apps/newen/src/main.rs` (`newen-dark-256.png`, the window icon in the dark theme) |
 | `newen.ico` | Windows icon, light, with layers 16, 24, 32, 48, 64, 128, 256 | `apps/newen/build.rs` (`winresource` `set_icon`) |
 | `newen-mark.svg` | The bare mark (N and horizon) without the tile, all in `currentColor`, viewBox 1024 in the tile's own frame | `crates/newen-ui/src/account.rs` and `appearance.rs` (`icons::of(include_str!(...))`, tinted with the text's colour, 56 px) |

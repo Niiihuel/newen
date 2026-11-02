@@ -501,9 +501,15 @@ Los pasos, cada uno se puede repetir sin daño:
    las rutas de los medios en `whats-new/*/notes.json`.
 3. **Lanzador** (Linux). Un `applications/quill.desktop` cuyo `Exec` arranca la
    instalación de quill (`<datos>/quill/app/…`) se reemplaza por
-   `newen.desktop` (`Exec` `<datos>/newen/app/current/newen`, `Icon=newen`,
-   `StartupWMClass=newen`). Uno que arranca otra cosa (un wrapper hecho a mano)
-   es de la persona y queda.
+   `newen.desktop` (`Icon=newen`, `StartupWMClass=newen`), cuyo `Exec` es el
+   programa de la instalación tal como está: `<datos>/newen/app/current/newen`,
+   o `current/quill` si la versión que arranca es la de quill (una Newen
+   corrida desde fuera de la instalación; cada versión de Newen trae después
+   el enlace `quill -> newen`). En el tema de íconos de la persona
+   (`<datos>/icons/hicolor`) quedan `256x256/apps/newen.png` y
+   `scalable/apps/newen.svg`, y se borran los `quill.png` y `quill.svg`. Uno
+   que arranca otra cosa (un wrapper hecho a mano) es de la persona y queda;
+   también queda si la instalación no tiene programa que arrancar.
 4. **`injected/`.** Se borra `<config>/newen/injected/`: se arma de nuevo en cada
    sesión y sus enlaces apuntaban a la carpeta vieja.
 5. **La base**, la última y sólo con todo lo anterior hecho. Un checkpoint
@@ -536,7 +542,7 @@ misma forma al arrancar.
 | Ajustes: editor `quill-ide`; paquete de íconos `quill` de newen-ide | `read_settings` (newen-engine); `packs::LEGACY_NEWEN` | se leen como `newen-ide` y `newen` |
 | Plugin `quill` de Claude Code | `newen-agent-claude/src/inject.rs`, `link_skills` | un `plugin.json` que dice otra cosa se reescribe como `newen`; un enlace de skill viejo o colgado se hace de nuevo |
 | Inicio de sesión de quill | `login_entry` (newen-engine) | `autostart/quill.desktop`, el valor `quill` de la clave Run y `dev.quill.quill.plist` se borran al escribir o quitar el de Newen |
-| `quill.desktop` y los íconos `quill` del menú | la migración; `scripts/install-desktop.sh` | se reemplazan por los de Newen; un `Exec` hecho a mano queda |
+| `quill.desktop` y los íconos `quill` del menú | la migración; `scripts/install-desktop.sh` | se reemplazan por los de Newen (la migración pone los íconos de 256 px y SVG; el script, todos los tamaños); un `Exec` hecho a mano queda |
 | Releases de quill | `REPOSITORIES`, `LEGACY_MANIFEST`, `LEGACY_PRODUCT` (newen-update) | después de `Niiihuel/newen` y `newen-update.json`; el `product` `"quill"` se acepta |
 | Programa `quill` / `quill.exe` | `install::LEGACY_PROGRAM`, `program_in` | la versión de quill a la que vuelve una vuelta atrás; en Windows, una instalación en `Programs\quill` (si no hay `Programs\newen`, y sólo si tiene `versions\`: la carpeta `quill` de otra app, con un `Quill.exe` que Windows confunde con `quill.exe`, no se toca) sigue con `quill.exe` y se actualiza ahí. Cada versión que Newen prepara en Linux lleva un enlace `quill -> newen` para los lanzadores de `current/quill` |
 | Descargas a medias `quill-*.part` | `newen-update/src/lib.rs` | se borran como las de Newen |

@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 /// Left in Newen's data folder once every step is done: later starts do nothing.
 pub const MARKER: &str = ".migrated-from-quill";
 
+/// Newen's icon, which the launcher put in quill's place names.
+const ICON_PNG: &[u8] = include_bytes!("../../../apps/newen/assets/icons/newen-256.png");
+const ICON_SVG: &[u8] = include_bytes!("../../../apps/newen/assets/icons/newen.svg");
+
 /// Whether this build may move quill's data: a release always; a debug build only when
 /// `NEWEN_MIGRATE` is `1` (`asked`), as a developer's build shares the person's own folders.
 pub fn allowed(debug: bool, asked: Option<&std::ffi::OsStr>) -> bool {
@@ -45,7 +49,7 @@ pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
             replace_launcher(
                 &data.join("applications"),
                 &quill.join("app"),
-                &newen.join("app/current/newen"),
+                &newen_update::install::Install::at(newen.join("app")).program(),
             ),
         ));
     }
@@ -167,16 +171,29 @@ fn rewrite_notes(folder: &Path, quill: &Path) -> Result<bool, String> {
 
 /// quill's launcher in the menu (`applications/quill.desktop`, Linux), when it starts quill's
 /// installation `old`: `newen.desktop` in its place, starting `program` as Newen's window (its
-/// app id, `newen`). One that starts something else (a wrapper made by hand) is the person's,
-/// and stays.
+/// app id, `newen`), and Newen's icon in the person's theme in place of quill's, as
+/// scripts/install-desktop.sh puts them. One that starts something else (a wrapper made by
+/// hand) is the person's and stays, as does any while `program` is not there to start.
 fn replace_launcher(applications: &Path, old: &Path, program: &Path) -> Result<bool, String> {
     let quill = applications.join("quill.desktop");
     let Ok(text) = std::fs::read_to_string(&quill) else {
         return Ok(false);
     };
     let installed = format!("{}/", old.display());
-    if !(text.lines()).any(|line| line.starts_with("Exec=") && line.contains(&installed)) {
+    if !program.is_file()
+        || !(text.lines()).any(|line| line.starts_with("Exec=") && line.contains(&installed))
+    {
         return Ok(false);
+    }
+    let icons = applications.with_file_name("icons").join("hicolor");
+    for (size, name, bytes) in [
+        ("256x256", "newen.png", ICON_PNG),
+        ("scalable", "newen.svg", ICON_SVG),
+    ] {
+        let folder = icons.join(size).join("apps");
+        std::fs::create_dir_all(&folder)
+            .and_then(|()| std::fs::write(folder.join(name), bytes))
+            .map_err(|e| e.to_string())?;
     }
     let entry = format!(
         "[Desktop Entry]\nType=Application\nName=Newen\nComment=Agents at work on your code\nIcon=newen\nExec=\"{}\" %U\nStartupWMClass=newen\nCategories=Development;\n",
@@ -184,6 +201,12 @@ fn replace_launcher(applications: &Path, old: &Path, program: &Path) -> Result<b
     );
     std::fs::write(applications.join("newen.desktop"), entry).map_err(|e| e.to_string())?;
     std::fs::remove_file(&quill).map_err(|e| e.to_string())?;
+    // quill's icons, which only its launcher named.
+    for size in std::fs::read_dir(&icons).into_iter().flatten().flatten() {
+        for name in ["quill.png", "quill.svg"] {
+            let _ = std::fs::remove_file(size.path().join("apps").join(name));
+        }
+    }
     Ok(true)
 }
 
@@ -203,8 +226,9 @@ mod tests {
     }
 
     /// What quill 0.1.9 leaves: its data folder (the database with a pasted picture's path in
-    /// its record, the picture, a release's notes naming its medium), its settings folder (the
-    /// settings, a skill and its injected link).
+    /// its record, the picture, a release's notes naming its medium, the installation), its
+    /// settings folder (the settings, a skill and its injected link), and a launcher with its
+    /// icons.
     fn quill_s(data: &Path, config: &Path) {
         let quill = data.join("quill");
         std::fs::create_dir_all(quill.join("attachments")).unwrap();
@@ -232,7 +256,18 @@ mod tests {
         )
         .unwrap();
         std::fs::write(settings.join("settings.json"), r#"{"open_at_login": true}"#).unwrap();
-        // A launcher of quill's installation, in the menu.
+        // Its installation, `current` naming 0.1.9, which has only `quill`.
+        let version = quill.join("app/versions/0.1.9");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(version.join("quill"), "quill 0.1.9").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("versions/0.1.9", quill.join("app/current")).unwrap();
+        // A launcher of it in the menu, and its icons in the person's theme.
+        for icon in ["256x256/apps/quill.png", "scalable/apps/quill.svg"] {
+            let icon = data.join("icons/hicolor").join(icon);
+            std::fs::create_dir_all(icon.parent().unwrap()).unwrap();
+            std::fs::write(icon, "quill's").unwrap();
+        }
         std::fs::create_dir_all(data.join("applications")).unwrap();
         std::fs::write(
             data.join("applications/quill.desktop"),
@@ -271,13 +306,26 @@ mod tests {
         assert!(!notes.contains(&in_json(&data.join("quill/whats-new"))));
         assert!(config.join("newen/settings.json").is_file());
         assert!(config.join("newen/skills/notes").is_dir());
-        let launcher = std::fs::read_to_string(data.join("applications/newen.desktop")).unwrap();
-        assert!(launcher.contains(&format!(
-            "Exec=\"{}\" %U",
-            newen.join("app/current/newen").display()
-        )));
-        assert!(launcher.contains("StartupWMClass=newen"));
-        assert!(!data.join("applications/quill.desktop").exists());
+        // The launcher starts the installation's program as it is: quill's 0.1.9 until an
+        // update brings Newen, whose versions all have a `quill` link to `newen`.
+        #[cfg(target_os = "linux")]
+        {
+            let launcher =
+                std::fs::read_to_string(data.join("applications/newen.desktop")).unwrap();
+            let program = newen.join("app/current/quill");
+            assert!(program.is_file());
+            assert!(launcher.contains(&format!("Exec=\"{}\" %U", program.display())));
+            assert!(launcher.contains("Icon=newen") && launcher.contains("StartupWMClass=newen"));
+            assert!(!data.join("applications/quill.desktop").exists());
+            let icons = data.join("icons/hicolor");
+            assert_eq!(
+                std::fs::read(icons.join("256x256/apps/newen.png")).unwrap(),
+                ICON_PNG
+            );
+            assert!(icons.join("scalable/apps/newen.svg").is_file());
+            assert!(!icons.join("256x256/apps/quill.png").exists());
+            assert!(!icons.join("scalable/apps/quill.svg").exists());
+        }
         assert!(!config.join("newen/injected").exists());
         #[cfg(unix)]
         for base in [&data, &config] {
@@ -401,27 +449,40 @@ mod tests {
         assert_eq!(paths.settings, Some(config.join("newen/settings.json")));
     }
 
-    /// A launcher that starts something else than quill's installation (a wrapper) stays.
+    /// A launcher that starts something else than quill's installation (a wrapper) stays, and
+    /// so does one while the installation has no program to start; one that starts the
+    /// installation starts Newen's program from then on.
     #[test]
-    fn a_launcher_made_by_hand_stays() {
+    fn a_launcher_made_by_hand_or_with_nothing_to_start_stays() {
         let folder = tempfile::tempdir().unwrap();
-        let quill = folder.path().join("quill.desktop");
+        let applications = folder.path().join("applications");
+        std::fs::create_dir_all(&applications).unwrap();
+        let quill = applications.join("quill.desktop");
         std::fs::write(
             &quill,
             "[Desktop Entry]\nExec=\"/home/ana/.local/bin/quill\"\n",
         )
         .unwrap();
-        let program = Path::new("/d/newen/app/current/newen");
+        let program = folder.path().join("newen");
+        std::fs::write(&program, "newen").unwrap();
         assert_eq!(
-            replace_launcher(folder.path(), Path::new("/d/quill/app"), program),
+            replace_launcher(&applications, Path::new("/d/quill/app"), &program),
             Ok(false)
         );
-        assert!(quill.is_file() && !folder.path().join("newen.desktop").exists());
+        assert!(quill.is_file() && !applications.join("newen.desktop").exists());
+        let installed = Path::new("/home/ana/.local");
         assert_eq!(
-            replace_launcher(folder.path(), Path::new("/home/ana/.local"), program),
+            replace_launcher(&applications, installed, &folder.path().join("missing")),
+            Ok(false),
+            "nothing to start"
+        );
+        assert!(quill.is_file() && !applications.join("newen.desktop").exists());
+        assert_eq!(
+            replace_launcher(&applications, installed, &program),
             Ok(true),
             "one into the installation given"
         );
+        assert!(!quill.exists() && applications.join("newen.desktop").is_file());
     }
 
     /// A developer's build moves nothing unless asked; a release always may.
