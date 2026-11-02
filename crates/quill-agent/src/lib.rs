@@ -873,8 +873,8 @@ impl ToolContent {
 pub const HOST_TOOLS: [(&str, &str, &str); 6] = [
     (
         "start_session",
-        "Start a separate session for a task of its own while you stay with the user, or propose one. `initiation` says who wants it: \"user_asked\" (the user asked in words for separate, parallel or background work) starts it now; \"own_initiative\" (follow-up work you noticed or that your own work turned up, which the user has not asked for) shows the user a card, and nothing runs until they start it there. Both need `prompt`: the brief, standing alone (the task, the files or area, what done looks like). context \"fresh\" (default) gives the new session your `prompt` and `background` only, so `background` is required: the goal, decisions and constraints so far, for someone who has not seen this conversation; \"fork\" gives it this whole conversation and your `prompt`. A session you start reports back to you when its turn ends. A session is for a task of its own that ends in something of its own; searching, independent parts of one change, and checking what you built stay here or go to a subagent. Start nothing the user did not ask for.",
-        r#"{"type":"object","properties":{"initiation":{"type":"string","enum":["user_asked","own_initiative"]},"title":{"type":"string","description":"Under 60 characters; names the task on its row or card."},"prompt":{"type":"string","description":"The brief: the task, the files or area, what done looks like."},"context":{"type":"string","enum":["fresh","fork"]},"background":{"type":"string","description":"With fresh: the goal, decisions and constraints so far."},"proposal_id":{"type":"string","description":"Start a proposal the user told you to start, exactly as proposed: its task id and nothing else."}}}"#,
+        "Start a separate session for a task of its own while you stay with the user, or propose one. `initiation` says who wants it: \"user_asked\" (the user asked in words for separate, parallel or background work) starts it now; \"own_initiative\" (follow-up work you noticed or that your own work turned up, which the user has not asked for) shows the user a card, and nothing runs until they start it there. Both need `prompt`: the brief, standing alone (the task, the files or area, what done looks like). context \"fresh\" (default) gives the new session your `prompt` and `background` only, so `background` is required: the goal, decisions and constraints so far, for someone who has not seen this conversation; \"fork\" gives it this whole conversation and your `prompt`. `agent` runs it in another agent CLI, by an id list_sessions gives, when the user asks for that agent; a fork stays with your own. A session you start reports back to you when its turn ends. A session is for a task of its own that ends in something of its own; searching, independent parts of one change, and checking what you built stay here or go to a subagent. Start nothing the user did not ask for.",
+        r#"{"type":"object","properties":{"initiation":{"type":"string","enum":["user_asked","own_initiative"]},"title":{"type":"string","description":"Under 60 characters; names the task on its row or card."},"prompt":{"type":"string","description":"The brief: the task, the files or area, what done looks like."},"context":{"type":"string","enum":["fresh","fork"]},"background":{"type":"string","description":"With fresh: the goal, decisions and constraints so far."},"agent":{"type":"string","description":"The id of the agent CLI to run it, as list_sessions lists the agents you can start; default: your own."},"proposal_id":{"type":"string","description":"Start a proposal the user told you to start, exactly as proposed: its task id and nothing else."}}}"#,
     ),
     (
         "dismiss_task",
@@ -893,7 +893,7 @@ pub const HOST_TOOLS: [(&str, &str, &str); 6] = [
     ),
     (
         "list_sessions",
-        "List the other quill sessions of this project (this folder, or another checkout of the same repository): each one's id, title, agent, whether it is working, idle or waiting for the user, and its folder. Read-only.",
+        "List the other quill sessions of this project (this folder, or another checkout of the same repository): each one's id, title, agent, whether it is working, idle or waiting for the user, and its folder; then the agents a session can be started with (start_session's `agent`). Read-only.",
         r#"{"type":"object","properties":{}}"#,
     ),
     (
@@ -1202,7 +1202,7 @@ pub const BROWSER_TOOLS: [(&str, &str, &str); 19] = [
 /// How an agent is asked to work with the user, in words of quill's own: ask before work that
 /// leaves room for doubt, plan what is large, keep a task list, check, and close with what is
 /// left. Every adapter hands it to its agent.
-pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When the user wants something done after another conversation finishes, call wait_for_session instead of promising to wait: nothing of that conversation reaches you otherwise. Then end your turn.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
+pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work when a request leaves room for doubt (what to build, which approach, how far to go): use your question tool with two to four concrete choices, the one you recommend first. Ask one decision at a time, and never what reading the code or the folder answers.\n- For a change that is large, risky or spread over many files, propose planning it first: enter plan mode when you have it, or lay out the plan and ask for approval before you edit.\n- For work of more than a few steps, keep a task list from your first tool call. Mark each step as you finish it, send the whole list again when the plan changes, and make the last step a check of the result.\n- Before you say something works, check it: run its tests or the program, and look at what is visible.\n- When the user wants something done after another conversation finishes, call wait_for_session instead of promising to wait: nothing of that conversation reaches you otherwise. Then end your turn.\n- When the user wants work run by another agent CLI, start it with start_session's `agent`, by an id list_sessions gives: it is a session of that agent, which reports back to you.\n- When you finish, say in a few lines what changed, how to check it, and what you could not verify. If a decision is left to the user, end with one question with choices.";
 
 /// What an agent is told of the built-in browser, in words of quill's own.
 pub const BROWSER_GUIDE: &str = "# Built-in browser\n\nYou have a browser built into this app, with the browser tools (navigate, read_page, find, get_page_text, form_input, computer, javascript_tool, read_console_messages, read_network_requests, tabs_*). The user sees its tab beside the conversation and can use it too. Use it to check what you build for the web: start the dev server, open it, read the console and the page, act on it, and take a screenshot to show the result instead of asking the user to look. Prefer read_page and find to pick elements by ref; use screenshots to see layout. Local addresses are always allowed; other sites may ask the user first. Do not use it for what a plain fetch answers.";
@@ -1300,6 +1300,14 @@ mod tests {
             serde_json::json!(["session_id", "then"])
         );
         assert!(WORK_GUIDE.contains("wait_for_session"));
+    }
+
+    #[test]
+    fn start_session_can_name_the_agent_that_runs_it() {
+        let (_, about, schema) = HOST_TOOLS[0];
+        let schema: serde_json::Value = serde_json::from_str(schema).unwrap();
+        assert_eq!(schema["properties"]["agent"]["type"], "string");
+        assert!(about.contains("`agent`") && WORK_GUIDE.contains("start_session's `agent`"));
     }
 
     #[test]

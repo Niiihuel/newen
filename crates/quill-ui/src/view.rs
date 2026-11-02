@@ -4324,7 +4324,7 @@ fn item(
             crate::current_view(session, &ui.settings),
             column,
         ),
-        Item::Proposals { tasks } => proposals_card(store, tasks, palette),
+        Item::Proposals { tasks } => proposals_card(store, tasks, &ui.agents, palette),
         Item::Reports { request, reports } => {
             reports_block(store, request, reports, session, ui, column)
         }
@@ -9746,6 +9746,7 @@ fn activity(session: &Session) -> Option<String> {
 fn proposals_card(
     store: &Store,
     tasks: &[(quill_model::Proposal, Option<quill_model::ProposalOutcome>)],
+    agents: &[quill_model::AgentInfo],
     palette: ComponentPalette,
 ) -> Element {
     use quill_model::ProposalOutcome;
@@ -9797,9 +9798,19 @@ fn proposals_card(
         rows.push(match outcome {
             None => {
                 let action = |what: &str| format!("proposal:{what}:{}", proposal.id);
+                // Another agent runs it: named as the agents list names it.
+                let runs = (proposal.agent.as_deref())
+                    .map(|id| agents.iter().find(|a| a.id == id).map_or(id, |a| &a.name))
+                    .map(|name| muted(format!("Runs in {name}")).font_size(SMALL));
                 Element::column(vec![
                     Element::row(vec![
-                        text(proposal.title.clone()).flex(1.0),
+                        Element::column(
+                            std::iter::once(text(proposal.title.clone()))
+                                .chain(runs)
+                                .collect(),
+                        )
+                        .gap(2.0)
+                        .flex(1.0),
                         tool_surface(
                             &action("dismiss"),
                             icons::of(icons::CLOSE),

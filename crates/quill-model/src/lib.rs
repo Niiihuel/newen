@@ -1103,6 +1103,9 @@ pub struct Proposal {
     pub background: Option<String>,
     /// The new session continues this whole conversation instead of starting fresh.
     pub fork: bool,
+    /// The agent that runs it, by id; `None` is the proposing session's own.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 /// What became of a proposal.

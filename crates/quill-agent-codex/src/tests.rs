@@ -441,6 +441,11 @@ fn quill_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() 
         json!(["session_id", "then"])
     );
     assert_eq!(tools.len(), quill_agent::HOST_TOOLS.len());
+    let start = tools.iter().find(|t| t["name"] == "start_session");
+    assert_eq!(
+        start.unwrap()["inputSchema"]["properties"]["agent"]["type"],
+        "string"
+    );
     run.feed(&json!({ "id": 7, "method": "item/tool/call", "params": {
         "threadId": "t1", "turnId": "u1", "callId": "c1", "namespace": null,
         "tool": "wait_for_session", "arguments": { "session_id": 2, "then": "Release" } } }));
