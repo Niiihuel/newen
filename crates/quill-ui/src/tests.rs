@@ -10951,3 +10951,271 @@ fn a_new_page_centers_the_greeting_over_the_card_then_the_composer_docks() {
     );
     assert!(docked > 1200.0 - 140.0, "composer not docked: {docked}");
 }
+
+/// One frame of the window's input, as egui-winit 0.37 hands a Ctrl+V over (the key press
+/// kept, its release left): limn-egui's translation, the tree, `update`, the view again.
+fn egui_frame(
+    store: &Store,
+    ui: &mut Ui,
+    tree: &mut UiTree,
+    events: Vec<eframe::egui::Event>,
+) -> Vec<UiAction> {
+    use eframe::egui;
+    let ctx = egui::Context::default();
+    let mut translated = Vec::new();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            limn_egui::normalize_keyboard_input(ui.ctx());
+            translated = limn_egui::events(ui.ctx(), egui::Pos2::ZERO);
+        },
+    );
+    output.textures_delta.clear();
+    let mut actions = Vec::new();
+    for event in translated {
+        for action in tree.handle_event(event) {
+            update(store, ui, &action);
+            actions.push(action);
+        }
+    }
+    tree.set_root(view(store, ui, BIG_WINDOW));
+    tree.layout(BIG_WINDOW);
+    actions
+}
+
+fn ctrl_v_release() -> eframe::egui::Event {
+    eframe::egui::Event::Key {
+        key: eframe::egui::Key::V,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: eframe::egui::Modifiers::CTRL,
+    }
+}
+
+/// Text pasted into `field`, focused in the window `store` and `ui` show.
+fn paste_into(store: &Store, ui: &mut Ui, field: &str, text: &str) {
+    let mut tree = UiTree::new(view(store, ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.layout(BIG_WINDOW);
+    assert!(tree.focus(field), "{field} takes the focus");
+    egui_frame(
+        store,
+        ui,
+        &mut tree,
+        vec![eframe::egui::Event::Paste(text.into()), ctrl_v_release()],
+    );
+    // A frame later, as the window goes on: the composer keeps what was pasted.
+    egui_frame(store, ui, &mut tree, vec![]);
+}
+
+#[test]
+fn text_pastes_into_the_composer_of_a_new_conversation() {
+    let store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    paste_into(&store, &mut ui, view::COMPOSER, "pegado ñ\nsecond line");
+    assert_eq!(ui.prompt, "pegado ñ\nsecond line");
+}
+
+#[test]
+fn text_pastes_into_the_composer_of_a_session() {
+    let (store, mut ui) = store_with_session();
+    paste_into(&store, &mut ui, view::COMPOSER, "pasted");
+    assert_eq!(ui.prompt, "pasted");
+}
+
+#[test]
+fn text_pastes_into_the_title_and_the_search() {
+    let (store, mut ui) = store_with_session();
+    ui.title_edit = Some(String::new());
+    paste_into(&store, &mut ui, view::TITLE_FIELD, "New title");
+    assert_eq!(ui.title_edit.as_deref(), Some("New title"));
+    let (store, mut ui) = store_with_session();
+    ui.search = Some(String::new());
+    paste_into(&store, &mut ui, view::SEARCH_FIELD, "bug");
+    assert_eq!(ui.search.as_deref(), Some("bug"));
+}
+
+/// An image copied with no text: egui-winit hands it over as a pasted picture, which joins the
+/// composer's images (the host saves it, off the window's thread).
+#[test]
+fn a_pasted_picture_is_the_composer_s() {
+    let (store, mut ui) = store_with_session();
+    let mut tree = UiTree::new(view(&store, &ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.layout(BIG_WINDOW);
+    let image = eframe::egui::ColorImage::new([1, 1], vec![eframe::egui::Color32::RED]);
+    let paste = || {
+        vec![eframe::egui::Event::PasteImage(std::sync::Arc::new(
+            image.clone(),
+        ))]
+    };
+    // Nowhere to put it with the composer not focused.
+    let actions = egui_frame(&store, &mut ui, &mut tree, paste());
+    assert!(actions.iter().all(|a| pasted_image(a).is_none()));
+    assert!(tree.focus(view::COMPOSER));
+    let actions = egui_frame(&store, &mut ui, &mut tree, paste());
+    let pictures: Vec<_> = actions.iter().filter_map(pasted_image).collect();
+    assert_eq!(pictures, [(1, 1, &std::sync::Arc::from([255, 0, 0, 255]))]);
+}
+
+/// A session whose answer has paragraphs, a list with a link and code.
+fn answered() -> (Store, Ui) {
+    let (mut store, ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::Text {
+            text: "First paragraph.\n\nSecond paragraph:\n\n- one\n- see [docs](https://example.com)\n\n```\nlet a = 1;\n```\n\nLast words."
+                .into(),
+            parent: None,
+            id: Some("m1".into()),
+            at: None,
+        },
+    );
+    (store, ui)
+}
+
+/// The tree of the window `store` and `ui` show, laid out, and the start and end of the
+/// laid-out text that starts with `words`.
+fn text_ends(tree: &mut UiTree, words: &str) -> (limn::Point, limn::Point) {
+    let frame = tree.layout(BIG_WINDOW);
+    let block = frame
+        .text_layouts()
+        .into_iter()
+        .find(|block| block.source.starts_with(words))
+        .unwrap_or_else(|| panic!("no text starts with {words:?}"));
+    let (first, last) = (block.runs[0].rect, block.runs[block.runs.len() - 1].rect);
+    (
+        limn::Point::new(first.x + 1.0, first.y + first.height / 2.0),
+        limn::Point::new(last.x + last.width - 0.5, last.y + last.height / 2.0),
+    )
+}
+
+fn transcript_tree(store: &Store, ui: &Ui) -> UiTree {
+    let mut tree = UiTree::new(view(store, ui, BIG_WINDOW));
+    tree.set_reduced_motion(true);
+    tree.set_text_measurer(|text, _, _| text.chars().count() as f32 * 7.0);
+    tree.layout(BIG_WINDOW);
+    tree
+}
+
+const ANSWER_COPIED: &str =
+    "First paragraph.\n\nSecond paragraph:\n\n• one\n• see docs\n\nlet a = 1;\n\nLast words.";
+
+#[test]
+fn a_drag_selects_the_answer_across_its_paragraphs_and_ctrl_c_copies_it() {
+    let (store, ui) = answered();
+    let mut tree = transcript_tree(&store, &ui);
+    let (start, _) = text_ends(&mut tree, "First paragraph");
+    let (_, end) = text_ends(&mut tree, "Last words");
+    tree.handle_event(limn::UiEvent::PointerDown(start));
+    tree.handle_event(limn::UiEvent::PointerMove(end));
+    tree.handle_event(limn::UiEvent::PointerUp(end));
+    tree.layout(BIG_WINDOW);
+    assert_eq!(tree.selected_text().as_deref(), Some(ANSWER_COPIED));
+    let copy = limn::UiEvent::Key {
+        key: limn::Key::C,
+        shift: false,
+        ctrl: true,
+        alt: false,
+    };
+    assert_eq!(
+        tree.handle_event(copy),
+        vec![UiAction::CopyRequested {
+            text: ANSWER_COPIED.into()
+        }]
+    );
+}
+
+#[test]
+fn shift_and_a_press_extend_the_selection_from_the_question_into_the_answer() {
+    let (store, ui) = answered();
+    let mut tree = transcript_tree(&store, &ui);
+    let (start, _) = text_ends(&mut tree, "Fix the bug");
+    tree.handle_event(limn::UiEvent::PointerDown(start));
+    tree.handle_event(limn::UiEvent::PointerUp(start));
+    tree.layout(BIG_WINDOW);
+    let (_, end) = text_ends(&mut tree, "Second paragraph");
+    tree.handle_event(limn::UiEvent::PointerDownModified {
+        position: end,
+        shift: true,
+    });
+    tree.handle_event(limn::UiEvent::PointerUp(end));
+    tree.layout(BIG_WINDOW);
+    let selected = tree.selected_text().unwrap_or_default();
+    assert!(selected.starts_with("Fix the bug\n\n"), "{selected:?}");
+    assert!(
+        selected.ends_with("First paragraph.\n\nSecond paragraph:"),
+        "{selected:?}"
+    );
+}
+
+#[test]
+fn ctrl_a_in_the_transcript_selects_all_of_it_and_not_the_composer() {
+    let (store, ui) = answered();
+    let mut tree = transcript_tree(&store, &ui);
+    let (point, _) = text_ends(&mut tree, "Second paragraph");
+    tree.handle_event(limn::UiEvent::PointerDown(point));
+    tree.handle_event(limn::UiEvent::PointerUp(point));
+    tree.layout(BIG_WINDOW);
+    tree.handle_event(limn::UiEvent::Key {
+        key: limn::Key::A,
+        shift: false,
+        ctrl: true,
+        alt: false,
+    });
+    tree.layout(BIG_WINDOW);
+    let selected = tree.selected_text().unwrap_or_default();
+    assert!(
+        selected.starts_with("Started on this computer"),
+        "{selected:?}"
+    );
+    assert!(selected.contains("Fix the bug\n\n"), "{selected:?}");
+    assert!(selected.contains(ANSWER_COPIED), "{selected:?}");
+    // In the composer, Ctrl+A is the draft's own.
+    assert!(tree.focus(view::COMPOSER));
+    tree.handle_event(limn::UiEvent::Text("draft".into()));
+    let ctrl = |key| limn::UiEvent::Key {
+        key,
+        shift: false,
+        ctrl: true,
+        alt: false,
+    };
+    tree.handle_event(ctrl(limn::Key::A));
+    assert_eq!(
+        tree.handle_event(ctrl(limn::Key::C)),
+        vec![UiAction::CopyRequested {
+            text: "draft".into()
+        }]
+    );
+}
+
+#[test]
+fn a_link_in_a_selectable_answer_still_opens() {
+    let (store, mut ui) = answered();
+    let mut tree = transcript_tree(&store, &ui);
+    let frame = tree.layout(BIG_WINDOW);
+    let link = frame
+        .regions
+        .iter()
+        .find(|region| view::link_url(&region.id).is_some_and(|url| url.contains("example.com")))
+        .expect("the link")
+        .rect;
+    let at = limn::Point::new(link.x + 2.0, link.y + link.height / 2.0);
+    let mut actions = tree.handle_event(limn::UiEvent::PointerDown(at));
+    actions.extend(tree.handle_event(limn::UiEvent::PointerUp(at)));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, UiAction::Clicked { id } if view::link_url(id).is_some())),
+        "{actions:?}"
+    );
+    for action in &actions {
+        update(&store, &mut ui, action);
+    }
+    assert_eq!(tree.selected_text(), None);
+}

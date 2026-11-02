@@ -1,4 +1,4 @@
-//! Pasted images and the thumbnails of attached ones. Clipboard, disk and decoding run on
+//! Pasted images and the thumbnails of attached ones. Disk and decoding run on
 //! threads; the window only takes their results on a later frame.
 
 use eframe::egui;
@@ -14,21 +14,18 @@ fn attachments_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("quill-attachments"))
 }
 
-/// Reads an image from the clipboard, saves it as PNG and gives its path to `pasted`. Nothing
-/// happens when the clipboard holds no image (text pastes go on as they do).
-pub fn paste(pasted: Arc<Mutex<Vec<PathBuf>>>, ctx: egui::Context) {
+/// Saves a pasted picture (RGBA, as egui-winit read it off the clipboard) as PNG on a thread
+/// and gives its path to `pasted`.
+pub fn paste(
+    pasted: Arc<Mutex<Vec<PathBuf>>>,
+    ctx: egui::Context,
+    (width, height, rgba): (usize, usize, Arc<[u8]>),
+) {
     std::thread::spawn(move || {
-        let Some(clip) = arboard::Clipboard::new()
-            .and_then(|mut clipboard| clipboard.get_image())
-            .ok()
-        else {
+        let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
             return;
         };
-        let (Ok(width), Ok(height)) = (u32::try_from(clip.width), u32::try_from(clip.height))
-        else {
-            return;
-        };
-        let Some(rgba) = image::RgbaImage::from_raw(width, height, clip.bytes.into_owned()) else {
+        let Some(rgba) = image::RgbaImage::from_raw(width, height, rgba.to_vec()) else {
             return;
         };
         let millis = std::time::SystemTime::now()
@@ -243,6 +240,18 @@ pub fn qr(link: &str) -> Option<RasterImage> {
 mod tests {
     use super::*;
     use limn::{Color, Point};
+
+    /// eframe 0.37 made the system clipboard a feature of its own: without it egui-winit keeps
+    /// a clipboard inside the window, and Ctrl+V pastes nothing copied in another program.
+    #[test]
+    fn the_window_reads_the_system_clipboard() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let eframe = manifest
+            .lines()
+            .find(|l| l.starts_with("eframe ="))
+            .unwrap();
+        assert!(eframe.contains("\"clipboard\""), "{eframe}");
+    }
 
     #[test]
     fn a_red_stroke_is_painted_into_the_saved_pixels() {

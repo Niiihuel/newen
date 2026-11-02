@@ -323,6 +323,8 @@ El punto azul aparece cuando un turno termina mientras la persona mira otra sesi
 
 **Interacciones:** Enter/Espacio sobre una fila la abre/cierra (estado por `tool_id` en `Ui`); clic en `+1 −1` o en la ruta abre el panel de diff en ese archivo; seleccionar texto + Ctrl+C → `CopyRequested`.
 
+**Selección:** la columna del transcript es un `Element::selection_scope()` de limn, así que se selecciona como un documento: arrastrar pasa de un párrafo a los siguientes (mensajes de la persona, respuestas con títulos, listas, código y links, y el texto de los pasos), Shift+clic extiende la selección, y Ctrl+A, con un clic previo en un texto del transcript y ningún campo enfocado, selecciona el transcript entero (no sólo el mensaje: cada mensaje ya tiene su botón de copiar). Ctrl+C copia texto plano con forma de markdown: una línea en blanco entre párrafos, mensajes y bloques; los ítems de una lista uno por línea con su marca (`• uno`, `1. dos`); el código con sus líneas tal cual, sin cerca de ```; el texto de un link, no su dirección. Un clic en un link o un botón sigue siendo un clic.
+
 | Usar de limn | Crear |
 |---|---|
 | `ScrollArea::measured_list` + `follow_end` (`scroll_area.rs`), `Markdown` (`markdown.rs`), `Collapsible` (`collapsible.rs`), `FramedCard` (`framed_card.rs`), `OutputBlock` (`output_block.rs`), `CodeBlock` (`code_block.rs`), `CodeDiff` (`code_diff.rs`), `DiffStat` (`list_row.rs`), `TextShimmer`, `Ticker` (`ticker.rs`), `MessageActions`, `Chip` (`chip.rs`), `Notice` (`notice.rs`), `Skeleton` | quill (`quill-components`): `UserBubble`, `TurnSummary`, `ToolRow` (catálogo tipo→verbo/cuerpo), `TodoCard`. limn: nada (`FramedCard::rows` + `Collapsible` alcanzan). |
@@ -492,7 +494,7 @@ Popover: radio ~10, sombra suave, padding 4, fila con hover `#E6E6E6` radio 6 in
 
 **Imágenes** (`crates/quill-ui/src/lib.rs`: `is_image`, `add_images`; `apps/quill/src/images.rs`).
 
-- **Fuentes:** Ctrl+V (Cmd+V en macOS) con el composer enfocado pega la imagen del portapapeles, si la hay; el texto se pega como siempre. Arrastrar a la ventana y "+" › "Add files or photos". Son imágenes PNG, JPEG, GIF y WebP por extensión; los demás archivos siguen como @-menciones.
+- **Fuentes:** Ctrl+V (Cmd+V en macOS) con el composer enfocado pega el texto del portapapeles del sistema o, si no tiene texto, su imagen (la lee egui-winit, con la función `clipboard` de eframe). En la terminal el texto va entre las marcas de bracketed paste cuando el programa las pidió. Arrastrar a la ventana y "+" › "Add files or photos". Son imágenes PNG, JPEG, GIF y WebP por extensión; los demás archivos siguen como @-menciones.
 - **Límite:** 20 imágenes por mensaje. Las que sobran no entran y el composer dice "Maximum of 20 images allowed.". El motor revisa formato y tamaño al enviar.
 - **Miniatura:** cuadrado de 85 px, esquinas redondeadas, recorte "cover". Se decodifica en un hilo, a 256 px como máximo, una sola vez por imagen; mientras tanto, o si no decodifica, muestra el icono de archivo. En la transcripción, las imágenes de un mensaje van encima del globo, alineadas a la derecha (`image:msg:{request}:{índice}`).
 - **Pegadas:** se guardan como PNG en `attachments/`, junto a la base de datos de quill (`…/quill/attachments/pasted-<milisegundos>.png`), antes de mostrarse.
