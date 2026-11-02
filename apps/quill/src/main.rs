@@ -1687,26 +1687,41 @@ fn update_log(line: String) {
     }
 }
 
+/// Where a restart names the process the program it starts waits for: quill's variable, and
+/// Newen's, which Newen (quill's next name) reads and sets when it goes back to quill.
+const RESTART_AFTER: [&str; 2] = ["QUILL_RESTART_AFTER", "NEWEN_RESTART_AFTER"];
+
 /// Starts the installed program with this one's arguments. It waits for this process to go
 /// (`wait_for_restarter`): the link socket is this window's until then.
 fn restart(program: &std::path::Path) -> std::io::Result<()> {
-    quill_files::command(program)
-        .args(std::env::args_os().skip(1))
-        .env("QUILL_RESTART_AFTER", std::process::id().to_string())
-        .spawn()
-        .map(drop)
+    restart_command(program).spawn().map(drop)
+}
+
+fn restart_command(program: &std::path::Path) -> std::process::Command {
+    let mut command = quill_files::command(program);
+    command.args(std::env::args_os().skip(1));
+    for name in RESTART_AFTER {
+        command.env(name, std::process::id().to_string());
+    }
+    command
+}
+
+/// The process a restart said to wait for, in either variable `var` reads.
+fn restarter(var: impl Fn(&str) -> Option<String>) -> Option<u32> {
+    RESTART_AFTER
+        .iter()
+        .find_map(|name| var(name)?.parse().ok())
 }
 
 /// When a restarted copy starts, waits (up to ten seconds) for the process that restarted it
 /// to exit, so the window and the link socket are free.
 fn wait_for_restarter() {
-    let Some(pid) = std::env::var("QUILL_RESTART_AFTER")
-        .ok()
-        .and_then(|pid| pid.parse::<u32>().ok())
-    else {
+    let Some(pid) = restarter(|name| std::env::var(name).ok()) else {
         return;
     };
-    std::env::remove_var("QUILL_RESTART_AFTER");
+    for name in RESTART_AFTER {
+        std::env::remove_var(name);
+    }
     // shortcut: only Linux can ask whether a pid lives without FFI; elsewhere a moment's grace.
     if !std::path::Path::new("/proc/self").exists() {
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -2191,5 +2206,30 @@ fn start_native(
             eprintln!("quill: the browser draws without native tabs: {error}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A restart names this process in quill's variable and in Newen's, and a start waits for
+    /// the one named in either (Newen sets only its own when it goes back to quill).
+    #[test]
+    fn a_restart_is_waited_for_by_quill_s_variable_or_newen_s() {
+        let command = restart_command(std::path::Path::new("/nowhere/quill"));
+        let pid = std::process::id().to_string();
+        let envs: Vec<_> = command.get_envs().collect();
+        for name in RESTART_AFTER {
+            assert!(
+                envs.contains(&(name.as_ref(), Some(pid.as_ref()))),
+                "{name} in {envs:?}"
+            );
+        }
+        let only = |set: &'static str| move |name: &str| (name == set).then(|| "42".to_owned());
+        assert_eq!(restarter(only("QUILL_RESTART_AFTER")), Some(42));
+        assert_eq!(restarter(only("NEWEN_RESTART_AFTER")), Some(42));
+        assert_eq!(restarter(only("OTHER")), None);
+        assert_eq!(restarter(|_| Some("not a pid".into())), None);
     }
 }

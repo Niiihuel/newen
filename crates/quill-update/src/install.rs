@@ -33,6 +33,12 @@ use crate::Version;
 pub const PROGRAM: &str = "quill";
 #[cfg(windows)]
 pub const PROGRAM: &str = "quill.exe";
+/// The program's file name in a bundle of Newen, quill's next name, which an update installs
+/// as well (docs/UPDATES.md, «El paso a Newen»).
+#[cfg(not(windows))]
+pub const NEWEN_PROGRAM: &str = "newen";
+#[cfg(windows)]
+pub const NEWEN_PROGRAM: &str = "newen.exe";
 
 /// CEF's library: a folder holding it beside the program is a bundle.
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -42,6 +48,43 @@ const CEF: &str = "libcef.dll";
 
 /// The bundle's name on macOS.
 const BUNDLE: &str = "quill.app";
+/// Newen's bundle on macOS: staged, it takes [`BUNDLE`]'s name.
+#[cfg(target_os = "macos")]
+const NEWEN_BUNDLE: &str = "Newen.app";
+
+/// Linux: the installation in the data folder `data`, `quill/app`; `newen/app` when Newen,
+/// quill's next name, moved it there, so a quill started after going back from Newen updates
+/// where it runs.
+#[cfg(any(test, not(any(windows, target_os = "macos"))))]
+pub(crate) fn app_root(data: &Path) -> PathBuf {
+    let newen = data.join("newen/app");
+    if newen.is_dir() {
+        newen
+    } else {
+        data.join("quill/app")
+    }
+}
+
+/// The program in `dir`, a bundle's folder: Newen's when it is there, else quill's.
+pub(crate) fn program_in(dir: &Path) -> PathBuf {
+    let newen = dir.join(NEWEN_PROGRAM);
+    if newen.is_file() {
+        newen
+    } else {
+        dir.join(PROGRAM)
+    }
+}
+
+/// macOS: the bundle a release unpacked into `dir` holds, Newen's when it is there.
+#[cfg(target_os = "macos")]
+pub(crate) fn bundle_in(dir: &Path) -> PathBuf {
+    let newen = dir.join(NEWEN_BUNDLE);
+    if newen.is_dir() {
+        newen
+    } else {
+        dir.join(BUNDLE)
+    }
+}
 
 /// Where quill is installed for this person.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,8 +94,9 @@ pub struct Install {
 
 impl Install {
     /// `QUILL_UPDATE_ROOT` when set (a test installation), or this person's:
-    /// `$XDG_DATA_HOME/quill/app` on Linux, `%LOCALAPPDATA%\Programs\quill` on Windows, and on
-    /// macOS the folder holding the `quill.app` this program runs from, else `~/Applications`.
+    /// `$XDG_DATA_HOME/quill/app` on Linux ([`app_root`]), `%LOCALAPPDATA%\Programs\quill` on
+    /// Windows, and on macOS the folder holding the `quill.app` this program runs from, else
+    /// `~/Applications`.
     pub fn locate() -> Option<Self> {
         if let Some(root) = std::env::var_os("QUILL_UPDATE_ROOT").filter(|root| !root.is_empty()) {
             return Some(Self::at(root));
@@ -75,14 +119,14 @@ impl Install {
             .map(Path::to_path_buf)
             .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join("Applications")))?;
         #[cfg(not(any(windows, target_os = "macos")))]
-        let root = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|base| base.is_absolute())
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-            })?
-            .join("quill")
-            .join("app");
+        let root = app_root(
+            &std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|base| base.is_absolute())
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+                })?,
+        );
         Some(Self::at(root))
     }
 
@@ -117,14 +161,16 @@ impl Install {
         }
     }
 
-    /// What a start runs: a path that stays the same across updates, for launchers.
+    /// What a start runs: a path that stays the same across updates, for launchers. On Linux
+    /// and macOS, Newen's program when the version that starts is Newen's; on Windows its
+    /// program is placed under quill's name ([`Self::stage_with`]).
     pub fn program(&self) -> PathBuf {
         if cfg!(windows) {
             self.root.join(PROGRAM)
         } else if cfg!(target_os = "macos") {
-            self.root.join(BUNDLE).join("Contents/MacOS").join(PROGRAM)
+            program_in(&self.root.join(BUNDLE).join("Contents/MacOS"))
         } else {
-            self.root.join("current").join(PROGRAM)
+            program_in(&self.root.join("current"))
         }
     }
 
@@ -195,7 +241,7 @@ impl Install {
             // A bundle that is not intact and signed as released would not open.
             run(Command::new("/usr/bin/codesign")
                 .args(["--verify", "--deep", "--strict"])
-                .arg(staging.join(BUNDLE)))
+                .arg(bundle_in(staging)))
         });
     }
 
@@ -236,9 +282,11 @@ impl Install {
 
     /// Stage `version` from what `fill` leaves in an empty temporary folder: the bundle as a
     /// release holds it (Linux and Windows: the program and CEF's files at its root; macOS:
-    /// `quill.app/`). It is checked to be a program for this system, synced to the disk and
-    /// moved to [`staged_path`], or nothing is left. Nothing that starts changes: that is
-    /// [`Self::activate`]'s. A per-file stager plugs in here as its own `fill`.
+    /// `quill.app/`), quill's or Newen's ([`program_in`]). It is checked to be a program for
+    /// this system, synced to the disk and moved to [`staged_path`], or nothing is left.
+    /// Nothing that starts changes: that is [`Self::activate`]'s. A per-file stager plugs in
+    /// here as its own `fill`. On Linux, Newen's `newen` without a `quill` gets a `quill` link
+    /// to it, so launchers that start `current/quill` start it.
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn stage_with(
         &self,
@@ -258,7 +306,15 @@ impl Install {
         let staged = fill(&staging)
             // A release for another system would never start: refuse it before it replaces
             // one that does.
-            .and_then(|()| native(&staging.join(PROGRAM), "the release is not a Linux program"))
+            .and_then(|()| native(&program_in(&staging), "the release is not a Linux program"))
+            .and_then(|()| {
+                let quill = staging.join(PROGRAM);
+                // Past the check, a bundle without `quill` has Newen's `newen`.
+                if fs::symlink_metadata(&quill).is_err() {
+                    std::os::unix::fs::symlink(NEWEN_PROGRAM, quill)?;
+                }
+                Ok(())
+            })
             .and_then(|()| sync_tree(&staging));
         let moved = staged.and_then(|()| {
             // A copy an earlier try left, never current.
@@ -275,26 +331,32 @@ impl Install {
 
     /// Make the staged `version` the one that starts, by renaming a new link over `current`: a
     /// start finds the old version or the new one, never neither. Every version but the new
-    /// one and the one before goes. Returns [`Self::program`].
+    /// one and the one before goes. When the new one is Newen's, the one before, quill's, gets
+    /// a `newen` link to its `quill`: launchers Newen writes start `current/newen`, and Newen's
+    /// rollback returns to that folder. Returns [`Self::program`].
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn activate(&self, version: &Version) -> io::Result<PathBuf> {
         let name = version.to_string();
         if self.current().as_deref() == Some(name.as_str()) {
             return Ok(self.program());
         }
-        if !self
-            .root
-            .join("versions")
-            .join(&name)
-            .join(PROGRAM)
-            .is_file()
-        {
+        let versions = self.root.join("versions");
+        if !program_in(&versions.join(&name)).is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("{name} is not staged"),
             ));
         }
         let previous = self.current();
+        if let Some(before) = previous.as_deref().map(|before| versions.join(before)) {
+            if versions.join(&name).join(NEWEN_PROGRAM).is_file()
+                && before.join(PROGRAM).is_file()
+                && fs::symlink_metadata(before.join(NEWEN_PROGRAM)).is_err()
+            {
+                // Best effort: without it, only Newen's launchers miss after a rollback.
+                let _ = std::os::unix::fs::symlink(PROGRAM, before.join(NEWEN_PROGRAM));
+            }
+        }
         self.switch(&name)?;
         self.prune(&name, previous.as_deref());
         Ok(self.program())
@@ -318,13 +380,7 @@ impl Install {
     #[cfg(not(any(windows, target_os = "macos")))]
     fn roll_back(&self, trial: &Trial) -> io::Result<PathBuf> {
         let name = trial.previous.to_string();
-        if !self
-            .root
-            .join("versions")
-            .join(&name)
-            .join(PROGRAM)
-            .is_file()
-        {
+        if !program_in(&self.root.join("versions").join(&name)).is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("{name} is no longer here"),
@@ -352,7 +408,8 @@ impl Install {
 
     /// Windows: the bundle `fill` leaves in `versions\.{version}.{pid}` gives up its program,
     /// written beside the running one as `quill.exe.{version}.new`; the rest becomes
-    /// `versions\{version}`.
+    /// `versions\{version}`. Newen's `newen.exe` is placed so too, under the name launchers and
+    /// the Run key start.
     #[cfg(windows)]
     pub fn stage_with(
         &self,
@@ -369,7 +426,7 @@ impl Install {
         let target = versions.join(&name);
         let placed = fill(&staging).and_then(|()| {
             let _ = fs::remove_file(&new);
-            fs::rename(staging.join(PROGRAM), &new)?;
+            fs::rename(program_in(&staging), &new)?;
             native(&new, "the release is not a Windows program")?;
             sync_tree(&staging)?;
             fs::OpenOptions::new().write(true).open(&new)?.sync_all()?;
@@ -449,8 +506,8 @@ impl Install {
         Ok(program)
     }
 
-    /// macOS: the bundle `fill` leaves in `.quill.app.{version}.{pid}/` is checked and moved to
-    /// `.quill.app.{version}`, beside `quill.app`.
+    /// macOS: the bundle `fill` leaves in `.quill.app.{version}.{pid}/` (`quill.app` or Newen's
+    /// `Newen.app`) is checked and moved to `.quill.app.{version}`, beside `quill.app`.
     #[cfg(target_os = "macos")]
     pub fn stage_with(
         &self,
@@ -463,19 +520,18 @@ impl Install {
             .join(format!(".{BUNDLE}.{version}.{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir(&staging)?;
-        let new = staging.join(BUNDLE);
         let target = staged_path("macos", &self.root, version);
         let staged = fill(&staging)
             .and_then(|()| {
                 native(
-                    &new.join("Contents/MacOS").join(PROGRAM),
+                    &program_in(&bundle_in(&staging).join("Contents/MacOS")),
                     "the release is not a macOS program",
                 )
             })
             .and_then(|()| sync_tree(&staging))
             .and_then(|()| {
                 let _ = fs::remove_dir_all(&target);
-                fs::rename(&new, &target)
+                fs::rename(bundle_in(&staging), &target)
             });
         let _ = fs::remove_dir_all(&staging);
         staged.map(|()| target)

@@ -8,7 +8,7 @@ use quill_model::{
     SessionId, SessionStatus, WaitOutcome,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 mod auth;
@@ -131,21 +131,33 @@ pub struct Config {
 impl Config {
     /// Sessions kept in `$XDG_DATA_HOME/quill/quill.db` (`~/.local/share/quill` without it).
     pub fn default_database() -> Self {
-        let data = quill_files::data_dir().unwrap_or_else(|| ".".into());
-        let config = quill_files::config_dir().unwrap_or_else(|| ".".into());
+        Self::under(
+            &quill_files::data_dir().unwrap_or_else(|| ".".into()),
+            &quill_files::config_dir().unwrap_or_else(|| ".".into()),
+        )
+    }
+
+    /// [`Self::default_database`] with the data folder `data` and the settings folder
+    /// `config`: quill's own folder in each ([`quill_files::own_dir`], Newen's once Newen moved
+    /// it), and in it Newen's `newen.db` when it renamed the database, else `quill.db`.
+    pub fn under(data: &Path, config: &Path) -> Self {
+        let (data, config) = (quill_files::own_dir(data), quill_files::own_dir(config));
+        let database = Some(data.join("newen.db"))
+            .filter(|newen| newen.is_file())
+            .unwrap_or_else(|| data.join("quill.db"));
         Self {
-            database: Some(data.join("quill/quill.db")),
-            snapshots: Some(data.join("quill/snapshots")),
-            settings: Some(config.join("quill/settings.json")),
-            logos: Some(data.join("quill/logos")),
-            pictures: Some(data.join("quill/pictures")),
-            avatars: Some(data.join("quill/avatars")),
-            browser: Some(data.join("quill/browser")),
-            extensions: Some(config.join("quill/extensions.json")),
+            database: Some(database),
+            snapshots: Some(data.join("snapshots")),
+            settings: Some(config.join("settings.json")),
+            logos: Some(data.join("logos")),
+            pictures: Some(data.join("pictures")),
+            avatars: Some(data.join("avatars")),
+            browser: Some(data.join("browser")),
+            extensions: Some(config.join("extensions.json")),
             updates: true,
-            whats_new: Some(data.join("quill/whats-new")),
-            update_log: Some(data.join("quill/updates.log")),
-            codecs: Some(data.join("quill/codecs")),
+            whats_new: Some(data.join("whats-new")),
+            update_log: Some(data.join("updates.log")),
+            codecs: Some(data.join("codecs")),
             open_pages: true,
             ..Self::default()
         }
@@ -3997,24 +4009,29 @@ fn awake_command() -> Option<Command> {
 
 /// Start quill when the person logs in, or no longer: the desktop's autostart entry
 /// (freedesktop Desktop Application Autostart on Linux), a LaunchAgent on macOS, the user's
-/// `Run` key on Windows; written for this program or removed.
+/// `Run` key on Windows; written for this program or removed. Newen's entry goes either way: a
+/// quill gone back from Newen would otherwise keep it, and it starts quill too, beside quill's.
 #[cfg_attr(windows, allow(clippy::needless_return))]
 fn start_at_login(on: bool) -> Result<(), String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let mut reg = quill_files::command("reg");
-        if on {
-            let value = format!("\"{}\"", program.display());
-            reg.args([
-                "add", KEY, "/v", "quill", "/t", "REG_SZ", "/d", &value, "/f",
-            ]);
-        } else {
-            reg.args(["delete", KEY, "/v", "quill", "/f"]);
-        }
+        let reg = |args: &[&str]| {
+            let mut reg = quill_files::command("reg");
+            reg.args(args);
+            reg.output().map_err(|e| e.to_string())
+        };
         // Removing a value that is not there fails, which is as good as removed.
-        let done = reg.output().map_err(|e| e.to_string())?;
+        let _ = reg(&["delete", KEY, "/v", "newen", "/f"]);
+        let value = format!("\"{}\"", program.display());
+        let done = if on {
+            reg(&[
+                "add", KEY, "/v", "quill", "/t", "REG_SZ", "/d", &value, "/f",
+            ])?
+        } else {
+            reg(&["delete", KEY, "/v", "quill", "/f"])?
+        };
         return if done.status.success() || !on {
             Ok(())
         } else {
@@ -4023,37 +4040,55 @@ fn start_at_login(on: bool) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let Some(config) = quill_files::config_dir() else {
-            return Ok(());
-        };
         // On macOS the LaunchAgents folder is the home's, not Application Support.
         #[cfg(target_os = "macos")]
-        let (entry, text) = (
+        let (folder, name, newen, text) = (
             quill_files::home_dir()
                 .ok_or("no home folder")?
-                .join("Library/LaunchAgents/dev.quill.quill.plist"),
+                .join("Library/LaunchAgents"),
+            "dev.quill.quill.plist",
+            "dev.newen.newen.plist",
             format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>Label</key><string>dev.quill.quill</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n",
                 program.display()
             ),
         );
         #[cfg(not(target_os = "macos"))]
-        let (entry, text) = (
-            config.join("autostart/quill.desktop"),
+        let Some(folder) = quill_files::config_dir().map(|config| config.join("autostart")) else {
+            return Ok(());
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (name, newen, text) = (
+            "quill.desktop",
+            "newen.desktop",
             format!(
                 "[Desktop Entry]\nType=Application\nName=quill\nIcon=quill\nExec=\"{}\"\nX-GNOME-Autostart-enabled=true\n",
                 program.display()
             ),
         );
-        if !on {
-            return match std::fs::remove_file(&entry) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-                _ => Ok(()),
-            };
-        }
-        std::fs::create_dir_all(entry.parent().unwrap_or(&config)).map_err(|e| e.to_string())?;
-        std::fs::write(&entry, text).map_err(|e| e.to_string())
+        login_entry(on, &folder, name, newen, &text)
     }
+}
+
+/// `folder/name` written with `text`, or removed; Newen's `folder/newen` removed either way.
+#[cfg(not(windows))]
+fn login_entry(
+    on: bool,
+    folder: &std::path::Path,
+    name: &str,
+    newen: &str,
+    text: &str,
+) -> Result<(), String> {
+    let _ = std::fs::remove_file(folder.join(newen));
+    let entry = folder.join(name);
+    if !on {
+        return match std::fs::remove_file(&entry) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    std::fs::write(&entry, text).map_err(|e| e.to_string())
 }
 
 /// The bytes the files under `path` take.
@@ -4676,6 +4711,70 @@ fn waives_server_consent(agent: Option<&str>, mode: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quill started after going back from Newen finds what Newen moved: `newen/` in the data
+    /// and settings folders, with `quill/` left as a link to it or not at all, and the database
+    /// renamed `newen.db` or not; before Newen, `quill/` and `quill.db`.
+    #[test]
+    fn the_folders_and_the_database_newen_moved_are_found() {
+        let base = tempfile::tempdir().unwrap();
+        let (data, config) = (base.path().join("data"), base.path().join("config"));
+        let under = || Config::under(&data, &config);
+        let paths = |config: &Config| (config.database.clone(), config.settings.clone());
+        // Before Newen, or never moved.
+        std::fs::create_dir_all(data.join("quill")).unwrap();
+        std::fs::create_dir_all(config.join("quill")).unwrap();
+        assert_eq!(
+            paths(&under()),
+            (
+                Some(data.join("quill/quill.db")),
+                Some(config.join("quill/settings.json"))
+            )
+        );
+        assert_eq!(under().update_log, Some(data.join("quill/updates.log")));
+        // Moved by Newen, the database not renamed (yet), and no links left.
+        std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
+        std::fs::rename(config.join("quill"), config.join("newen")).unwrap();
+        let store = quill_store::Store::open(&data.join("newen/quill.db")).unwrap();
+        store.mark("written", "by quill").unwrap();
+        drop(store);
+        let moved = (
+            Some(data.join("newen/quill.db")),
+            Some(config.join("newen/settings.json")),
+        );
+        assert_eq!(paths(&under()), moved);
+        // Renamed `newen.db`: that is the one opened, with what was kept in it.
+        std::fs::rename(data.join("newen/quill.db"), data.join("newen/newen.db")).unwrap();
+        let renamed = (
+            Some(data.join("newen/newen.db")),
+            Some(config.join("newen/settings.json")),
+        );
+        assert_eq!(paths(&under()), renamed);
+        let store = quill_store::Store::open(under().database.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            store.marked("written").unwrap().as_deref(),
+            Some("by quill")
+        );
+        for (folder, path) in [
+            (&under().snapshots, "snapshots"),
+            (&under().pictures, "pictures"),
+            (&under().browser, "browser"),
+            (&under().whats_new, "whats-new"),
+            (&under().update_log, "updates.log"),
+        ] {
+            assert_eq!(
+                folder.as_deref(),
+                Some(data.join("newen").join(path).as_path())
+            );
+        }
+        // With `quill/` left as a link to `newen/`: the same.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("newen", data.join("quill")).unwrap();
+            std::os::unix::fs::symlink("newen", config.join("quill")).unwrap();
+            assert_eq!(paths(&under()), renamed);
+        }
+    }
 
     /// A router of eight busy sessions, with every event it tells kept.
     fn router() -> (Router, Arc<Mutex<Vec<Event>>>) {
@@ -5408,6 +5507,33 @@ mod tests {
         assert!(!on_battery(&[supply("Mains", "0")]));
         assert!(!on_battery(&[]));
         assert!(!on_battery(&[supply("Battery", ""), supply("USB", "1")]));
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Turned on, quill's entry is written and Newen's goes, so login never starts both; turned
+    /// off, both go.
+    #[test]
+    fn quill_s_login_entry_clears_newen_s() {
+        let folder = tempfile::tempdir().unwrap();
+        let at = |name: &str| folder.path().join(name);
+        std::fs::write(at("newen.desktop"), "Exec=/newen/current/newen").unwrap();
+        login_entry(
+            true,
+            folder.path(),
+            "quill.desktop",
+            "newen.desktop",
+            "Exec=q",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(at("quill.desktop")).unwrap(),
+            "Exec=q"
+        );
+        assert!(!at("newen.desktop").exists());
+        std::fs::write(at("newen.desktop"), "Exec=/newen").unwrap();
+        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
+        assert!(!at("quill.desktop").exists() && !at("newen.desktop").exists());
+        login_entry(false, folder.path(), "quill.desktop", "newen.desktop", "").unwrap();
     }
 
     #[cfg(target_os = "linux")]

@@ -1015,12 +1015,7 @@ mod tests {
             install,
             log: Some(log),
             notify,
-            feed: Some((
-                Source {
-                    base: server.base(),
-                },
-                key,
-            )),
+            feed: Some((Source::at(server.base()), key)),
         };
         (updates, told)
     }
@@ -1435,12 +1430,7 @@ mod tests {
         let log = folder.path().join("updates.log");
         let (mut updates, told) = managed(&server, key, None, false, log.clone(), |_| {});
         // A feed with no release at all.
-        updates.feed = Some((
-            Source {
-                base: format!("{}/nothing", server.base()),
-            },
-            key,
-        ));
+        updates.feed = Some((Source::at(format!("{}/nothing", server.base())), key));
         let probe = {
             let (seen, store, events) = (
                 kept_when_told.clone(),

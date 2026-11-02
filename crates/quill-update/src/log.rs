@@ -1,4 +1,5 @@
-//! The update log, `<data dir>/quill/updates.log` (docs/UPDATES.md): one line per check,
+//! The update log, `<data dir>/quill/updates.log` (`newen/` once Newen moved the folder;
+//! docs/UPDATES.md): one line per check,
 //! download, stage, activation, rollback and error, the newest [`LINES`] kept. A line names
 //! versions, sizes, times and the reason a step failed; never an address or a token.
 
@@ -14,7 +15,7 @@ static TURN: Mutex<()> = Mutex::new(());
 
 /// This person's update log.
 pub fn path() -> Option<PathBuf> {
-    Some(quill_files::data_dir()?.join("quill").join("updates.log"))
+    Some(quill_files::own_dir(&quill_files::data_dir()?).join("updates.log"))
 }
 
 /// Add `line` to the log at `path`, stamped with the time in UTC. A log that cannot be written

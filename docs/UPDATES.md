@@ -26,7 +26,8 @@ Cada release publica, además de sus artefactos:
   `minimum_version` y, por plataforma (`linux-x86_64`, `windows-x86_64`,
   `macos-aarch64`), la URL, el tamaño y el SHA-256 del artefacto. Desde 0.1.9
   (manifiesto v2) también:
-  - `product` (`"quill"`) y `channel` (`"stable"`): uno de otro producto o
+  - `product` (`"quill"`; `"newen"` también se acepta, ver [El paso a
+    Newen](#el-paso-a-newen)) y `channel` (`"stable"`): uno de otro producto o
     canal se rechaza;
   - `sequence`: un número que sólo crece (ver [Seguridad](#seguridad));
   - `expires` (opcional, RFC 3339): pasada esa fecha el manifiesto se rechaza;
@@ -60,8 +61,9 @@ una opcional.
 ### Una búsqueda
 
 1. Se busca la última release (ver [Dónde se lee](#dónde-se-lee)) y
-   se bajan `quill-update.json`, su firma y `.sigs` si existe, con tope de
-   tamaño.
+   se bajan `newen-update.json` o, si no está, `quill-update.json`, su firma y
+   `.sigs` si existe, con tope de tamaño (ver [El paso a
+   Newen](#el-paso-a-newen)).
 2. **La firma se verifica antes de leer el JSON**, con `verify_strict` y las
    claves en que se confía (las compiladas, o las que dejó una rotación). Una
    firma que no verifica no instala nada. Después se rechaza un manifiesto de
@@ -160,7 +162,8 @@ descargada que nunca pasó por `quill --install` tampoco se toca.
     la activa a prueba (ver [Volver atrás](#volver-atrás)) y arranca el
     programa instalado con los mismos argumentos; queda en el registro;
   - **«Restart to update»**: lo mismo en el momento; la ventana vieja se cierra
-    después de que la nueva empezó (`QUILL_RESTART_AFTER`: la nueva espera a
+    después de que la nueva empezó (`QUILL_RESTART_AFTER` y
+    `NEWEN_RESTART_AFTER`: la nueva espera a
     que la vieja salga, porque el socket de quill-ide sólo lo atiende una
     ventana a la vez).
 - Los datos de la persona (sesiones, ajustes, `~/.config/quill`) no los toca la
@@ -229,7 +232,8 @@ anterior tiene que poder abrirla.
 
 ### El registro
 
-`<datos>/quill/updates.log` (`~/.local/share/quill/updates.log` en Linux), las
+`<datos>/quill/updates.log` (`~/.local/share/quill/updates.log` en Linux;
+`<datos>/newen/` si Newen movió la carpeta), las
 últimas 200 líneas, cada una con la hora en UTC:
 
 ```text
@@ -426,8 +430,10 @@ anotado creado).
 
 ## Dónde se lee
 
-Una búsqueda lee la última release de `Niiihuel/quill` (`REPOSITORY` en
-`crates/quill-update/src/lib.rs`) en sus direcciones públicas,
+Una búsqueda lee la última release de `Niiihuel/newen` y, si no tiene
+manifiesto, la de `Niiihuel/quill` (`REPOSITORIES` en
+`crates/quill-update/src/lib.rs`; ver [El paso a Newen](#el-paso-a-newen)) en
+sus direcciones públicas,
 `https://github.com/Niiihuel/quill/releases/latest/download/<archivo>`, y baja
 los artefactos, las listas y los blobs de las direcciones que nombra el
 manifiesto firmado. No usa la API de GitHub, así que no necesita token ni cuenta
@@ -444,6 +450,157 @@ falta publicar en otro lado.
 Lo que no cubre: quien controle la red puede ocultar una versión nueva (la
 copia sigue como está, y una obligatoria se descubre al volver la red), salvo
 que el manifiesto tenga `expires`.
+
+## El paso a Newen
+
+quill pasa a llamarse **Newen**. Nadie pierde datos ni actualizaciones si se
+sigue este orden:
+
+1. **0.1.9 es la última versión de quill, el puente.** Se publica desde
+   `Niiihuel/quill`, que todavía se llama así. Las copias 0.1.4–0.1.8 leen la
+   API de GitHub con un token y no siguen redirecciones: sólo se actualizan
+   mientras el repositorio se llame `Niiihuel/quill`, así que tienen que llegar
+   a 0.1.9 **antes** del cambio de nombre (las 0.1.0–0.1.3 ya no se actualizan
+   solas, ver [Linux](#linux)).
+2. El dueño renombra el repositorio `Niiihuel/quill` → `Niiihuel/newen`
+   (GitHub redirige las direcciones viejas, inferido de su documentación y
+   comprobado en el paso 3 de abajo; 0.1.9 sigue redirecciones) y vuelve
+   a cargar los secretos y variables del CI con sus nombres nuevos.
+3. **Newen 0.2.0** se publica desde `Niiihuel/newen`, con el manifiesto y los
+   artefactos con nombre newen. 0.1.9 la instala con su preparación y su prueba:
+   si Newen falla sus primeros arranques, vuelve a 0.1.9, y 0.1.9 encuentra sus
+   datos aunque Newen ya los haya movido.
+
+### Lo que hace 0.1.9
+
+- **Busca** en cada base `newen-update.json` (con `.sig` y `.sigs` al lado)
+  y, si la respuesta es 404, `quill-update.json`, con la misma verificación y
+  las mismas reglas de admisión; un `product` `"newen"` vale como `"quill"`.
+  Lee primero `Niiihuel/newen` y, si ahí no hay manifiesto (404),
+  `Niiihuel/quill`: no depende de la redirección del cambio de nombre. Sólo un
+  404 pasa al siguiente; cualquier otra falla es la de la búsqueda. Mientras
+  `Niiihuel/newen` no existe, cada búsqueda hace tres pedidos más que antes
+  (los tres responden 404: es lo que GitHub responde por un repositorio que no
+  existe, inferido y no probado). Un feed de prueba (`QUILL_UPDATE_FEED`) sigue siendo
+  una sola base.
+- **Instala** una versión cuyo programa es `newen` (Linux), `newen.exe`
+  (Windows) o `Newen.app` (macOS), además de las de quill, por archivo entero o
+  archivo por archivo:
+  - Linux: `versions/<v>/newen`; si la versión no trae `quill`, se le agrega un
+    enlace `quill -> newen`, así un lanzador que arranca `current/quill`
+    arranca Newen. El reinicio arranca `current/newen`, y la
+    activación y la vuelta atrás aceptan cualquiera de los dos programas. Al
+    activar Newen, la versión de quill que corría recibe el enlace inverso,
+    `versions/<0.1.9>/newen -> quill`: los lanzadores que escribe Newen
+    (`current/newen`) siguen arrancando algo después de que su prueba falle y
+    `current` vuelva a 0.1.9.
+  - Windows: `newen.exe` queda como `quill.exe` en `Programs\quill`, el nombre
+    que arrancan los accesos directos y la clave Run.
+  - macOS: `Newen.app` queda como `quill.app`.
+- **Encuentra los datos** que Newen movió, con o sin los enlaces `quill ->
+  newen` que Newen deja en Linux: una sola función (`quill_files::own_dir`) usa
+  `<datos>/newen` y `<config>/newen` si existen y `quill/` si no; la base es
+  `newen.db` si existe y `quill.db` si no; la instalación de Linux es
+  `<datos>/newen/app` si existe. Todo lo que arma rutas pasa por ahí
+  (`Config::default_database`, los ajustes que se leen antes de la ventana, las
+  imágenes pegadas, el perfil de Chromium, el registro de actualizaciones).
+- **Llavero**: lee el servicio `quill` y, si no tiene el secreto, `newen`
+  (donde Newen guarda los suyos); escribe sólo en `quill`, y borrar borra de los
+  dos, para que un secreto borrado no vuelva desde el de Newen. Escribir también
+  borra la copia de `newen`: Newen lee primero la suya, y una copia vieja (de
+  una prueba de Newen que volvió a 0.1.9) taparía el valor que la persona
+  cambió acá; sin ella, Newen lee el de `quill` y lo copia.
+- **Reinicio**: pone `QUILL_RESTART_AFTER` y `NEWEN_RESTART_AFTER`, y espera
+  al proceso que nombre cualquiera de las dos.
+
+Lo que 0.1.8 lee de la release 0.1.9 no cambia: `quill-update.json`, su
+`.sig` y el programa `quill` en la raíz del archivo. `tools/quill-release`,
+`scripts/package.sh` y los workflows publican 0.1.9 como antes.
+
+### Lo que Newen 0.2.0 tiene que cumplir
+
+- Las mismas claves (`release-key.pub`, `backup-key.pub`), los mismos nombres
+  de campos del manifiesto y de plataformas, un tag anotado sin `-` y una
+  versión y una `sequence` mayores que las de 0.1.9. El paso «the release
+  before» de `release.yml` tiene que encontrar el manifiesto de 0.1.9, que se
+  llama `quill-update.json` (y sus `files-*.json`), aunque el de Newen se llame
+  `newen-update.json`.
+- Archivos planos: Linux con `newen` en la raíz (el enlace `quill` es
+  opcional), Windows con `newen.exe` (o `quill.exe`), macOS con `Newen.app` (o
+  `quill.app`).
+- Su propia vuelta atrás a 0.1.9 tiene que aceptar `versions/0.1.9/quill` y, en
+  Windows, una instalación vieja cuyo programa es `quill.exe`; y tiene que poner
+  `NEWEN_RESTART_AFTER` al reiniciar.
+- Sus lanzadores (menú, inicio de sesión) tienen que apuntar a un programa que
+  exista también en la versión a la que vuelve: en Linux `current/newen` sirve
+  (0.1.9 deja ese enlace al activarla); en macOS, la vuelta atrás devuelve un
+  `quill.app` con `Contents/MacOS/quill`, y no se le puede agregar un `newen`
+  sin romper su firma, así que su LaunchAgent no puede arrancar
+  `quill.app/Contents/MacOS/newen`.
+- Su migración deja los datos donde 0.1.9 los busca (`<base>/newen`,
+  `newen.db`) y sus secretos en el servicio `newen`.
+- **Una compilación de desarrollo de Newen nunca crea `<datos>/newen` ni
+  `<config>/newen`** en una máquina cuyos datos de quill no se migraron: 0.1.9
+  tomaría esa carpeta vacía por los datos movidos y la persona vería quill sin
+  sesiones (siguen en `quill/`, pero 0.1.9 no las mira).
+
+### Los pasos del dueño
+
+1. **Publicar 0.1.9** como cualquier release (ver [Publicar una
+   release](#publicar-una-release)) desde `Niiihuel/quill`. Si conviene que las
+   copias se actualicen ya, «mandatory» en el tag (ver [Marcar una versión
+   obligatoria](#marcar-una-versión-obligatoria)): una copia 0.1.4–0.1.8 que la
+   ve la baja enseguida y pide reiniciar; una 0.1.0–0.1.3 que la vea muestra la
+   ventana obligatoria sin poder instalarla.
+2. **Esperar a que cada copia llegue a 0.1.9.** En cada máquina: Ajustes ›
+   Sistema dice 0.1.9 o, en Linux, `current` apunta a ella (0.1.8 no lleva
+   registro de actualizaciones):
+
+   ```sh
+   readlink ~/.local/share/quill/app/current   # versions/0.1.9
+   ```
+
+   Las copias 0.1.4–0.1.8 necesitan un token para leer la API (`QUILL_UPDATE_TOKEN`
+   o `gh auth login`); sin él, se reinstalan a mano (ver [Linux](#linux)).
+3. **Renombrar el repositorio** y apuntar el clon local al nombre nuevo:
+
+   ```sh
+   gh repo rename newen --repo Niiihuel/quill --yes
+   git remote set-url origin https://github.com/Niiihuel/newen.git
+   # la dirección vieja tiene que responder con una redirección (3xx) a Niiihuel/newen:
+   curl -sI https://github.com/Niiihuel/quill/releases/latest/download/quill-update.json | head -n 3
+   ```
+
+   Hasta que salga 0.2.0, 0.1.9 encuentra su propia release en
+   `Niiihuel/newen` (como `quill-update.json`) y sigue al día.
+4. **Volver a cargar los secretos y variables con sus nombres nuevos**, antes
+   del tag de 0.2.0 (un secreto no se puede leer de vuelta: sale del archivo de
+   la clave, que **no** se mueve ni se borra):
+
+   ```sh
+   gh secret set NEWEN_UPDATE_SIGNING_KEY --env release --repo Niiihuel/newen \
+     < ~/.config/quill-release/release-key
+   gh variable set NEWEN_WINDOWS_RELEASES --body true --repo Niiihuel/newen
+   # sólo si macOS entra en las releases (hoy QUILL_MACOS_RELEASES no está puesta):
+   gh variable set NEWEN_MACOS_RELEASES --body true --repo Niiihuel/newen
+   # comprobar:
+   gh secret list --env release --repo Niiihuel/newen
+   gh variable list --repo Niiihuel/newen
+   ```
+
+   `LIMN_READ_TOKEN`, `MACOS_*`, `APPLE_*` y el entorno `release` no cambian de
+   nombre y siguen ahí después del cambio de nombre. Con 0.2.0 publicada y
+   funcionando, borrar los viejos:
+
+   ```sh
+   gh secret delete QUILL_UPDATE_SIGNING_KEY --env release --repo Niiihuel/newen
+   gh variable delete QUILL_WINDOWS_RELEASES --repo Niiihuel/newen
+   gh variable delete QUILL_MACOS_RELEASES --repo Niiihuel/newen   # si estaba puesta
+   ```
+
+5. **Publicar Newen 0.2.0** desde `Niiihuel/newen` (rama `feat/newen`). En una
+   copia 0.1.9, el registro muestra `check: 0.2.0 offered`, `stage: 0.2.0 at …`
+   y, al arrancar, `activate: 0.2.0`.
 
 ## Publicar una release
 
@@ -657,7 +814,9 @@ reanudación y corte,
 instalación atómica en Linux con un `.tar.gz` real (programa, `libcef.so` y
 `locales/`), preparar sin cambiar lo que arranca, activar en el próximo
 arranque, y volver atrás tras dos arranques fallidos; el registro y su
-rotación. Lo de Windows y macOS sólo se compila (la decisión de cada arranque,
+rotación; y el puente a Newen (su manifiesto y su repositorio primero, su
+programa con el enlace `quill`, su prueba que vuelve a quill, y dónde quedó la
+instalación). Lo de Windows y macOS sólo se compila (la decisión de cada arranque,
 las rutas de lo preparado, la comprobación de los primeros bytes del programa y
 la ruta del bundle sí se prueban en cualquier sistema).
 
