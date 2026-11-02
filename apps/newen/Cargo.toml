@@ -1,0 +1,56 @@
+[package]
+name = "newen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "quill: a native desktop app for coding-agent CLIs, drawn with limn."
+
+[dependencies]
+limn.workspace = true
+limn-egui.workspace = true
+# Loads Cisco's codec and parses the announcement's clip off the window's thread, and presents
+# the player's frames.
+limn-video.workspace = true
+eframe.workspace = true
+newen-ui = { path = "../../crates/newen-ui" }
+newen-components = { path = "../../crates/newen-components" }
+newen-model = { path = "../../crates/newen-model" }
+newen-engine = { path = "../../crates/newen-engine" }
+# quill's own updates: `--install` and the restart into the installed version (main.rs).
+newen-update = { path = "../../crates/newen-update" }
+# The platform's own folder dialog, through the desktop portal (no GTK linked in).
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# Opens a page, file or folder the way each system does (Linux, Windows, macOS).
+newen-files = { path = "../../crates/newen-files" }
+newen-pty = { path = "../../crates/newen-pty" }
+# The browser's frames, handed to egui as its own pixels without a copy (already in the tree).
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+# `quill --open-url`, the agents' $BROWSER, speaks a line of JSON to the window's bridge.
+serde_json.workspace = true
+# Files open in quill-ide's window of their folder, and code from it comes as a message.
+newen-link = { path = "../../crates/newen-link" }
+# An installed editor's icon becomes a limn picture: its digest and its bytes in base64 (both
+# already in the tree).
+sha2 = "0.10"
+base64 = "0.22"
+# Thumbnails of the attached images, PNG for pasted ones, and the window's icon.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# The QR code of a session's Remote Control link, for a phone's camera.
+qrcode = { version = "0.14", default-features = false }
+
+# quill's icon inside the Windows executable, which Explorer and the taskbar show.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
+# The page presented beneath the window is Wayland's (direct.rs): Linux alone.
+[target.'cfg(target_os = "linux")'.dependencies]
+# The window's Wayland connection and surface, which the page is presented beneath (direct.rs).
+raw-window-handle = "0.6"
+# A subsurface of quill's own on that connection, and dmabufs handed to the compositor (already
+# in the tree through winit).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+# The buffers the page is presented in, allocated where the compositor can read them.
+gbm = { version = "0.18", default-features = false }

@@ -17,10 +17,10 @@ on:
       - scripts/package.sh
       - .github/workflows/package.yml
       - .github/workflows/release.yml
-      - apps/quill/build.rs
-      - apps/quill/assets/**
-      - crates/quill-browser/**
-      - crates/quill-update/**
+      - apps/newen/build.rs
+      - apps/newen/assets/**
+      - crates/newen-browser/**
+      - crates/newen-update/**
 
 permissions:
   contents: read
@@ -71,7 +71,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
-      - run: cargo build --release --locked -p quill
+      - run: cargo build --release --locked -p newen
       - run: scripts/package.sh linux target/release dist
       # The libraries it needs at run time, in the log (docs/UPDATES.md#linux).
       - run: ldd dist/quill/quill
@@ -130,7 +130,7 @@ jobs:
           # (CEF's wrapper is built against the static one too); with --target it reaches only
           # the program, not build scripts.
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p quill
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p newen
       - run: scripts/package.sh windows target/x86_64-pc-windows-msvc/release dist
       # Its entries flat at the root: quill.exe beside CEF's files.
       - run: cd dist/quill && 7z a -tzip -mx=9 ../quill-x86_64-windows.zip -- *
@@ -177,7 +177,7 @@ jobs:
           path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       # quill and the helper apps' program (quill-helper).
-      - run: cargo build --release --locked --target aarch64-apple-darwin -p quill -p quill-browser --bins
+      - run: cargo build --release --locked --target aarch64-apple-darwin -p newen -p newen-browser --bins
       - run: scripts/package.sh macos target/aarch64-apple-darwin/release dist
       - name: sign
         env:
@@ -207,7 +207,7 @@ jobs:
           fi
           app=dist/quill.app
           framework="$app/Contents/Frameworks/Chromium Embedded Framework.framework"
-          entitlements=apps/quill/assets/quill.entitlements
+          entitlements=apps/newen/assets/quill.entitlements
           # From the inside out: the framework's libraries, the framework, the helpers, quill.
           find "$framework" -name '*.dylib' -print0 |
             xargs -0 codesign --force --options runtime "${sign[@]}"

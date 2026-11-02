@@ -35,5 +35,5 @@ opt-level = 2
 debug = false
 
 # Its native view converts every frame Chromium paints: unoptimized it takes ~370 ms one.
-[profile.dev.package.quill-browser]
+[profile.dev.package.newen-browser]
 opt-level = 2

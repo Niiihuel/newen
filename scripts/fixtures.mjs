@@ -42,7 +42,7 @@ for (const dir of args) {
   const leak = out.find((l) => l.includes(home) || l.includes(home.replaceAll("/", "-")) || [...emails].some((e) => e !== "user@example.com" && l.includes(e)));
   if (leak) throw new Error(`personal data left in ${dir}: ${leak.slice(0, 120)}`);
   const name = forced ?? meta.scenario + (meta.args.includes("--fork-session") ? "-fork" : "");
-  const target = path.join(path.dirname(new URL(import.meta.url).pathname), "../crates/quill-agent-claude/fixtures", version);
+  const target = path.join(path.dirname(new URL(import.meta.url).pathname), "../crates/newen-agent-claude/fixtures", version);
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, `${name}.jsonl`), out.join("\n") + "\n");
   console.log(`${dir} -> ${target}/${name}.jsonl (${out.length} lines)`);

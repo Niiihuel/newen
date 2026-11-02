@@ -4,13 +4,13 @@
 #   scripts/install-desktop.sh [path/to/quill]   (default: target/release/quill, else debug)
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin=${1:-$root/target/release/quill}
-[ -x "$bin" ] || bin=$root/target/debug/quill
+bin=${1:-$root/target/release/newen}
+[ -x "$bin" ] || bin=$root/target/debug/newen
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 for size in 16 24 32 48 64 128 256 512; do
-  install -Dm644 "$root/apps/quill/assets/icons/quill-$size.png" "$data/icons/hicolor/${size}x${size}/apps/quill.png"
+  install -Dm644 "$root/apps/newen/assets/icons/quill-$size.png" "$data/icons/hicolor/${size}x${size}/apps/quill.png"
 done
-install -Dm644 "$root/apps/quill/assets/icons/quill.svg" "$data/icons/hicolor/scalable/apps/quill.svg"
+install -Dm644 "$root/apps/newen/assets/icons/quill.svg" "$data/icons/hicolor/scalable/apps/quill.svg"
 install -Dm644 /dev/stdin "$data/applications/quill.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application

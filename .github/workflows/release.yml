@@ -53,7 +53,7 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: the tag is annotated and names the workspace's version
-        run: cargo run --locked --quiet -p quill-release -- tag "$TAG"
+        run: cargo run --locked --quiet -p newen-release -- tag "$TAG"
       - name: draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,7 +107,7 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Built before the secret is in the environment, so no build script ever runs with it.
-      - run: cargo build --locked --quiet -p quill-release --bin quill-release
+      - run: cargo build --locked --quiet -p newen-release --bin newen-release
       # The bundles exactly as package.yml built them: the manifest is written over these files
       # and these files are what is uploaded.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -149,31 +149,31 @@ jobs:
           # manifest names whats-new.json by digest, and it names each medium the same way.
           whats_new=()
           if [ -f "release/notes/${TAG#v}.toml" ]; then
-            target/debug/quill-release whats-new "$TAG" "$base" dist >> dist/files.txt
+            target/debug/newen-release whats-new "$TAG" "$base" dist >> dist/files.txt
             whats_new=(--whats-new dist/whats-new.json)
           fi
           trees=()
           for tree in tree/*; do trees+=("$(basename "$tree")=$tree"); done
-          target/debug/quill-release files "$TAG" "$base" dist --previous previous "${trees[@]}" \
+          target/debug/newen-release files "$TAG" "$base" dist --previous previous "${trees[@]}" \
             >> dist/files.txt
           lists=()
           for tree in tree/*; do
             platform=$(basename "$tree")
             lists+=(--files "$platform=dist/files-$platform.json")
           done
-          target/debug/quill-release manifest "$TAG" "$base" --previous previous "${whats_new[@]}" \
+          target/debug/newen-release manifest "$TAG" "$base" --previous previous "${whats_new[@]}" \
             "${lists[@]}" "${artifacts[@]}" > dist/quill-update.json
           cat dist/quill-update.json
       - name: sign
         env:
           QUILL_UPDATE_SIGNING_KEY: ${{ secrets.QUILL_UPDATE_SIGNING_KEY }}
-        run: target/debug/quill-release sign dist/quill-update.json
+        run: target/debug/newen-release sign dist/quill-update.json
       # With the keys compiled into quill: a secret that does not match
       # crates/quill-update/release-key.pub (or backup-key.pub) stops the release here, and so
       # does a whats-new.json, medium, list or new blob in dist/ that is not what the manifest
       # names.
       - name: verify
-        run: target/debug/quill-release verify dist/quill-update.json
+        run: target/debug/newen-release verify dist/quill-update.json
       # The blobs in batches: the first release sends every file of every bundle.
       - name: upload and publish
         run: |

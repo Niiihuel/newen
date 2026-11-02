@@ -41,7 +41,7 @@ linux)
   bundle=$out/quill
   rm -rf "$bundle"
   runtime "$bundle"
-  cp "$release/quill" "$bundle/quill"
+  cp "$release/newen" "$bundle/quill"
   # CEF's Linux library carries its debug sections (over a gigabyte).
   strip --strip-debug "$bundle/libcef.so"
   # libcef.so must resolve beside the program, through its $ORIGIN rpath.
@@ -55,13 +55,13 @@ windows)
   bundle=$out/quill
   rm -rf "$bundle"
   runtime "$bundle"
-  cp "$release/quill.exe" "$bundle/quill.exe"
+  cp "$release/newen.exe" "$bundle/quill.exe"
   ;;
 macos)
   app=$out/quill.app
   rm -rf "$app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-  cp "$release/quill" "$app/Contents/MacOS/quill"
+  cp "$release/newen" "$app/Contents/MacOS/quill"
   cp -R "$framework" "$app/Contents/Frameworks/"
   plist() { # <file> <executable> <identifier> <helper: 0|1>
     cat >"$1" <<PLIST
@@ -95,14 +95,14 @@ PLIST
     name="quill Helper$kind"
     helper="$app/Contents/Frameworks/$name.app"
     mkdir -p "$helper/Contents/MacOS"
-    cp "$release/quill-helper" "$helper/Contents/MacOS/$name"
+    cp "$release/newen-helper" "$helper/Contents/MacOS/$name"
     id=$(echo "$kind" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')
     plist "$helper/Contents/Info.plist" "$name" "dev.quill.quill.helper${id:+.$id}" 1
   done
   # quill's icon, from its PNGs.
   iconset=$(mktemp -d)/quill.iconset
   mkdir -p "$iconset"
-  icons=$root/apps/quill/assets/icons
+  icons=$root/apps/newen/assets/icons
   for size in 16 32 128 256 512; do
     cp "$icons/quill-$size.png" "$iconset/icon_${size}x${size}.png"
     if [ "$size" -lt 512 ]; then

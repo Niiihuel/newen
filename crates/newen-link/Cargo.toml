@@ -1,0 +1,17 @@
+[package]
+name = "newen-link"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The line between quill and quill-ide: Unix sockets (loopback TCP on Windows) carrying one JSON message a line."
+publish = false
+
+[dependencies]
+# The messages, one JSON object a line.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The link's secret on Windows, from the system's secure random source.
+uuid = { version = "1", features = ["v4"] }

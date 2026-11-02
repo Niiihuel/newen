@@ -1,0 +1,24 @@
+[package]
+name = "newen-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "quill's interface: state, view and update over limn, testable without a window."
+publish = false
+
+[dependencies]
+limn.workspace = true
+limn-editor.workspace = true
+# The clip of a release's announcement and its player, and Cisco's notice and release names.
+limn-video.workspace = true
+newen-model = { path = "../newen-model" }
+newen-components = { path = "../newen-components" }
+# Where a file moved to, for the document the Files pane moved.
+newen-files = { path = "../newen-files" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# Tests feed egui's own input through limn-egui's translation, as the window does.
+limn-egui.workspace = true
+eframe.workspace = true

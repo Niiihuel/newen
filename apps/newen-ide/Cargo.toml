@@ -1,0 +1,31 @@
+[package]
+name = "newen-ide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "quill-ide: a native code reader and editor in quill's look, drawn with limn."
+
+[dependencies]
+# quill shows its files here, and code goes from here to its agents.
+newen-link = { path = "../../crates/newen-link" }
+# Tree-sitter's highlighting, which tells types, properties and functions apart.
+limn = { workspace = true, features = ["syntax"] }
+limn-egui.workspace = true
+limn-editor.workspace = true
+# Tree-sitter's folds and declarations, for folding, sticky scopes and the symbols' path.
+limn-language = { path = "../../../limn-quill-integration/crates/limn-language" }
+eframe.workspace = true
+newen-components = { path = "../../crates/newen-components" }
+# The tree's listing and its file operations, as quill's.
+newen-files = { path = "../../crates/newen-files" }
+# The terminal's shells, as quill runs them.
+newen-pty = { path = "../../crates/newen-pty" }
+# The folder's files as git sees them, for opening by name, as ripgrep does.
+ignore = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+# The platform's own folder dialog, through the desktop portal (no GTK linked in), as quill's.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# A line diff of a file against its last commit, for the gutter's marks.
+similar = "2"
