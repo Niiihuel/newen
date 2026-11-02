@@ -21,6 +21,7 @@ mod github;
 mod global;
 mod images;
 mod logos;
+pub mod migrate;
 mod registry;
 mod servers;
 mod shared;

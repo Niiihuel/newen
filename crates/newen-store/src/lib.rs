@@ -189,10 +189,82 @@ impl Store {
     }
 }
 
+/// The database at `path` (never made: an error when it is not there) with every write its
+/// write-ahead log holds folded into the file and the log emptied: true when all of it went in,
+/// false when a connection still reading part of it held it back. Once true and closed, the file
+/// alone holds the record and can be renamed.
+pub fn checkpoint(path: &Path) -> Result<bool> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    // A reader that holds it back is not waited for long: the next start tries again.
+    conn.busy_timeout(std::time::Duration::from_millis(300))?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    Ok(busy == 0)
+}
+
+/// In the database at `path` (never made), each event's JSON with every `from` in it written as
+/// its `to` (each pair in turn), in one transaction: all of it or nothing. Returns how many
+/// events changed.
+pub fn rewrite(path: &Path, pairs: &[(String, String)]) -> Result<usize> {
+    let mut conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let changes = conn.transaction()?;
+    let mut changed = 0;
+    for (from, to) in pairs {
+        changed += changes.execute(
+            "UPDATE events SET event = replace(event, ?1, ?2) WHERE instr(event, ?1) > 0",
+            params![from, to],
+        )?;
+    }
+    changes.commit()?;
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use newen_model::Usage;
+
+    /// A database's log is folded in unless a reader still holds part of it; a rewrite changes
+    /// the events that hold the text, all at once; neither makes a database that is not there.
+    #[test]
+    fn a_database_is_checkpointed_unless_read_and_its_events_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("record.db");
+        assert!(checkpoint(&path).is_err());
+        assert!(rewrite(&path, &[]).is_err());
+        assert!(!path.exists());
+        let store = Store::open(&path).unwrap();
+        let queued = |images: Vec<std::path::PathBuf>| Event::Queued {
+            session: 1,
+            request: "r".into(),
+            text: "look".into(),
+            at: None,
+            images,
+        };
+        store
+            .append(1, &queued(vec!["/d/quill/attachments/a.png".into()]))
+            .unwrap();
+        store.append(1, &queued(vec![])).unwrap();
+        // A reader in the middle of its own transaction holds the log back.
+        let reader = Connection::open(&path).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT count(*) FROM events;")
+            .unwrap();
+        store.append(1, &queued(vec![])).unwrap();
+        assert_eq!(checkpoint(&path), Ok(false));
+        reader.execute_batch("COMMIT").unwrap();
+        drop(reader);
+        assert_eq!(checkpoint(&path), Ok(true));
+        let pairs = [(
+            "/d/quill/attachments/".to_owned(),
+            "/d/newen/attachments/".to_owned(),
+        )];
+        assert_eq!(rewrite(&path, &pairs), Ok(1));
+        assert_eq!(rewrite(&path, &pairs), Ok(0), "once");
+        assert_eq!(
+            store.load_session(1).unwrap()[0],
+            queued(vec!["/d/newen/attachments/a.png".into()])
+        );
+    }
 
     #[test]
     fn a_logo_is_quills_own_and_never_kept_in_a_session() {

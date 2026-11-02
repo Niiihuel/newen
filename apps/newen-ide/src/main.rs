@@ -672,7 +672,19 @@ fn place(arg: &str) -> (PathBuf, Option<u32>, Option<u32>) {
 }
 
 fn main() -> eframe::Result {
-    // `quill-ide [folder | file[:line[:column]]] [file[:line[:column]]]`.
+    // quill-ide's folders take newen-ide's names once, as Newen's own do (a debug build only
+    // when NEWEN_MIGRATE=1: it shares the person's folders); one that cannot stays in use.
+    if !cfg!(debug_assertions) || std::env::var_os("NEWEN_MIGRATE").is_some_and(|v| v == "1") {
+        for base in [newen_files::data_dir(), newen_files::config_dir()]
+            .into_iter()
+            .flatten()
+        {
+            if let Err(error) = newen_files::move_legacy(&base, "newen-ide", "quill-ide") {
+                eprintln!("newen-ide: quill-ide's folder stays in use: {error}");
+            }
+        }
+    }
+    // `newen-ide [folder | file[:line[:column]]] [file[:line[:column]]]`.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (given, mut line, mut column) = args.first().map_or_else(
         || {

@@ -1679,6 +1679,29 @@ fn launch_update() -> Option<(newen_update::install::Install, newen_update::Vers
     Some((install, running))
 }
 
+/// Newen's first start on a computer quill used moves quill's data to Newen's names
+/// (`newen_engine::migrate`), when `allowed` (a release, or a debug build asked to) and no copy
+/// of quill answers on `quill_socket`: one alive would go on writing where it is. A step that
+/// fails, or one that panics, leaves quill's names in use for this start. What happened, a line
+/// each.
+fn migrate_from_quill(
+    allowed: bool,
+    quill_socket: &std::path::Path,
+    data: &std::path::Path,
+    config: &std::path::Path,
+) -> Vec<String> {
+    if !allowed {
+        return vec![];
+    }
+    if newen_link::answers(quill_socket) {
+        return vec![
+            "a copy of quill runs: its data stays where it is until a start without it".into(),
+        ];
+    }
+    std::panic::catch_unwind(|| newen_engine::migrate::from_quill(data, config))
+        .unwrap_or_else(|_| vec!["stopped by an error: quill's data stays in use".into()])
+}
+
 /// A line in the update log (and on stderr).
 fn update_log(line: String) {
     eprintln!("quill: update: {line}");
@@ -1900,6 +1923,23 @@ fn main() -> eframe::Result {
         }
     }
     let trial = launch_update();
+    if let (Some(data), Some(config)) = (newen_files::data_dir(), newen_files::config_dir()) {
+        let allowed = newen_engine::migrate::allowed(
+            cfg!(debug_assertions),
+            std::env::var_os("NEWEN_MIGRATE").as_deref(),
+        );
+        let socket = newen_link::legacy_socket();
+        for line in migrate_from_quill(allowed, &socket, &data, &config) {
+            update_log(format!("migrate: {line}"));
+        }
+    }
+    // Found again: the installation may have moved with the data folder.
+    let trial = trial.map(|(install, running)| {
+        (
+            newen_update::install::Install::locate().unwrap_or(install),
+            running,
+        )
+    });
     let cwd = std::env::args()
         .nth(1)
         .map(std::path::PathBuf::from)
@@ -2218,6 +2258,28 @@ fn start_native(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// quill's data moves only when allowed and when no copy of quill answers on its socket;
+    /// then it does, once.
+    #[test]
+    fn quill_s_data_moves_only_when_allowed_and_no_copy_of_quill_runs() {
+        let base = std::env::temp_dir().join(format!("newen-first-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (data, config, socket) = (base.join("data"), base.join("config"), base.join("q.sock"));
+        std::fs::create_dir_all(data.join("quill")).unwrap();
+        std::fs::write(data.join("quill/quill.db"), "").unwrap();
+        let listening = newen_link::listen(&socket, |_| {}).unwrap();
+        let said = migrate_from_quill(true, &socket, &data, &config);
+        assert!(said[0].starts_with("a copy of quill runs"), "{said:?}");
+        assert!(data.join("quill").is_dir() && !data.join("newen").exists());
+        drop(listening);
+        assert!(migrate_from_quill(false, &socket, &data, &config).is_empty());
+        assert!(!data.join("newen").exists(), "not allowed: nothing moves");
+        let said = migrate_from_quill(true, &socket, &data, &config);
+        assert_eq!(said.first().map(String::as_str), Some("data folder: done"));
+        assert!(data.join("newen").is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// A restart names this process in Newen's variable alone (quill 0.1.9 reads it too); the
     /// pid read is the variable's, from Newen's or from quill's when quill started this one.

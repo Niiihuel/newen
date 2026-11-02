@@ -396,6 +396,22 @@ pub fn named_dir(base: &Path, name: &str, legacy: &str) -> PathBuf {
     }
 }
 
+/// `base/legacy` moved to `base/name` by a rename (the same folder: never a copy, all or
+/// nothing), leaving on Unix a link `legacy -> name` for what still looks there (quill after a
+/// rollback, a launcher). Nothing to do, false, when `base/name` is there or `base/legacy` is
+/// not a folder. An error leaves everything where it was.
+pub fn move_legacy(base: &Path, name: &str, legacy: &str) -> io::Result<bool> {
+    let (dir, old) = (base.join(name), base.join(legacy));
+    if fs::symlink_metadata(&dir).is_ok() || !old.is_dir() {
+        return Ok(false);
+    }
+    fs::rename(&old, &dir)?;
+    // Best effort: quill 0.1.9 finds `name` without it.
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(name, &old);
+    Ok(true)
+}
+
 fn app_dir(xdg: &str, linux: &str, windows: &str) -> Option<PathBuf> {
     if cfg!(windows) {
         return std::env::var_os(windows).map(PathBuf::from);
@@ -516,6 +532,30 @@ mod tests {
             named_dir(&base, "newen-ide", "quill-ide"),
             base.join("newen-ide")
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// quill's folder is moved to Newen's once, a link left in its place on Unix; never over a
+    /// folder of Newen's, nor when there is no folder of quill's.
+    #[test]
+    fn quill_s_folder_is_moved_once_and_never_over_newen_s() {
+        let base = std::env::temp_dir().join(format!("newen-move-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("quill")).unwrap();
+        fs::write(base.join("quill/kept"), "x").unwrap();
+        assert!(move_legacy(&base, "newen", "quill").unwrap());
+        assert_eq!(fs::read_to_string(base.join("newen/kept")).unwrap(), "x");
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read_link(base.join("quill")).unwrap(),
+            Path::new("newen")
+        );
+        assert!(!move_legacy(&base, "newen", "quill").unwrap(), "once");
+        assert!(!move_legacy(&base, "newen-ide", "quill-ide").unwrap());
+        fs::create_dir_all(base.join("quill-ide")).unwrap();
+        fs::create_dir_all(base.join("newen-ide")).unwrap();
+        assert!(!move_legacy(&base, "newen-ide", "quill-ide").unwrap());
+        assert!(base.join("quill-ide").is_dir(), "left alone");
         let _ = fs::remove_dir_all(&base);
     }
 
