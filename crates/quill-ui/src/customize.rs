@@ -213,6 +213,9 @@ fn open_item(store: &Store, ui: &mut Ui, arg: &str) -> Vec<Intent> {
     };
     let (agent, name) = (agent.to_owned(), name.to_owned());
     ui.settings_menu = None;
+    // From Discover's directory, its page opens in its place.
+    ui.directory = None;
+    ui.marketplaces = None;
     let Some(page) = ui.customize.as_mut() else {
         return vec![];
     };

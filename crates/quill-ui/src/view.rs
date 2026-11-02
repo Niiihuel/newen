@@ -11241,7 +11241,6 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
     });
     let mut cards = vec![];
     if let Some(known) = known {
-        let installed: Vec<&str> = known.list.plugins.iter().map(|p| p.id.as_str()).collect();
         let mut offers: Vec<&quill_model::PluginOffer> = (known.list.offers.iter())
             .filter(|o| {
                 ui.directory_market
@@ -11262,11 +11261,24 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
         {
             let mut meta = offer.marketplace.clone();
             if let Some(n) = offer.installs {
-                meta.push_str(&format!(" \u{b7} {} installs", human_count(n)));
+                meta.push_str(&format!(" \u{2022} {} installs", human_count(n)));
             }
             let id = format!("ext:install:{agent}:{}", offer.id);
-            let action = if installed.contains(&offer.id.as_str()) {
-                muted("Added").font_size(SMALL)
+            // Installed, its gear opens its page; an older version than offered has a dot.
+            let mine = known.list.plugins.iter().find(|p| p.id == offer.id);
+            let update = mine.is_some_and(|p| {
+                p.version.is_some() && offer.version.is_some() && p.version != offer.version
+            });
+            let action = if mine.is_some() {
+                tool_surface(
+                    &format!("czp:open:plugin:{agent}:{}", offer.id),
+                    icons::of(icons::SETTINGS),
+                    "Configure",
+                    28.0,
+                    None,
+                    look::tool_hover(),
+                    None,
+                )
             } else if known.working.as_deref() == Some(offer.id.as_str()) {
                 limn::Spinner::new(format!("cz:wait:{}", offer.id), look::muted())
                     .size(14.0)
@@ -11299,32 +11311,21 @@ fn directory_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPale
                     None,
                 )
             };
-            let tile = Element::row(vec![Element::icon(icons::of(icons::PLUG))
-                .foreground(look::palette().text)
-                .size(Some(16.0), Some(16.0))
-                .centered()
-                .flex(1.0)])
-            .size(Some(36.0), Some(36.0))
-            .background(look::customize_tile())
-            .radius(8.0);
-            let copy = Element::column(vec![
-                Element::truncated_text(offer.name.clone())
-                    .font_family(FontFamily::SansBold)
-                    .font_size(BODY)
-                    .foreground(look::palette().text),
-                muted(cut(&offer.description, 90)).font_size(SMALL),
-                muted(meta).font_size(SMALL),
-            ])
-            .gap(3.0)
-            .flex(1.0);
-            cards.push(
-                Element::row(vec![tile, copy, action])
-                    .gap(12.0)
-                    .padding(12.0)
-                    .size(Some(card_width), Some(104.0))
-                    .background(look::customize_card())
-                    .radius(10.0),
-            );
+            let picture = match logo_picture(ui, &format!("plugin:{}", offer.name)) {
+                Some(logo) => Element::raster_image(logo.clone()).size(Some(24.0), Some(24.0)),
+                None => Element::icon(icons::of(icons::PLUGIN))
+                    .foreground(look::palette().text)
+                    .size(Some(18.0), Some(18.0)),
+            };
+            cards.push(customize::discover_card(
+                picture,
+                &offer.name,
+                &meta,
+                &offer.description,
+                update,
+                action,
+                card_width,
+            ));
         }
     }
     let mut grid = vec![];
