@@ -16,6 +16,7 @@ mod auth;
 #[cfg(unix)]
 mod bridge;
 mod chime;
+mod codec;
 mod github;
 mod global;
 mod images;
@@ -75,6 +76,7 @@ fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
     }
 }
 
+pub use codec::CodecRelease;
 pub use global::{Keychain, MemorySecrets, Secrets};
 
 pub struct Engine {
@@ -111,6 +113,10 @@ pub struct Config {
     /// Where each release's notes and media are kept once downloaded with its update; `None`
     /// keeps none.
     pub whats_new: Option<PathBuf>,
+    /// The video codec this platform downloads, once the person allows it, and where it is
+    /// kept; `None` for either plays no clip (codec.rs).
+    pub codec: Option<CodecRelease>,
+    pub codecs: Option<PathBuf>,
     /// Whether a sign-in page opens in the person's browser: the app does, the tests do not.
     pub open_pages: bool,
     /// Where the browser leaves its pages' frames for the window to present.
@@ -135,6 +141,7 @@ impl Config {
             extensions: Some(config.join("quill/extensions.json")),
             updates: true,
             whats_new: Some(data.join("quill/whats-new")),
+            codecs: Some(data.join("quill/codecs")),
             open_pages: true,
             ..Self::default()
         }
@@ -314,6 +321,7 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
         .unwrap_or_default();
     router.updates.auto(router.settings.auto_update);
     router.updates.whats_new(router.settings.whats_new);
+    router.sync_codec(None);
     router.restore();
     (router.ui)(Event::Restored);
     router.announce_settings();
@@ -1276,7 +1284,7 @@ impl Router {
             self.announce_settings();
             return;
         }
-        self.settings = settings;
+        let before = std::mem::replace(&mut self.settings, settings);
         // Sessions already running follow Settings as they are now, at their next launch.
         for (session, tx) in &self.sessions {
             if let Some(new) = self.started.get(session) {
@@ -1286,7 +1294,53 @@ impl Router {
         }
         self.updates.auto(self.settings.auto_update);
         self.hold_awake();
+        let codec_before = before.video_codec;
         self.announce_settings();
+        // The person's yes is kept (and told) before anything is fetched.
+        self.sync_codec(codec_before);
+    }
+
+    /// The video codec as Settings now say, after `before`: downloaded from Cisco only once the
+    /// person said yes, checked if it is here already, deleted once they turn it off.
+    fn sync_codec(&self, before: Option<bool>) {
+        let (now, ui) = (self.settings.video_codec, self.ui.clone());
+        let (Some(release), Some(folder)) = (self.config.codec.clone(), self.config.codecs.clone())
+        else {
+            if now == Some(true) {
+                ui(Event::Codec(quill_model::CodecState::Failed(
+                    "This system has no video codec from Cisco.".into(),
+                )));
+            }
+            return;
+        };
+        match now {
+            Some(true) => {
+                tokio::task::spawn_blocking(move || {
+                    let path = match codec::kept(&release, &folder) {
+                        Some(path) => Ok(path),
+                        None => {
+                            ui(Event::Codec(quill_model::CodecState::Downloading));
+                            codec::fetch(&release, &folder)
+                        }
+                    };
+                    ui(Event::Codec(match path {
+                        Ok(path) => quill_model::CodecState::Ready(path),
+                        Err(reason) => {
+                            eprintln!("quill: video codec: {reason}");
+                            quill_model::CodecState::Failed(reason)
+                        }
+                    }));
+                });
+            }
+            _ if before == Some(true) => {
+                tokio::task::spawn_blocking(move || {
+                    codec::remove(&folder);
+                    ui(Event::Codec(quill_model::CodecState::Off));
+                });
+            }
+            // Never asked, or declined: nothing is fetched.
+            _ => {}
+        }
     }
 
     /// The person answered a site permission the browser asked for: the answer is the

@@ -1,0 +1,4 @@
+BINARY_LICENSE.txt is Cisco's license of its OpenH264 binary, exactly as published at
+https://www.openh264.org/BINARY_LICENSE.txt (fetched 2026-11-02). quill shows it in
+Settings > System > Licenses, as its condition 4 asks of software that uses the binary.
+quill never ships the binary: it downloads it from Cisco once the person allows it.

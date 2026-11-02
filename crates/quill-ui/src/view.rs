@@ -608,6 +608,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
     let root = crate::remote::dialog(store, ui, root);
     let root = crate::updates::dialogs(ui, root, palette);
     let root = crate::whats_new::dialogs(ui, root, window, palette);
+    let root = crate::licenses::dialog(ui, root, window, palette);
     let root = crate::account::dialogs(ui, root);
     let root = crate::github::dialogs(ui, root);
     let root = removing_dialog(ui, root);
@@ -10376,6 +10377,11 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                         "Open at login",
                         "Start quill when you log in to this computer.",
                         setting_switch("login", s.open_at_login, palette),
+                    ),
+                    setting(
+                        "Licenses",
+                        "The terms of third-party software quill uses.",
+                        setting_button(crate::licenses::OPEN, "View"),
                     ),
                 ],
             ),

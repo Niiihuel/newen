@@ -82,6 +82,7 @@ impl Store {
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
             | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::FilesFound { .. }
             | Event::Servers { .. }

@@ -443,7 +443,7 @@ mod tests {
         let media = repo.path().join("media");
         std::fs::create_dir_all(&media).unwrap();
         std::fs::write(media.join("browser.png"), b"a picture").unwrap();
-        std::fs::write(media.join("browser.webm"), b"a clip").unwrap();
+        std::fs::write(media.join("browser.mp4"), b"a clip").unwrap();
         let notes = repo.path().join("0.2.0.toml");
         std::fs::write(
             &notes,
@@ -457,7 +457,7 @@ body = "Open any page next to the session."
 try_it = "browser"
 
 [[announcement.media]]
-file = "browser.webm"
+file = "browser.mp4"
 poster = "browser.png"
 
 [[announcement.media]]
@@ -484,10 +484,7 @@ file = "browser.png"
             (a.media[0].kind, a.media[1].kind),
             (Kind::Video, Kind::Image)
         );
-        assert_eq!(
-            a.media[0].file.url,
-            format!("{base}/whats-new-browser.webm")
-        );
+        assert_eq!(a.media[0].file.url, format!("{base}/whats-new-browser.mp4"));
 
         let manifest = Manifest {
             version: version.clone(),

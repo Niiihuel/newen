@@ -311,6 +311,26 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
         "Show a release's announcement before restarting into it and once after. The release notes stay in the account menu.",
         setting_switch("whats_new", ui.settings.whats_new, palette),
     ));
+    // Cisco's license: the person turns its codec on, off and on again here, beside its notice.
+    if limn_video::cisco::current().is_some() {
+        let state = match &ui.codec {
+            quill_model::CodecState::Downloading => " Downloading\u{2026}".to_owned(),
+            quill_model::CodecState::Failed(reason) => format!(" {reason}"),
+            _ => String::new(),
+        };
+        out.push(setting(
+            "Play videos in What's new",
+            &format!(
+                "Downloads the OpenH264 video codec from Cisco; off, it is deleted. {}{state}",
+                limn_video::cisco::NOTICE
+            ),
+            setting_switch(
+                "video_codec",
+                ui.settings.video_codec == Some(true),
+                palette,
+            ),
+        ));
+    }
     out
 }
 

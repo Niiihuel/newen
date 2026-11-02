@@ -2,7 +2,9 @@
 //! before restarting into it (from the sidebar's strip) and once after; the "What's new"
 //! button in the strip's place until this version's notes are opened; and the notes dialog,
 //! every version quill kept, newest first. The engine downloads, matches and keeps them; this
-//! shows what it reports. A clip shows its picture until limn plays video.
+//! shows what it reports. A clip plays muted and looped with Cisco's OpenH264, once the
+//! person let quill download it (asked once, in the card or in Settings); without it, or under
+//! reduced motion, the clip's picture stands alone.
 
 use crate::{updates, view, Store, Ui};
 use limn::{Component, ComponentPalette, Element, FontFamily, Modal, Size, UiAction};
@@ -25,9 +27,21 @@ pub const BUTTON: &str = "whats_new:button";
 pub const OPEN: &str = "whats_new:open";
 /// The notes dialog's close.
 pub const NOTES: &str = "whats_new:notes";
+/// The card's clip, whose player the host keeps (`Ui::video`).
+pub const VIDEO: &str = "whats_new:video";
+/// The card's question about Cisco's codec: Download, Not now.
+pub const CODEC_YES: &str = "whats_new:codec:yes";
+pub const CODEC_NO: &str = "whats_new:codec:no";
+/// What the question and Settings' switch say: Cisco's license asks for the notice beside the
+/// control.
+pub const CODEC_ASK: &str =
+    "Play videos in What's new \u{2014} downloads the OpenH264 video codec from Cisco.";
 
 /// Keeps what the engine reports: an announcement it says to show opens now.
 pub(crate) fn heard(ui: &mut Ui, event: &Event) {
+    if let Event::Codec(state) = event {
+        ui.codec = state.clone();
+    }
     let Event::WhatsNew(whats_new) = event else {
         return;
     };
@@ -126,6 +140,13 @@ pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent
             ui.notes_open = false;
             Some(vec![])
         }
+        // The answer is kept by the engine before anything is fetched; the question goes once
+        // Settings come back with it.
+        CODEC_YES | CODEC_NO => {
+            let mut settings = ui.settings.clone();
+            settings.video_codec = Some(id == CODEC_YES);
+            Some(vec![Intent::SaveSettings(settings)])
+        }
         _ => None,
     }
 }
@@ -143,9 +164,24 @@ pub fn media(ui: &Ui) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The picture a medium shows: an image's own; a clip's poster.
-// shortcut: a clip shows its poster, as limn has no video element yet; upgrade with limn's
-// video component (limn feat/video) to play `clip` muted, looped, still under reduced motion.
+/// The clip the card shows, while it is up, for the host to read and play off the window's
+/// thread.
+pub fn clip(ui: &Ui) -> Option<PathBuf> {
+    match announced(ui)?.1.media.as_ref()? {
+        Media::Video { clip, .. } => Some(clip.clone()),
+        Media::Image { .. } => None,
+    }
+}
+
+/// Whether to ask about Cisco's codec: the card shows a clip, the person was never asked, and
+/// Cisco builds one for this system.
+fn asks_codec(ui: &Ui, media: &Media) -> bool {
+    matches!(media, Media::Video { .. })
+        && ui.settings.video_codec.is_none()
+        && limn_video::cisco::current().is_some()
+}
+
+/// The picture a medium shows: an image's own; a clip's poster, under the clip.
 fn picture(media: &Media) -> &PathBuf {
     match media {
         Media::Image { path } => path,
@@ -221,12 +257,33 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, window: Size, palette: ComponentPa
     let mut words = vec![];
     match announcement.media.as_ref().filter(|_| room) {
         Some(media) => {
-            let shown = match ui.full.get(picture(media)) {
-                Some(image) => Element::raster_image(image.clone().cover())
+            let poster = ui.full.get(picture(media));
+            let shown = match (media, poster) {
+                // Played by the host's player; without a codec (or before the clip is read)
+                // it is its poster, with no button that would do nothing.
+                (Media::Video { .. }, _) => {
+                    let player = ui.video.as_ref();
+                    let playing = player.is_some_and(|p| p.is_playing());
+                    let plays = player.is_some_and(|p| p.status() != limn_video::Status::NoCodec);
+                    let mut video =
+                        limn::Video::new(VIDEO, announcement.title.clone(), playing, palette)
+                            .controls(plays)
+                            .width(width - 2.0)
+                            // The card's corners round it.
+                            .radius(0.0);
+                    if let Some(poster) = poster {
+                        video = video.poster(poster.clone());
+                    }
+                    video.render()
+                }
+                (Media::Image { .. }, Some(image)) => Element::raster_image(image.clone().cover())
                     .accessibility_label(announcement.title.clone()),
                 // While it is read: the raised fill.
-                None => Element::spacer().background(look::cancel()),
+                (Media::Image { .. }, None) => Element::spacer().background(look::cancel()),
             };
+            if asks_codec(ui, media) {
+                words.push(codec_question(palette));
+            }
             let corner = Element::column(vec![
                 Element::spacer().size(None, Some(16.0)),
                 Element::row(vec![Element::spacer().flex(1.0), close, hgap(16.0)]),
@@ -306,6 +363,24 @@ pub(crate) fn dialogs(ui: &Ui, base: Element, window: Size, palette: ComponentPa
     .scrim(look::scrim())
     .initial_focus(primary)
     .render()
+}
+
+/// "Play videos in What's new": Download fetches Cisco's codec, Not now never asks again here.
+fn codec_question(palette: ComponentPalette) -> Element {
+    Element::column(vec![
+        text(CODEC_ASK).font_size(SMALL),
+        muted(limn_video::cisco::NOTICE).font_size(12.0),
+        Element::row(vec![
+            Element::spacer().flex(1.0),
+            keyed_button(CODEC_NO, "Not now", "", false, true, palette),
+            keyed_button(CODEC_YES, "Download", "", false, true, palette),
+        ])
+        .gap(8.0),
+    ])
+    .gap(6.0)
+    .padding(10.0)
+    .background(look::cancel())
+    .radius(8.0)
 }
 
 fn markdown(text: &str, width: f32, palette: ComponentPalette) -> Element {

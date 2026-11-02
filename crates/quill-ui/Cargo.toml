@@ -10,6 +10,8 @@ publish = false
 [dependencies]
 limn.workspace = true
 limn-editor.workspace = true
+# The clip of a release's announcement and its player, and Cisco's notice and release names.
+limn-video.workspace = true
 quill-model = { path = "../quill-model" }
 quill-components = { path = "../quill-components" }
 # Where a file moved to, for the document the Files pane moved.

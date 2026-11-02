@@ -9,6 +9,7 @@ pub mod appearance;
 mod files;
 mod github;
 mod greeting;
+mod licenses;
 mod mention;
 mod pixels;
 pub mod remote;
@@ -657,6 +658,7 @@ impl Store {
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
             | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::Servers { .. }
             | Event::Global(_)
@@ -1369,6 +1371,12 @@ pub struct Ui {
     pub whats_new: quill_model::WhatsNew,
     pub announcing: Option<String>,
     pub notes_open: bool,
+    /// Cisco's codec as the engine reports it, and once the host loaded it, off the window's
+    /// thread; the player of the announcement's clip while its card is up; the licenses dialog.
+    pub codec: quill_model::CodecState,
+    pub codec_loaded: Option<limn_video::Codec>,
+    pub video: Option<limn_video::VideoPlayer>,
+    pub licenses_open: bool,
     /// A fork was asked for: the session the engine makes next is it, and opens.
     pub waiting_fork: bool,
     /// Words the host puts back in the message box: a message rewound or forked from, or a
@@ -2165,6 +2173,10 @@ impl Ui {
             whats_new: Default::default(),
             announcing: None,
             notes_open: false,
+            codec: Default::default(),
+            codec_loaded: None,
+            video: None,
+            licenses_open: false,
             settings_query: String::new(),
             settings_menu: None,
             storage: None,
@@ -3792,6 +3804,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = whats_new::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = licenses::clicked(ui, id) {
         return intents;
     }
     if let Some(intents) = account::clicked(ui, id) {
@@ -5488,6 +5503,8 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         "logos" => settings.logos = !settings.logos,
         "auto_update" => settings.auto_update = !settings.auto_update,
         "whats_new" => settings.whats_new = !settings.whats_new,
+        // Cisco's codec: on downloads it from Cisco, off deletes it (the engine's codec.rs).
+        "video_codec" => settings.video_codec = Some(settings.video_codec != Some(true)),
         other => match other
             .strip_prefix("agent:")
             .and_then(|r| r.strip_suffix(":unsafe"))

@@ -10217,3 +10217,153 @@ fn the_announcement_card_keeps_its_parts_apart_at_small_and_large_windows() {
         }
     }
 }
+
+/// limn-video's test pattern, 2 s at 320×180.
+const PATTERN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../limn-quill-integration/crates/limn-video/assets/pattern.mp4"
+));
+
+/// An announcement whose medium is a clip, up after an update.
+fn announcing_a_clip(ui: &mut Ui) {
+    let mut notes = release_notes("0.3.0", None);
+    notes.announcement.as_mut().unwrap().media = Some(quill_model::Media::Video {
+        poster: "/notes/0.3.0/poster.png".into(),
+        clip: "/notes/0.3.0/clip.mp4".into(),
+    });
+    whats_new_event(
+        ui,
+        quill_model::WhatsNew {
+            releases: vec![notes],
+            announce: true,
+            ..Default::default()
+        },
+    );
+}
+
+fn toggle_shown(store: &Store, ui: &Ui) -> bool {
+    let toggle = limn::Video::toggle_id(whats_new::VIDEO);
+    region(&still(store, ui), &toggle).is_some()
+}
+
+/// The card asks once whether to download Cisco's codec, and never fetches it itself: its
+/// answer goes to the engine, which keeps it first. Asked, it is not asked again.
+#[test]
+fn the_card_asks_before_the_codec_is_downloaded_and_only_once() {
+    let (store, mut ui) = store_with_session();
+    announcing_a_clip(&mut ui);
+    assert!(drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+    assert!(drawn_words(&store, &ui, limn_video::cisco::NOTICE));
+    let asked = click(&store, &mut ui, whats_new::CODEC_YES);
+    assert!(matches!(&asked[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    let declined = click(&store, &mut ui, whats_new::CODEC_NO);
+    assert!(matches!(&declined[..], [Intent::SaveSettings(s)] if s.video_codec == Some(false)));
+    // The engine's echo: answered, not asked again.
+    ui.settings.video_codec = Some(false);
+    assert!(!drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+    // An image asks nothing.
+    ui.settings.video_codec = None;
+    whats_new_event(
+        &mut ui,
+        quill_model::WhatsNew {
+            releases: vec![release_notes("0.3.0", None)],
+            announce: true,
+            ..Default::default()
+        },
+    );
+    assert!(!drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+}
+
+/// Without a codec the clip is its poster, with no play button; with Cisco's codec loaded it
+/// plays, with the button, and its frames decode. The second half needs Cisco's library at
+/// `LIMN_VIDEO_OPENH264` and is skipped without it.
+#[test]
+fn the_card_shows_the_poster_without_a_codec_and_plays_with_one() {
+    let (store, mut ui) = store_with_session();
+    announcing_a_clip(&mut ui);
+    assert_eq!(whats_new::clip(&ui), Some("/notes/0.3.0/clip.mp4".into()));
+    let clip = limn_video::Clip::from_mp4(PATTERN).unwrap();
+    ui.video = Some(limn_video::VideoPlayer::new(
+        whats_new::VIDEO,
+        clip.clone(),
+        true,
+        None,
+    ));
+    let frame = still(&store, &ui);
+    assert!(frame
+        .access
+        .iter()
+        .any(|n| n.name == "A browser beside the chat"));
+    assert!(!toggle_shown(&store, &ui));
+    // Closed, the clip is no more to play.
+    click(&store, &mut ui, whats_new::GOT_IT);
+    assert_eq!(whats_new::clip(&ui), None);
+    let Some(path) = std::env::var_os("LIMN_VIDEO_OPENH264") else {
+        eprintln!("skipped: set LIMN_VIDEO_OPENH264 to Cisco's OpenH264 2.6.0 library");
+        return;
+    };
+    let codec = limn_video::Codec::load(path).expect("Cisco's library loads");
+    announcing_a_clip(&mut ui);
+    let mut player = limn_video::VideoPlayer::new(whats_new::VIDEO, clip, true, Some(codec));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut now = std::time::Instant::now();
+    loop {
+        let tick = player.tick(now, true);
+        if tick.frame.is_some() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no frame decoded");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        now += tick
+            .repaint_after
+            .unwrap_or(std::time::Duration::from_millis(20));
+    }
+    ui.video = Some(player);
+    assert!(toggle_shown(&store, &ui));
+}
+
+/// Settings › System: the switch turns Cisco's codec on, off and on again, beside Cisco's
+/// notice; the licenses dialog there has Cisco's license whole.
+#[test]
+fn the_codec_switch_sits_by_ciscos_notice_and_its_license_is_reachable() {
+    let (store, mut ui) = store_with_session();
+    click(&store, &mut ui, view::SETTINGS_OPEN);
+    click(&store, &mut ui, "settings:page:system");
+    assert!(drawn_words(&store, &ui, "Play videos in What's new"));
+    assert!(drawn_words(&store, &ui, "Cisco Systems, Inc."));
+    let on = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&on[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    ui.settings.video_codec = Some(true);
+    ui.applied(&Event::Codec(quill_model::CodecState::Downloading));
+    assert!(drawn_words(&store, &ui, "Downloading"));
+    let off = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&off[..], [Intent::SaveSettings(s)] if s.video_codec == Some(false)));
+    ui.settings.video_codec = Some(false);
+    let again = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&again[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    // Cisco's license, as Cisco publishes it, with its conditions.
+    assert!(licenses::OPENH264.contains("AVC/H.264 Patent Portfolio License Conditions"));
+    assert!(licenses::OPENH264.contains(limn_video::cisco::NOTICE));
+    click(&store, &mut ui, licenses::OPEN);
+    assert!(ui.licenses_open);
+    assert!(drawn_words(&store, &ui, "Licenses"));
+    assert!(drawn_words(
+        &store,
+        &ui,
+        "About The Cisco-Provided Binary of OpenH264"
+    ));
+    click(&store, &mut ui, "licenses");
+    assert!(!ui.licenses_open);
+}

@@ -279,6 +279,9 @@ pub struct Settings {
     /// Show a release's announcement before restarting into it and once after; off, the
     /// release notes are still a click away.
     pub whats_new: bool,
+    /// Whether the person let quill download Cisco's OpenH264 codec to play the clips of What's
+    /// new: `None` while never asked, so nothing is downloaded until they say yes.
+    pub video_codec: Option<bool>,
 }
 
 impl Default for Settings {
@@ -320,6 +323,7 @@ impl Default for Settings {
             auto_update: true,
             remote_new_sessions: false,
             whats_new: true,
+            video_codec: None,
         }
     }
 }
@@ -1160,6 +1164,20 @@ pub struct WhatsNew {
     pub unopened: bool,
 }
 
+/// Cisco's OpenH264 library, which plays the clips of What's new once the person allows its
+/// download (`Settings::video_codec`).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CodecState {
+    /// Not allowed, or not there.
+    #[default]
+    Off,
+    Downloading,
+    /// Downloaded from Cisco and matched against its digest: the library to load.
+    Ready(PathBuf),
+    /// The download or the check failed; `reason` is for the person.
+    Failed(String),
+}
+
 /// What one release says is new in it.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseNotes {
@@ -1412,6 +1430,8 @@ pub enum Event {
     Update(UpdateState),
     /// The release notes quill keeps, and whether to announce this version; not stored.
     WhatsNew(WhatsNew),
+    /// Where the video codec stands on this computer; not stored.
+    Codec(CodecState),
     /// An agent's plugins, marketplaces and skills for `folder`, as its program lists them;
     /// `error` says why a change or a list failed.
     Extensions {
@@ -1583,6 +1603,7 @@ impl Event {
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
             | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::Global(_)
             | Event::Servers { .. }

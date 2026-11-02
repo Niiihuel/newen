@@ -2518,3 +2518,86 @@ fn a_wait_holds_while_the_other_agent_asks_and_wakes_across_agents() {
     assert_eq!(report.from, 1);
     assert!(!report.text.is_empty());
 }
+
+/// Cisco's codec is never fetched until the person says yes: the engine starts and settles
+/// with no request to its server; the yes is written to settings.json before the engine tells
+/// anyone about the codec, and only then is the server asked.
+#[test]
+fn the_video_codec_is_fetched_only_after_a_yes_that_is_kept_first() {
+    // Cisco's server, on loopback: every connection it is asked for, counted.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    {
+        let asked = asked.clone();
+        std::thread::spawn(move || {
+            for stream in server.incoming() {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "quill-codec-{}-{}",
+        std::process::id(),
+        uuid_like()
+    ));
+    let settings = dir.join("settings.json");
+    let (tx, rx) = channel();
+    let kept = settings.clone();
+    let config = quill_engine::Config {
+        settings: Some(settings.clone()),
+        codecs: Some(dir.join("codecs")),
+        codec: Some(quill_engine::CodecRelease {
+            version: "2.6.0".into(),
+            url: format!("https://127.0.0.1:{port}/libopenh264.so.bz2"),
+            file_name: "libopenh264.so".into(),
+            sha256: "0".repeat(64),
+        }),
+        ..Default::default()
+    };
+    let engine = Engine::start_with(
+        move |event| {
+            // What settings.json says the moment the codec is first told about.
+            if let Event::Codec(_) = &event {
+                let on_disk = std::fs::read_to_string(&kept).unwrap_or_default();
+                drop(tx.send(Event::Notice {
+                    session: 0,
+                    text: on_disk,
+                }));
+            }
+            drop(tx.send(event))
+        },
+        config,
+    );
+    until(&rx, |event| matches!(event, Event::Settings { .. }));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // Not now: still nothing.
+    let mut no = quill_model::Settings {
+        video_codec: Some(false),
+        ..Default::default()
+    };
+    engine.send(Intent::SaveSettings(no.clone()));
+    until(
+        &rx,
+        |event| matches!(event, Event::Settings { settings, .. } if settings.video_codec == Some(false)),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    no.video_codec = Some(true);
+    engine.send(Intent::SaveSettings(no));
+    let seen = until(&rx, |event| {
+        matches!(event, Event::Codec(quill_model::CodecState::Failed(_)))
+    });
+    let on_disk = seen.iter().find_map(|event| match event {
+        Event::Notice { session: 0, text } => Some(text.clone()),
+        _ => None,
+    });
+    let on_disk: quill_model::Settings = serde_json::from_str(&on_disk.unwrap()).unwrap();
+    assert_eq!(on_disk.video_codec, Some(true));
+    assert!(asked.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    // Nothing that did not verify was kept.
+    assert!(!dir.join("codecs/openh264/2.6.0/libopenh264.so").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

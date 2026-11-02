@@ -30,6 +30,7 @@ mod direct {
 mod editors;
 mod images;
 mod page;
+mod video;
 
 use eframe::egui;
 use limn::{Element, Size, UiTree};
@@ -74,6 +75,8 @@ struct App {
     /// The viewer's full-size pictures, decoded like the thumbnails, and the images asked for.
     full_done: Arc<Mutex<Vec<(PathBuf, limn::RasterImage)>>>,
     full_asked: std::collections::HashSet<PathBuf>,
+    /// The clip of a release's announcement and Cisco's codec that plays it (video.rs).
+    clips: video::Clips,
     /// The width over height of the picture the editor lays out, read from its file off the
     /// window's thread, and the images asked for so far.
     sizes_done: Arc<Mutex<Vec<ImageSize>>>,
@@ -878,6 +881,7 @@ impl eframe::App for App {
                 });
             }
         }
+        self.clips.tick(&mut self.ui, &ctx);
         for (path, full) in std::mem::take(&mut *self.full_done.lock().unwrap()) {
             self.ui.full.insert(path, full);
         }
@@ -1197,6 +1201,10 @@ impl eframe::App for App {
         }
         actions.extend(limn_egui::apply_access_requests(&ctx, &mut self.tree));
         for action in actions {
+            // The clip's play and pause button is its player's.
+            if (self.ui.video.as_mut()).is_some_and(|player| player.handle(&action)) {
+                continue;
+            }
             if let limn::UiAction::CopyRequested { text } = &action {
                 ctx.copy_text(text.clone());
             }
@@ -1495,6 +1503,11 @@ impl eframe::App for App {
         if focus_terminal && self.tree.focus(quill_ui::view::TERMINAL) {
             frame = self.tree.layout(window);
         }
+        // The clip's frame that is due, and a repaint when the next is: only while it plays
+        // in view.
+        if let Some(player) = self.ui.video.as_mut() {
+            player.update(&ctx, &frame);
+        }
         limn_egui::paint_at(ui, &frame, area.min);
         limn_egui::set_cursor(&ctx, self.tree.cursor());
         self.page_frame(&ctx, &frame, area.min);
@@ -1506,6 +1519,17 @@ impl eframe::App for App {
             ctx.request_repaint_after(after);
         }
     }
+}
+
+/// Cisco's OpenH264 release for this system, which the engine downloads from Cisco once the
+/// person allows it; limn-video names it, as it loads only that release.
+fn codec_release() -> Option<quill_engine::CodecRelease> {
+    limn_video::cisco::current().map(|release| quill_engine::CodecRelease {
+        version: limn_video::cisco::VERSION.into(),
+        url: release.url.into(),
+        file_name: release.file_name.into(),
+        sha256: release.sha256.into(),
+    })
 }
 
 /// The local time zone's offset from UTC in seconds, as `date +%z` says it (`-0300`).
@@ -1874,6 +1898,7 @@ fn main() -> eframe::Result {
                     quill_engine::Config {
                         frames: frames.clone(),
                         native: native.clone(),
+                        codec: codec_release(),
                         ..quill_engine::Config::default_database()
                     },
                 ),
@@ -1926,6 +1951,7 @@ fn main() -> eframe::Result {
                 qr_for: None,
                 full_done: Arc::default(),
                 full_asked: Default::default(),
+                clips: Default::default(),
                 sizes_done: Arc::default(),
                 sizes_asked: Default::default(),
                 annotated: Arc::default(),
