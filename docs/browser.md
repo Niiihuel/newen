@@ -1,6 +1,6 @@
 # Navegador integrado
 
-Un Chromium que el agente maneja y que la persona ve y usa en un pane, como el "Browser" de Claude Desktop. Este documento fija cómo se integra en quill y en qué orden se construye.
+Un Chromium que el agente maneja y que la persona ve y usa en un pane, como el "Browser" de Claude Desktop. Este documento fija cómo se integra en Newen y en qué orden se construye.
 
 Fuentes:
 - Mediciones propias del 2026-10-26 con Google Chrome 150.0.7871.46 y el CLI 2.1.310 en esta máquina (scripts en el scratchpad de la sesión; se resumen abajo).
@@ -11,7 +11,7 @@ Lo que se marca *(inferido)* no está confirmado.
 ## 1. Qué hace el navegador
 
 - **Motor:** cada pestaña es un Chromium y el agente lo maneja por **CDP**. Sin Playwright.
-- **Herramientas** para el agente: `navigate`, `read_page`, `find`, `get_page_text`, `form_input`, `computer`, `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`, `tabs_context`, `tabs_create`, `tabs_select`, `tabs_close`, `browser_batch`, más `preview_start/stop/list/logs` para servidores de desarrollo. Los esquemas y las descripciones son de quill (§4).
+- **Herramientas** para el agente: `navigate`, `read_page`, `find`, `get_page_text`, `form_input`, `computer`, `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`, `tabs_context`, `tabs_create`, `tabs_select`, `tabs_close`, `browser_batch`, más `preview_start/stop/list/logs` para servidores de desarrollo. Los esquemas y las descripciones son de Newen (§4).
 - **`read_page`** inyecta un script que escribe una línea por elemento, `role "name" [ref_N] href=… type=… placeholder=…`, con refs estables por nodo, profundidad 15, tope de 50 000 caracteres y valores sensibles redactados. Así un sitio grande no devuelve el árbol completo.
 - **`computer`** hace capturas JPEG (calidad 75, ≤800 px de ancho); los clicks van en coordenadas de esa imagen y se escalan a la página.
 - **Pie de cada resultado:** "Tab Context:" con la pestaña y la lista de pestañas.
@@ -41,8 +41,8 @@ Lo que se marca *(inferido)* no está confirmado.
 | Crates de CDP (chromiumoxide, headless_chrome, chromey) | Ninguno soporta el pipe. chromiumoxide genera tipos de una versión vieja del protocolo que fallan cuando Chrome cambia (#266, #335) y trae reqwest y 4,9 MB de código. headless_chrome bloquea hilos dentro de un engine tokio |
 
 **Lo elegido:**
-- **Motor:** el Chromium del sistema. Primero `QUILL_CHROME` o el ajuste de Settings; si no, `chromium`, `google-chrome-stable` o `google-chrome` del PATH. En nixpkgs hay 150.0.7871.46. Descargar Chrome for Testing queda para más adelante (en NixOS necesita nix-ld).
-- **Transporte:** `--remote-debugging-pipe`: Chrome lee del fd 3 y escribe en el fd 4, JSON terminado en NUL. Un puerto TCP lo puede manejar cualquier proceso local, cookies incluidas; el pipe solo quill.
+- **Motor:** el Chromium del sistema. Primero `NEWEN_CHROME` o el ajuste de Settings; si no, `chromium`, `google-chrome-stable` o `google-chrome` del PATH. En nixpkgs hay 150.0.7871.46. Descargar Chrome for Testing queda para más adelante (en NixOS necesita nix-ld).
+- **Transporte:** `--remote-debugging-pipe`: Chrome lee del fd 3 y escribe en el fd 4, JSON terminado en NUL. Un puerto TCP lo puede manejar cualquier proceso local, cookies incluidas; el pipe solo Newen.
 - **CDP:** una capa propia y chica. `serde_json::Value` de ida y vuelta, respuestas por `id`, eventos por `sessionId` y structs solo para los ~30 métodos que se usan. No agrega dependencias: `std::io::pipe` y un `dup2` antes del `exec`.
 - **Frames:** screencast JPEG decodificado con `zune-jpeg`, que ya está en `Cargo.lock` vía `image`. Tarda 2,9 ms para 1600×1000 fuera del hilo de la UI. Se muestran en una superficie de limn.
 
@@ -63,25 +63,25 @@ Lo que se marca *(inferido)* no está confirmado.
 ## 3. Arquitectura
 
 ```
-quill-ui ──Intent::Browser*──▶ quill-engine ──▶ quill-browser ──pipe/CDP──▶ Chromium
+newen-ui ──Intent::Browser*──▶ newen-engine ──▶ newen-browser ──pipe/CDP──▶ Chromium
    ▲  Event::Browser* (no se guardan)  │               │
    │                                   │      frames RGB decodificados
-apps/quill ◀───────── Frames (canal aparte) ──────────┘
+apps/newen ◀───────── Frames (canal aparte) ──────────┘
    └─ limn_egui::present_surface("browser:<sesión>:<pestaña>")
 ```
 
 Las capas se respetan:
-- `quill-ui` no conoce al engine ni a Chromium; pinta una superficie y emite intenciones.
-- `quill-browser` no sabe nada del agente ni de la UI.
-- `apps/quill` es la raíz que une los frames con limn.
+- `newen-ui` no conoce al engine ni a Chromium; pinta una superficie y emite intenciones.
+- `newen-browser` no sabe nada del agente ni de la UI.
+- `apps/newen` es la raíz que une los frames con limn.
 
-### 3.1 `quill-browser` (crate nuevo, lado engine)
-- **`Chromium`:** encuentra el binario y lanza `--headless --remote-debugging-pipe --user-data-dir=<datos de quill>/browser --force-device-scale-factor=<escala de la ventana>` con los flags de Playwright: `--no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-default-apps --disable-breakpad --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows`, y `about:blank` como primera página. El sandbox queda prendido.
-  - Un solo proceso por quill, lanzado al primer uso.
+### 3.1 `newen-browser` (crate nuevo, lado engine)
+- **`Chromium`:** encuentra el binario y lanza `--headless --remote-debugging-pipe --user-data-dir=<datos de Newen>/browser --force-device-scale-factor=<escala de la ventana>` con los flags de Playwright: `--no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-default-apps --disable-breakpad --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows`, y `about:blank` como primera página. El sandbox queda prendido.
+  - Un solo proceso por Newen, lanzado al primer uso.
   - Se cierra 5 min después de que ninguna sesión tenga pestañas, como Desktop.
   - Si se cae, las sesiones se enteran ("The browser stopped.") y se relanza al siguiente uso; las pestañas no se reabren solas.
 - **`Cdp`:** la capa de transporte. Pedidos por `id` con timeout, eventos por `sessionId` y `Target.attachToTarget{flatten:true}`. Las claves opcionales se omiten: un `null` en `startScreencast` deja a Chrome sin frames.
-- **`Context` por sesión de quill:** `Target.createBrowserContext` con cookies "Until quit" por defecto, como Desktop. Hasta 8 pestañas por contexto.
+- **`Context` por sesión de Newen:** `Target.createBrowserContext` con cookies "Until quit" por defecto, como Desktop. Hasta 8 pestañas por contexto.
   - Cada pestaña lleva su URL, título, `canGoBack/Forward`, carga y viewport.
   - Popups con `openerId` se abren como pestaña nueva.
   - Diálogos JS: se le muestran a la persona y se suprimen para el agente.
@@ -91,12 +91,12 @@ Las capas se respetan:
 - **Herramientas del agente** (§4) sobre la misma pestaña; scripts inyectados para `read_page`, `find` y `get_page_text`, con la misma forma de salida que Desktop.
 - **Política** (§5) antes de cada navegación y cada acción.
 
-### 3.2 `quill-model`
+### 3.2 `newen-model`
 - **Intención:** `Intent::Browser{session, op}`, con `BrowserOp` = `Open{url?}`, `Navigate{tab, url}`, `NewTab{url?}`, `CloseTab`, `SelectTab`, `Back`, `Forward`, `Reload`, `Stop`, `Show{view: Option<BrowserView{tab, width, height}>}`, `Input{tab, input: BrowserInput}`, `Copy{tab}` y `Select{tab, on}`.
 - **Evento:** `Event::Browser{session, update}`, con `BrowserUpdate` = `Tabs{tabs, active}`, `Cursor`, `Copied`, `Notice`, `Failed`, `Selecting` y `Selected`. **No se guarda** (`Store::keeps`).
 - `SITE_PERMISSION`: el nombre de la herramienta en la tarjeta de permiso de un sitio (§5).
 
-### 3.3 `quill-engine`
+### 3.3 `newen-engine`
 - Es dueño del `Browser`, que lanza Chromium al primer `Open` o a la primera herramienta.
 - **La entrada se aplica en el acto, en orden.** El resto de las operaciones de la persona va a una cola; las que cargan páginas corren aparte para no frenarla.
 - **Las herramientas del navegador corren en su propia tarea** y responden por `Internal::HostAnswered`. El router no espera páginas.
@@ -104,7 +104,7 @@ Las capas se respetan:
 - **Cierre por inactividad:** Chromium se cierra 5 min después de que ninguna sesión tenga pestañas.
 - **El puente de `$BROWSER`** (`bridge.rs`, §5).
 
-### 3.4 `apps/quill`
+### 3.4 `apps/newen`
 - **Frames:** cada frame toma de `Frames` lo nuevo y llama a `present_surface` (`SurfaceFrame::from_rgb`). Un frame nuevo despierta la ventana.
 - **Vista:** después de pintar le dice al engine qué pestaña está a la vista y su tamaño (`Show`), o que ninguna.
 - **Entrada:** `page.rs` lee la entrada cruda de egui antes que limn.
@@ -114,7 +114,7 @@ Las capas se respetan:
 - **Cursor:** el de la página, sobre ella.
 - **Copiar y elegir:** lo copiado va al portapapeles; un elemento elegido se suma al mensaje.
 - **Barra de URL:** muestra la dirección de la pestaña, salvo mientras la persona escribe.
-- `quill --open-url URL` es el lado del script de `$BROWSER`.
+- `newen --open-url URL` es el lado del script de `$BROWSER`.
 
 ### 3.5 limn: `Element::focus_area` público
 Alcanzó con hacer público `Element::focus_area`, que ya existía para `TerminalView` (rama `feat/focus-area`, integrada en `quill/integration`):
@@ -123,12 +123,12 @@ Alcanzó con hacer público `Element::focus_area`, que ya existía para `Termina
 
 La entrada no se tradujo a acciones de limn porque la página quiere más de lo que limn traduce: Alt, los otros botones, soltar teclas. El cursor lo pone el host con egui.
 
-### 3.6 `quill-ui`: `Pane::Browser`
+### 3.6 `newen-ui`: `Pane::Browser`
 - **Encabezado:** pestañas con "New tab" y "Close tab"; atrás/adelante, recargar/detener, la URL ("Enter a URL") y "Select element" / "Exit selection mode". Los textos son los de Desktop.
 - **Botón:** el globo de la barra superior, "Browser", Ctrl+Shift+B.
 - **Cuerpo:** la superficie de la pestaña, en un `focus_area`.
 - **Estados:**
-  - una pestaña en blanco (`about:blank`, sin cargar) o ninguna pestaña muestran el estado vacío de Desktop: el globo, "Browse the web" y "Type a URL or ask the agent to open a site. It can read, click, and type.". El original nombra a Claude y ofrece "Detect dev server", que quill todavía no tiene. Mientras se ve el estado vacío, la superficie no se dibuja y el motor deja de mostrar la página;
+  - una pestaña en blanco (`about:blank`, sin cargar) o ninguna pestaña muestran el estado vacío de Desktop: el globo, "Browse the web" y "Type a URL or ask the agent to open a site. It can read, click, and type.". El original nombra a Claude y ofrece "Detect dev server", que Newen todavía no tiene. Mientras se ve el estado vacío, la superficie no se dibuja y el motor deja de mostrar la página;
   - el error de arranque ("No Chromium found…", "The browser stopped.");
   - debajo de la página, el último aviso, hasta que se cierra (ver 3.7).
 - **Atajos:** los del navegador de Desktop, con Ctrl en Linux.
@@ -136,12 +136,12 @@ La entrada no se tradujo a acciones de limn porque la página quiere más de lo 
 
 ### 3.7 El tamaño de la página y los avisos
 **El tamaño** lo dice el botón de viewport de la barra de herramientas, no una barra aparte:
-- **Encendido** (con el relleno de los toggles activos de quill) mientras la pestaña tiene un tamaño fijado, lo haya elegido la persona o el agente con `resize_window`.
+- **Encendido** (con el relleno de los toggles activos de Newen) mientras la pestaña tiene un tamaño fijado, lo haya elegido la persona o el agente con `resize_window`.
 - **Ícono:** un teléfono si el ancho es de 480 px o menos; si no, un monitor.
 - **Tooltip:** "Viewport" sin tamaño fijado; "Viewport: 1440 × 900" si lo eligió la persona; "Viewport: 1440 × 900 · set by the agent" si lo eligió el agente.
 - **Menú:** "Responsive", "Mobile" y "Tablet", más el tamaño propio del agente si no es ninguno de esos. La opción marcada dice "Set by the agent" cuando la eligió el agente. "Responsive" es la forma de volver al tamaño del pane (`BrowserOp::Viewport { size: None }`).
 
-Quién fijó el tamaño viaja en `BrowserTab::emulated_by_agent`, que pone `quill-browser`: el agente al redimensionar lo activa y el menú de la persona lo borra. `resize_window` ya no deja un aviso: el botón lo muestra.
+Quién fijó el tamaño viaja en `BrowserTab::emulated_by_agent`, que pone `newen-browser`: el agente al redimensionar lo activa y el menú de la persona lo borra. `resize_window` ya no deja un aviso: el botón lo muestra.
 
 **Los avisos** (lo que dijo un diálogo de la página, una descarga guardada, un fallo del navegador) tienen una franja de 32 px bajo la página, con un ícono (el globo, o la advertencia en rojo si es un fallo), la frase y la X de "Dismiss". Duran hasta que la persona los cierra o llega otro. Van ahí porque son texto de largo variable que en la barra de herramientas no entra. En el ancho mínimo de la columna, la frase se desvanece antes de la X, y los controles de la barra de herramientas no se pisan ni se salen del pane.
 
@@ -151,8 +151,8 @@ Por qué así: el navegador de Claude Desktop, por lo que se ve, no avisa del ta
 
 ### 4.1 Servidor y herramientas
 - **Servidor:** un segundo servidor MCP en proceso, `browser` (`mcp__browser__*`, el nombre del video). Va junto a `sessions`, en `initialize.sdkMcpServers`.
-- **Definición:** las herramientas se definen en `quill-agent` como `BROWSER_TOOLS`, con el mismo formato que `HOST_TOOLS` y sin nombres de proveedor. Cualquier adaptador que sepa ofrecer herramientas del host las expone.
-- **Set y semántica:** los del navegador de Desktop, con esquemas propios y descripciones redactadas para quill:
+- **Definición:** las herramientas se definen en `newen-agent` como `BROWSER_TOOLS`, con el mismo formato que `HOST_TOOLS` y sin nombres de proveedor. Cualquier adaptador que sepa ofrecer herramientas del host las expone.
+- **Set y semántica:** los del navegador de Desktop, con esquemas propios y descripciones redactadas para Newen:
   - `navigate{url | "back" | "forward", tabId?}`;
   - `read_page{filter?: all|interactive, ref_id?, depth?, max_chars?}`;
   - `find{query}`;
@@ -176,7 +176,7 @@ Por qué así: el navegador de Claude Desktop, por lo que se ve, no avisa del ta
 - **Carga:** las herramientas van con `anthropic/alwaysLoad`, así que el agente no las busca con ToolSearch.
 
 ### 4.3 Prompt
-Un bloque corto, redactado para quill, que se agrega como `appendSystemPrompt` junto al de sesiones:
+Un bloque corto, redactado para Newen, que se agrega como `appendSystemPrompt` junto al de sesiones:
 - hay un navegador integrado y la persona ve lo mismo;
 - conviene verificar los cambios web abriéndolos y mirando la consola;
 - localhost está permitido y lo demás pide permiso.
@@ -197,11 +197,11 @@ El texto de las descripciones de Desktop no se copia.
 - **`$BROWSER`:**
   - Cada agente corre con `BROWSER` apuntando a un script, en una carpeta 0700 con su socket 0600, y con una clave propia de su sesión.
   - Una página local se abre en la pestaña de esa sesión; lo demás, en el navegador del escritorio.
-  - quill acepta cualquier puerto local, no solo los de procesos de la sesión *(simplificación anotada en el código)*.
+  - Newen acepta cualquier puerto local, no solo los de procesos de la sesión *(simplificación anotada en el código)*.
   - Si la persona ya tiene un `BROWSER` propio, no se toca.
 
 ## 6. Estado
-Hecho y probado contra Chrome 150 (pruebas de `quill-browser`) y en la app con un agente real (haiku), headless; la vista nativa está en §8:
+Hecho y probado contra Chrome 150 (pruebas de `newen-browser`) y en la app con un agente real (haiku), headless; la vista nativa está en §8:
 1. **Ver y usar:** el pane, las pestañas, la navegación, el mouse, el teclado, la rueda, copiar, el cursor, los campos de archivo (con el diálogo del escritorio), las descargas y los diálogos.
 2. **El agente:** las quince herramientas, las capturas como imagen, los verbos, el resumen y la tarjeta.
 3. **Completo:**
@@ -215,11 +215,11 @@ Hecho y probado contra Chrome 150 (pruebas de `quill-browser`) y en la app con u
 5. **Además:**
    - el menú de viewport de la persona (Responsive, Mobile 375 × 812, Tablet 768 × 1024, y el tamaño que fijó el agente);
    - la ruta de Chromium en Settings › Browser;
-   - las pestañas de cada sesión reabren después de reiniciar quill (`BrowserUpdate::Kept`, la única novedad del navegador que se guarda);
+   - las pestañas de cada sesión reabren después de reiniciar Newen (`BrowserUpdate::Kept`, la única novedad del navegador que se guarda);
    - **servidores de desarrollo** (`preview_start`, `preview_stop`, `preview_list`, `preview_logs`):
      - Leen el archivo de lanzamiento que da el adaptador (`AgentAdapter::launch_file`; para Claude, `.claude/launch.json` con el formato de Desktop, explicado en su prompt).
-     - La persona aprueba cada configuración en una tarjeta con el comando ("Always" vale mientras quill corre).
-     - Corren en su propio grupo de procesos, con `PORT`, y mueren con quill aunque lo maten (`PR_SET_PDEATHSIG`).
+     - La persona aprueba cada configuración en una tarjeta con el comando ("Always" vale mientras Newen corre).
+     - Corren en su propio grupo de procesos, con `PORT`, y mueren con Newen aunque lo maten (`PR_SET_PDEATHSIG`).
      - Se espera hasta 180 s a que escuchen, y como mucho 5 por carpeta.
      - Al estar listos se abren en una pestaña con su tarjeta; los logs se guardan para `preview_logs`.
 
@@ -229,7 +229,7 @@ Falta:
 - Miniaturas en la tarjeta del transcript y centrar en el pane una página emulada más angosta.
 
 ## 7. Abierto
-- **Archivo de servidores de desarrollo:** lo da el adaptador. Si otro agente no tiene uno propio, se podría acordar un `.quill/launch.json` genérico.
+- **Archivo de servidores de desarrollo:** lo da el adaptador. Si otro agente no tiene uno propio, se podría acordar un `.newen/launch.json` genérico.
 - **Pantallas con otra escala:** al mover la ventana a una pantalla con otra escala hay que relanzar Chromium (la escala es por proceso), o aceptar un frame borroso hasta el próximo uso.
 - **Sin probar:** el menú contextual de la página (un click derecho por CDP no disparó `contextmenu`) y la composición por GPU en headless.
 - **Si no hay Chromium:** el pane lo explica ("No Chromium found. Install chromium or google-chrome, or set its path in Settings."). Descargar Chrome for Testing queda para después.
@@ -237,9 +237,9 @@ Falta:
 
 ## 8. Vista nativa (CEF)
 
-El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG en base64 que Chromium no repite hasta el ack, y el resize espera un frame nuevo. Eso no pasa si la página es una capa dentro del compositor de Chromium, pero quill no es Chromium, así que lo más parecido es CEF sin ventana: cada pestaña dibuja en un buffer y quill lo compone en su propia ventana, como cualquier otra cosa suya.
+El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG en base64 que Chromium no repite hasta el ack, y el resize espera un frame nuevo. Eso no pasa si la página es una capa dentro del compositor de Chromium, pero Newen no es Chromium, así que lo más parecido es CEF sin ventana: cada pestaña dibuja en un buffer y Newen lo compone en su propia ventana, como cualquier otra cosa suya.
 
-- **CEF:** el `cef-binary` de nixpkgs (147.0.10) y `cef = "=147.1.0"` (cef-rs), que coinciden. `shell.nix` arma el directorio que cef-rs espera (`CEF_PATH`). Chromium corre dentro del proceso de quill (`multi_threaded_message_loop`), con sandbox, y sus procesos son quill mismo con `--type=…` (`native::subprocess()`, lo primero de `main`).
+- **CEF:** el `cef-binary` de nixpkgs (147.0.10) y `cef = "=147.1.0"` (cef-rs), que coinciden. `shell.nix` arma el directorio que cef-rs espera (`CEF_PATH`). Chromium corre dentro del proceso de Newen (`multi_threaded_message_loop`), con sandbox, y sus procesos son Newen mismo con `--type=…` (`native::subprocess()`, lo primero de `main`).
 - **Sin ventana:** `windowless_rendering_enabled` y estilo Alloy. Con frames por CPU, `--ozone-platform=headless`, así que Chromium no abre ningún display, ni X11 ni Wayland; con frames por GPU, `--ozone-platform=x11` (abajo). La GPU va por EGL sin display (`--use-angle=gl-egl`): el default de ANGLE pide un display X11 y, sin él, el proceso GPU se cae y Chromium dibuja por software.
 - **El mismo CDP:** `native.rs` contesta el stream que `Cdp` le habla a un Chromium lanzado. Lo de una página va al DevTools de su browser (`SendDevToolsMessage`, en el hilo UI de CEF); lo de todo el navegador se resuelve con CEF:
   - `Target.createBrowserContext` crea un `RequestContext` en memoria por sesión.
@@ -249,36 +249,36 @@ El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG 
 - **Los frames:** `OnPaint` entrega BGRA a la escala de la ventana (`GetScreenInfo` con `Frames::scale`) y del tamaño que tiene la pestaña en CSS px (`GetViewRect`). Solo se publica la pestaña en pantalla, en su superficie, como el screencast.
   - Un `<select>` abierto llega como un paint aparte (`PET_POPUP`) y se dibuja encima del de la página, en su lugar.
   - Un paint que todavía tiene el tamaño de antes de un resize no se muestra: si se mostrara, quedaría en pantalla hasta que la página volviera a cambiar. Chromium a veces sigue con el tamaño viejo (pasa con un `<select>` abierto) hasta que vuelve a pintar, así que 100 ms después se le pide un repaint (`Invalidate`). Pedirlo junto con el `WasResized` se traga el frame nuevo.
-  - Cada paint se convierte una sola vez, de BGRA al RGBA premultiplicado de egui, en una pasada por palabra (`to_rgba`), y la ventana lo toma sin convertir ni copiar (`SurfaceFrame::from_image`, rama de limn `feat/surface-image`). `quill-browser` se compila optimizado también en dev: sin optimizar, cada paint tardaba ~370 ms.
+  - Cada paint se convierte una sola vez, de BGRA al RGBA premultiplicado de egui, en una pasada por palabra (`to_rgba`), y la ventana lo toma sin convertir ni copiar (`SurfaceFrame::from_image`, rama de limn `feat/surface-image`). `newen-browser` se compila optimizado también en dev: sin optimizar, cada paint tardaba ~370 ms.
   - Medido con el ejemplo (pane de 800×1100 a escala 2, Radeon 780M): de la rueda al frame en `Frames` hay ~10 ms de mediana (~5 ms de Chromium, con su copia de la GPU a CPU, y ~2,5 ms de la conversión). Con `windowless_frame_rate` a 120, un scroll continuo pinta ~100 frames por segundo (60 con 60).
-  - Así Chromium baja cada frame de la GPU, quill lo convierte y egui lo vuelve a subir. Lo más parecido acá son los frames por GPU.
+  - Así Chromium baja cada frame de la GPU, Newen lo convierte y egui lo vuelve a subir. Lo más parecido acá son los frames por GPU.
 - **Frames por GPU** (`OnAcceleratedPaint`, `shared_texture_enabled`): el frame no sale de la GPU.
   - eframe pide su device con `VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`wgpu_setup` en `main.rs`) y se lo pasa a `Native::start`.
   - Cada paint llega como un dmabuf de un plano, BGRA. `Gpu::import` lo envuelve con `texture_from_dmabuf_fd` de wgpu-hal 30 (no hizo falta portar el módulo de cef-rs, que además no libera la memoria) y lo copia a una textura propia de la pestaña. Se espera esa copia antes de volver, porque CEF devuelve el buffer a su pool al volver.
   - Un `<select>` (`PET_POPUP`) se copia aparte y encima de la página, también en la GPU.
   - La ventana registra la textura en el renderer de egui-wgpu y limn la dibuja tal cual (`present_surface_texture`, rama de limn `feat/surface-texture`). Mientras la textura no cambie, no se registra de nuevo.
   - Medido con el ejemplo (pane de 800×1100 a escala 2, Radeon 780M, RADV): importar, copiar y esperar tarda 0,64 ms de mediana (p90 1,2 ms), contra ~2,5 ms de la conversión más la bajada de Chromium. Ya no hay subida de 14 MB en el hilo de la UI. De la rueda al frame quedan ~9,6 ms de mediana (CPU: ~11 ms), casi todo la espera de Chromium a su próximo BeginFrame (120 fps).
-  - **Por qué X11:** Chromium reserva estos buffers a través de un servidor de display, aunque no abra ventanas. Con `headless` no puede ("Unable to allocate frame for first frame capture: OOM?"). Con `wayland` sí, pero pinta a 1× sin importar la escala de `GetScreenInfo`, `--force-device-scale-factor` o la de la pantalla (probado con `WaylandPerSurfaceScale` y `WaylandUiScale` apagados). Con `x11` (XWayland en una sesión Wayland) respeta la escala. Sin `DISPLAY`, o sin Vulkan que importe dmabufs, los frames van por CPU como antes y quill lo dice en stderr.
+  - **Por qué X11:** Chromium reserva estos buffers a través de un servidor de display, aunque no abra ventanas. Con `headless` no puede ("Unable to allocate frame for first frame capture: OOM?"). Con `wayland` sí, pero pinta a 1× sin importar la escala de `GetScreenInfo`, `--force-device-scale-factor` o la de la pantalla (probado con `WaylandPerSurfaceScale` y `WaylandUiScale` apagados). Con `x11` (XWayland en una sesión Wayland) respeta la escala. Sin `DISPLAY`, o sin Vulkan que importe dmabufs, los frames van por CPU como antes y Newen lo dice en stderr.
   - En X11 Chromium no informa el modifier (`DRM_FORMAT_MOD_INVALID`), así que se toma lineal (en Wayland llegaba `0x0`, lineal, con el mismo stride alineado a 256). Si una GPU diera buffers en tiles, la página se vería revuelta; habría que pedirle el modifier a GBM.
   - `shell.nix` pone el directorio de CEF al final de `LD_LIBRARY_PATH`. Su `libvulkan.so.1` no sabe dónde NixOS guarda los drivers, y con él primero wgpu no encontraba Vulkan y caía a GL, donde no hay importación.
-- **Presentación directa** (`apps/quill/src/direct.rs`): en Wayland, la página no espera el frame de quill. Va en una subsuperficie propia de quill, **debajo** de la ventana, y la ventana la deja ver por un hueco.
-  - **El hueco:** limn deja que el host pinte una superficie (`present_surface_paint`, rama de limn `feat/surface-paint`). quill pinta ahí un "punzón": un callback de egui-wgpu que escribe píxeles transparentes sin mezclar, en el orden de pintado. Lo que quill dibuja después (menús, tooltips, diálogos) queda encima de la página sin hacer nada especial, y los recortes de quill la recortan sola.
+- **Presentación directa** (`apps/newen/src/direct.rs`): en Wayland, la página no espera el frame de Newen. Va en una subsuperficie propia de Newen, **debajo** de la ventana, y la ventana la deja ver por un hueco.
+  - **El hueco:** limn deja que el host pinte una superficie (`present_surface_paint`, rama de limn `feat/surface-paint`). Newen pinta ahí un "punzón": un callback de egui-wgpu que escribe píxeles transparentes sin mezclar, en el orden de pintado. Lo que Newen dibuja después (menús, tooltips, diálogos) queda encima de la página sin hacer nada especial, y los recortes de Newen la recortan sola.
   - **Los buffers:** tres dmabufs lineales de GBM, en el nodo de render de la GPU de wgpu (por el bus PCI del adapter), importados en wgpu para copiar y entregados al compositor con `zwp_linux_dmabuf_v1`. Cada paint se copia en la GPU, se espera la copia y se hace commit en el hilo de CEF (`Native::present_with`). La subsuperficie está en modo desync y no recibe el puntero (región de entrada vacía): la entrada sigue yendo a la ventana, como antes.
-  - **Medidas:** el punzón perfora exactamente lo que la subsuperficie muestra. Ese rectángulo (`wp_viewport.set_source`/`set_destination`) es el paint recortado al lugar de la página y a la ventana. Durante un resize, donde la página todavía no llegó, se ve el fondo de quill, nunca el escritorio, y la página no se sale de la ventana.
-  - **Esquinas:** Hyprland redondea las esquinas de cada superficie, también las de una subsuperficie. Por eso la subsuperficie se extiende 32 px lógicos más allá del hueco, debajo de lo opaco de quill, hacia los lados que quedan dentro de la ventana: las esquinas redondeadas quedan tapadas.
+  - **Medidas:** el punzón perfora exactamente lo que la subsuperficie muestra. Ese rectángulo (`wp_viewport.set_source`/`set_destination`) es el paint recortado al lugar de la página y a la ventana. Durante un resize, donde la página todavía no llegó, se ve el fondo de Newen, nunca el escritorio, y la página no se sale de la ventana.
+  - **Esquinas:** Hyprland redondea las esquinas de cada superficie, también las de una subsuperficie. Por eso la subsuperficie se extiende 32 px lógicos más allá del hueco, debajo de lo opaco de Newen, hacia los lados que quedan dentro de la ventana: las esquinas redondeadas quedan tapadas.
   - **Pantalla completa:** los compositores tratan una ventana a pantalla completa como opaca (ver Weston #470), y el hueco sale negro. Mientras dura, la ventana dibuja la página como textura (el camino anterior) y la subsuperficie se oculta.
   - **La GPU:** con vista nativa, wgpu pide la de bajo consumo (`PowerPreference::LowPower`), la misma que usa el compositor en un laptop con dos. Con la de alto rendimiento (la NVIDIA, en esta máquina) el compositor rechaza los buffers.
-  - **Si algo falta** (no es Wayland, no hay `zwp_linux_dmabuf_v1`, `wp_viewporter` o GBM, o no hay frames por GPU), la ventana dibuja la página como antes, y quill avisa en stderr.
-  - **Probado en Hyprland 0.55** (escala 2) por la persona: scroll, resize de los paneles, menús de quill sobre la página, `<select>`, pantalla completa y vuelta.
-- **Cuándo:** si Settings › Browser › "Native view" está prendido, en cualquier sesión (`QUILL_BROWSER=native|headless` decide igual). Si no, el Chromium headless de siempre. quill corre en Wayland nativo en ambos casos.
-- **Probado:** `cargo run -p quill-browser --example native [dir]` (en `shell.nix`; frames por GPU en un device propio, que se leen de vuelta para comprobarlos, y `QUILL_NO_GPU=1` para el camino por CPU): el frame al tamaño y la escala del pane, el texto pintado, el teclado, la lista de un `<select>` sobre la página y un tamaño que pide el agente. Las mismas pruebas que `tests/chromium.rs` hace con la headless; es un ejemplo porque CEF necesita un programa propio.
+  - **Si algo falta** (no es Wayland, no hay `zwp_linux_dmabuf_v1`, `wp_viewporter` o GBM, o no hay frames por GPU), la ventana dibuja la página como antes, y Newen avisa en stderr.
+  - **Probado en Hyprland 0.55** (escala 2) por la persona: scroll, resize de los paneles, menús de Newen sobre la página, `<select>`, pantalla completa y vuelta.
+- **Cuándo:** si Settings › Browser › "Native view" está prendido, en cualquier sesión (`NEWEN_BROWSER=native|headless` decide igual). Si no, el Chromium headless de siempre. Newen corre en Wayland nativo en ambos casos.
+- **Probado:** `cargo run -p newen-browser --example native [dir]` (en `shell.nix`; frames por GPU en un device propio, que se leen de vuelta para comprobarlos, y `NEWEN_NO_GPU=1` para el camino por CPU): el frame al tamaño y la escala del pane, el texto pintado, el teclado, la lista de un `<select>` sobre la página y un tamaño que pide el agente. Las mismas pruebas que `tests/chromium.rs` hace con la headless; es un ejemplo porque CEF necesita un programa propio.
 
-**Antes, con ventanas X11 hijas** (hasta `6279fa9`): cada pestaña era una ventana X11 hija de la de quill, y en Wayland eso obligaba a XWayland.
-- Nada de quill podía dibujarse encima de la página: había que ocultarla y mostrar su último frame (`Frame::drawn_over`, rama de limn `feat/drawn-over`), como hace Desktop.
+**Antes, con ventanas X11 hijas** (hasta `6279fa9`): cada pestaña era una ventana X11 hija de la de Newen, y en Wayland eso obligaba a XWayland.
+- Nada de Newen podía dibujarse encima de la página: había que ocultarla y mostrar su último frame (`Frame::drawn_over`, rama de limn `feat/drawn-over`), como hace Desktop.
 - El teclado necesitaba reenviar teclas con `XSendEvent`.
-- En una pantalla con escala, quill y Chromium se veían borrosos o con cursores de tamaños distintos.
+- En una pantalla con escala, Newen y Chromium se veían borrosos o con cursores de tamaños distintos.
 - Embeber CEF en una ventana Wayland ajena tampoco anda todavía (issue #2804; el PR #4233 portado a CEF 154 se probó y aborta con el foco del teclado, no se puede ocultar y winit entra en pánico con los `wl_output` de Chromium).
 
-**Embeber CEF en la ventana Wayland, descartado** (2026-10-26): se probó con el SDK del fork de CEF 154 (`wayland.2` y `pacing.1`) y el PR #4233. La vista embebida (estilo Alloy) funciona con varios ajustes: winit parcheado (los `wl_output` de Chromium y el `xdg_surface` para los popups), `gtk-xft-dpi` en 96 dentro del proceso, `--disable-features=WaylandFractionalScaleV1` y `SetFocus` al enfocar la página. Pero el SDK aborta por un DCHECK cuando el teclado desaparece, y nada de quill puede dibujarse sobre la página. La presentación directa da la misma ruta al compositor con el CEF oficial.
+**Embeber CEF en la ventana Wayland, descartado** (2026-10-26): se probó con el SDK del fork de CEF 154 (`wayland.2` y `pacing.1`) y el PR #4233. La vista embebida (estilo Alloy) funciona con varios ajustes: winit parcheado (los `wl_output` de Chromium y el `xdg_surface` para los popups), `gtk-xft-dpi` en 96 dentro del proceso, `--disable-features=WaylandFractionalScaleV1` y `SetFocus` al enfocar la página. Pero el SDK aborta por un DCHECK cuando el teclado desaparece, y nada de Newen puede dibujarse sobre la página. La presentación directa da la misma ruta al compositor con el CEF oficial.
 
-**Falta:** el menú contextual de la página (sin ventana, CEF no lo muestra); Windows y macOS, que con este modo no necesitan ventanas propias; probarlo con un agente real en un escritorio; y que CEF arranque solo cuando se use el navegador (hoy arranca con quill en modo nativo).
+**Falta:** el menú contextual de la página (sin ventana, CEF no lo muestra); Windows y macOS, que con este modo no necesitan ventanas propias; probarlo con un agente real en un escritorio; y que CEF arranque solo cuando se use el navegador (hoy arranca con Newen en modo nativo).

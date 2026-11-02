@@ -1,9 +1,9 @@
 # Extensiones por agente y capa global (`Customize`)
 
-Diseño para que Skills, Plugins y Connectors (servidores MCP) de quill muestren lo de cada CLI por separado, más una capa **Global (all agents)** que quill guarda en su propia configuración y aplica a todos los agentes. Es solo diseño: no se tocó código ni la configuración de ningún CLI.
+Diseño para que Skills, Plugins y Connectors (servidores MCP) de Newen muestren lo de cada CLI por separado, más una capa **Global (all agents)** que Newen guarda en su propia configuración y aplica a todos los agentes. Es solo diseño: no se tocó código ni la configuración de ningún CLI.
 
 **Fuentes y marcas.**
-- quill: rama `feat/codex` de `~/projects/personal/quill-codex`.
+- Newen: rama `feat/codex` de `~/projects/personal/quill-codex`.
 - Claude Code: `claude --help` y `claude mcp|plugin … --help` de la versión 2.1.312, y las claves (sin valores) de `~/.claude.json` y `~/.claude/settings.json`.
 - Codex: `codex … --help` y `codex mcp list --json` (sin valores) de `codex-cli 0.163.0`, el esquema `app-server` v2 (`scratchpad/codex/schema/v2/`) y el código de `openai/codex@main` leído con `gh api` el 2026-10-28.
 - Gemini CLI y OpenCode: su documentación y código en `google-gemini/gemini-cli@main` y `anomalyco/opencode@dev`, leídos con `gh api`. No se instalaron ni se probaron, así que todo lo suyo es **(doc)**, y lo que ni siquiera está escrito ahí es **(inferido)**.
@@ -11,9 +11,9 @@ Diseño para que Skills, Plugins y Connectors (servidores MCP) de quill muestren
 
 ---
 
-## 1. quill hoy
+## 1. Newen hoy
 
-### 1.1 Contrato (`crates/quill-agent/src/lib.rs`)
+### 1.1 Contrato (`crates/newen-agent/src/lib.rs`)
 
 | Pieza | Qué es | Claude | Codex |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Diseño para que Skills, Plugins y Connectors (servidores MCP) de quill muestren
 | `AgentCapabilities::mcp` | La sesión informa y controla sus servidores MCP | sí | no |
 | `McpSource` | User, Project, Local, Managed, Plugin, Account, App, Other | Sale del nombre: `plugin:` es Plugin, `claude.ai ` es Account, `sdk` es App, y todo lo demás es Other | — |
 
-### 1.2 Motor (`crates/quill-engine/src/lib.rs`)
+### 1.2 Motor (`crates/newen-engine/src/lib.rs`)
 
 - `server_op` (lib.rs ~655): corre `extension_op` y después `servers_query`, y contesta `Event::Servers{agent, folder, servers, scopes, error}`.
 - `extensions` (~698): corre la operación, después `plugins_query`, `marketplaces_query` y `skills_of`, y contesta `Event::Extensions`. Si el cambio salió bien, las sesiones del mismo agente reciben `ReloadPlugins` o `ReloadSkills`.
@@ -33,16 +33,16 @@ Diseño para que Skills, Plugins y Connectors (servidores MCP) de quill muestren
 - `registry.rs`: Discover consulta el registro público de MCP, que no depende de ningún agente.
 - `servers.rs` no tiene que ver con MCP: son los dev servers de `preview_start`.
 
-### 1.3 UI (`crates/quill-ui/src/view.rs` 9513–10500, `lib.rs` 1983–2020 y 3937–4330)
+### 1.3 UI (`crates/newen-ui/src/view.rs` 9513–10500, `lib.rs` 1983–2020 y 3937–4330)
 
 - `customize_pages`: Skills, Plugins y Connectors en la columna de Settings. Cada página recorre `ui.agents` y arma secciones por agente. Los Skills se titulan "{agent} › {source}" cuando hay más de un agente.
 - **El botón Add del header solo actúa para el primer agente** (`connectors_page`: `ui.agents.first()`, y en Plugins el primero que ya tiene extensiones), como dice el atajo de view.rs:9541.
 - **Problema probable** (visto leyendo el código, no ejecutado): `skills_page` descarta a un agente sin alcances (`.filter(|k| !k.list.scopes.is_empty())`), y Codex devuelve alcances vacíos. Con Codex, "Looking for skills…" quedaría girando para siempre.
 - `/mcp` (ui.md §2.11b) muestra los servidores de la sesión en curso. Lo ofrece solo un agente con `capabilities.mcp`.
 
-### 1.4 Lo que quill guarda hoy
+### 1.4 Lo que Newen guarda hoy
 
-Nada sobre extensiones: todo se lee en vivo de los CLIs. `settings.json` (`config_dir()/quill/settings.json`, engine lib.rs:115) guarda `agents.<id>.{program, model, effort, mode, allow_unsafe, options, env}`. Los logos se piden con las claves `mcp:<label>` y `plugin:<name>`. **No hay datos que migrar**: ver §6.
+Nada sobre extensiones: todo se lee en vivo de los CLIs. `settings.json` (`config_dir()/newen/settings.json`, engine lib.rs:115) guarda `agents.<id>.{program, model, effort, mode, allow_unsafe, options, env}`. Los logos se piden con las claves `mcp:<label>` y `plugin:<name>`. **No hay datos que migrar**: ver §6.
 
 ---
 
@@ -59,10 +59,10 @@ Leyenda: ✔ verificado (help del CLI o esquema o código), **(doc)** solo leíd
 | **Listar** | `claude mcp list` (texto; revisa la salud de cada servidor, y es lento) ✔; `claude mcp get <n>` ✔ | `codex mcp list --json` ✔, que devuelve `name, enabled, disabled_reason, transport{…}, auth_status` sin decir de dónde viene cada uno; `codex mcp get <n> --json` ✔; en la sesión, `mcpServerStatus/list{threadId?}` ✔ con `pluginId`, `authStatus`, `tools` | `gemini mcp list` | `opencode mcp list` |
 | **Agregar** | `claude mcp add [-t] [-s local\|user\|project] [-e K=V] [-H] name target [-- args]` ✔; `add-json` ✔ | `codex mcp add <n> (--url U \| -- cmd…) [--env K=V] [--bearer-token-env-var V]` ✔, **solo en user**; `config/value/write{keyPath, value, filePath?}` ✔ puede escribir en otro archivo | `gemini mcp add [-s user\|project]` (por defecto project) | `opencode mcp add` (interactivo) o el `POST /mcp` de `opencode serve` |
 | **Quitar** | `claude mcp remove <n> [-s]` ✔ | `codex mcp remove <n>` ✔ | `gemini mcp remove [-s]` | No hay comando: se edita la configuración o se usa la API |
-| **Apagar sin quitar** | Para la sesión: el pedido de control `mcp_toggle` ✔ (quill). Fijo: `disabledMcpjsonServers` (solo `.mcp.json`) | Fijo: `enabled = false` en el TOML. Para el proceso: `-c mcp_servers.<n>.enabled=false` (inferido de `-c`). **No hay apagado de sesión** en el esquema | `gemini mcp enable\|disable [--session]` | `"enabled": false`, y `connect`/`disconnect` en la API |
+| **Apagar sin quitar** | Para la sesión: el pedido de control `mcp_toggle` ✔ (Newen). Fijo: `disabledMcpjsonServers` (solo `.mcp.json`) | Fijo: `enabled = false` en el TOML. Para el proceso: `-c mcp_servers.<n>.enabled=false` (inferido de `-c`). **No hay apagado de sesión** en el esquema | `gemini mcp enable\|disable [--session]` | `"enabled": false`, y `connect`/`disconnect` en la API |
 | **Autenticar (OAuth)** | En la sesión: `mcp_authenticate` y `mcp_clear_auth` ✔; desde la terminal: `claude mcp login\|logout <n>` ✔ | `codex mcp login\|logout <n>` ✔; `mcpServer/oauth/login{name, threadId?}` → `authorizationUrl`, y después `mcpServer/oauthLogin/completed` ✔ | `/mcp auth` (solo dentro de la sesión) | `opencode mcp auth\|logout` |
 | **Alcances** | local, project, user, y además managed, plugin y la cuenta (claude.ai) | user y project (este solo editando el archivo), system o gestionado, y plugin | user, project, system y extensión | global, project, remoto y gestionado |
-| **Override por sesión** | `--mcp-config <json\|archivo>…` ✔, que **suma** servidores; `--strict-mcp-config` ✔ (descarta los demás, quill no lo usa) | `-c mcp_servers.<n>.<k>=<toml>` ✔ (capa `sessionFlags`), y `thread/start.config` (objeto libre ✔, que se carga como `request_overrides` en la misma capa, ✔ `app-server/src/config_manager.rs:484`; con `mcp_servers` es **inferido**, quill ya lo hace con `tools.update_plan`) | `--allowed-mcp-server-names` (solo filtra); ACP `session/new{mcpServers}` (inferido) | `OPENCODE_CONFIG_CONTENT` o `OPENCODE_CONFIG` |
+| **Override por sesión** | `--mcp-config <json\|archivo>…` ✔, que **suma** servidores; `--strict-mcp-config` ✔ (descarta los demás, Newen no lo usa) | `-c mcp_servers.<n>.<k>=<toml>` ✔ (capa `sessionFlags`), y `thread/start.config` (objeto libre ✔, que se carga como `request_overrides` en la misma capa, ✔ `app-server/src/config_manager.rs:484`; con `mcp_servers` es **inferido**, Newen ya lo hace con `tools.update_plan`) | `--allowed-mcp-server-names` (solo filtra); ACP `session/new{mcpServers}` (inferido) | `OPENCODE_CONFIG_CONTENT` o `OPENCODE_CONFIG` |
 | **Recargar** | `reload_plugins` | `config/mcpServer/reload` ✔ | `/mcp reload` | (inferido) |
 
 ### 2.2 Skills
@@ -73,7 +73,7 @@ Leyenda: ✔ verificado (help del CLI o esquema o código), **(doc)** solo leíd
 | **Dónde** | `~/.claude/skills`, `.claude/skills` del proyecto, y los skills de plugins (`plugin:skill`) | `$CODEX_HOME/skills` (obsoleto), `~/.agents/skills`, `.codex/skills` del proyecto, `.agents/skills` en cada carpeta desde la raíz hasta el cwd, `/etc/codex/skills` (admin) y el caché del sistema ✔ (`ext/skills/src/host_roots.rs`) | `~/.gemini/skills`, `~/.agents/skills`, `.gemini/skills`, `.agents/skills` | `.opencode/skills`, `~/.config/opencode/skills`, **`~/.claude/skills`**, `.claude/skills`, `~/.agents/skills` |
 | **Listar** | `get_skills_dialog` en la sesión ✔ | `skills/list{cwds, forceReload}` ✔, con `scope ∈ user\|repo\|system\|admin`, `enabled` y `pluginId` | `gemini skills list` | — |
 | **Estado** | `edit-skill-overrides --json` ✔ (`skillOverrides` en los ajustes locales), con 4 estados | `skills/config/write{path\|name, enabled}` ✔: solo on u off | `gemini skills enable\|disable` | `permission.skill` |
-| **Override por sesión** | `--plugin-dir <dir>` ✔ (un plugin con `skills/`, que quedan con el prefijo del plugin, inferido); `--add-dir` (inferido: no está claro si carga los `.claude/skills` de esa carpeta) | `skills/extraRoots/set{extraRoots}` ✔, que vale para el proceso app-server (quill usa uno por sesión) | extensión (inferido) | `OPENCODE_CONFIG_CONTENT` (inferido) |
+| **Override por sesión** | `--plugin-dir <dir>` ✔ (un plugin con `skills/`, que quedan con el prefijo del plugin, inferido); `--add-dir` (inferido: no está claro si carga los `.claude/skills` de esa carpeta) | `skills/extraRoots/set{extraRoots}` ✔, que vale para el proceso app-server (Newen usa uno por sesión) | extensión (inferido) | `OPENCODE_CONFIG_CONTENT` (inferido) |
 
 **¿Son compatibles?** El núcleo sí: carpeta, `SKILL.md`, `name` y `description`. Las claves que solo entiende Claude (por ejemplo `allowed-tools`, `model`) Codex las ignora sin fallar (inferido: su parser solo pide `name` y `description`). OpenCode es más estricto con el nombre. `~/.agents/skills` lo leen Codex, Gemini y OpenCode, pero **Claude no**.
 
@@ -95,7 +95,7 @@ Leyenda: ✔ verificado (help del CLI o esquema o código), **(doc)** solo leíd
 | Qué son | Los conectores de claude.ai, que aparecen como `claude.ai <Nombre>` en `mcp list` (`McpSource::Account`) | Las "apps" de la cuenta de ChatGPT: `app/list\|read\|installed` ✔ en el esquema (no capturado) | No existen (doc) |
 | Se administran en | claude.ai | chatgpt.com (inferido) | — |
 
-En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la cuenta de cada proveedor.
+En Newen solo se **leen**. La capa Global no los incluye, porque pertenecen a la cuenta de cada proveedor.
 
 ---
 
@@ -107,23 +107,23 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 2. **Un selector de agente en el header:** el chip `[◉ All agents ▾]`, al lado del de la carpeta, con el mismo estilo de `customize::folder_chip`. Sus entradas son "All agents", "Global only" y una por agente con el logo que trae su adaptador (`AgentAdapter::icon`).
 3. **Secciones por agente:** con "All agents", la página muestra primero **Global · all agents** y después una sección por agente ("Claude Code", "Codex"), con su logo de 16 px en el título. Dentro de cada sección siguen los grupos por origen que ya existen ("User", "Project", "from a plugin").
 4. **Con un agente elegido**, la página muestra lo que *ese* agente va a usar: lo suyo más lo Global que le aplica, marcado con la pastilla "Global". Es la vista "efectiva".
-5. **Desktop no tiene varios agentes,** así que el selector y las marcas por agente son diseño de quill (inferido). Lo demás sigue las medidas de ui.md §2.11: filas de 63 px, recuadro de 36, menú "⋯" y secciones de 16 px.
+5. **Desktop no tiene varios agentes,** así que el selector y las marcas por agente son diseño de Newen (inferido). Lo demás sigue las medidas de ui.md §2.11: filas de 63 px, recuadro de 36, menú "⋯" y secciones de 16 px.
 
 ### 3.2 Connectors, con "All agents"
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
-│ Connectors   [Yours] Discover          [Search…]  [◉ All agents ▾]  [▣ quill ▾]  [+ Add ▾] │
+│ Connectors   [Yours] Discover          [Search…]  [◉ All agents ▾]  [▣ Newen ▾]  [+ Add ▾] │
 │                                                                                      │
 │ Global · all agents  (2)                                              [Manage…]      │
 │ ┌──┐ github                                                         ◐C ◐X    ⋯      │
-│ │▣ │ from quill · npx -y @modelcontextprotocol/server-github                          │
+│ │▣ │ from Newen · npx -y @modelcontextprotocol/server-github                          │
 │ └──┘─────────────────────────────────────────────────────────────────────────────────│
 │ ┌──┐ linear                                                         ◐C ⚠X    ⋯      │
-│ │▣ │ from quill · https://mcp.linear.app/mcp · Codex uses its own "linear"            │
+│ │▣ │ from Newen · https://mcp.linear.app/mcp · Codex uses its own "linear"            │
 │ └──┘─────────────────────────────────────────────────────────────────────────────────│
 │ ┌──┐ legacy-sse                                                     ◐C ⊘X    ⋯      │
-│ │▣ │ from quill · https://old.example/sse · Not available in Codex (SSE)              │
+│ │▣ │ from Newen · https://old.example/sse · Not available in Codex (SSE)              │
 │ └──┘─────────────────────────────────────────────────────────────────────────────────│
 │                                                                                      │
 │ (C) Claude Code  (4)                                                                 │
@@ -137,7 +137,7 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Marcas por agente** (componente de quill `customize::agent_marks`; ícono de 14 px por agente al final de la fila):
+- **Marcas por agente** (componente de Newen `customize::agent_marks`; ícono de 14 px por agente al final de la fila):
   - lleno: se aplica en ese agente;
   - atenuado: la persona lo sacó de ese agente;
   - ⚠: ese agente tiene uno propio con el mismo nombre, y gana el suyo;
@@ -155,17 +155,17 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 ### 3.3 Skills y Plugins
 
 ```text
-│ Skills          [Search…]  [◉ All agents ▾]  [▣ quill ▾]  [+ Add ▾]                    │
+│ Skills          [Search…]  [◉ All agents ▾]  [▣ Newen ▾]  [+ Add ▾]                    │
 │ Global · all agents  (1)                                                             │
 │ ┌──┐ release-notes                                               ◐C ◐X ◐G ◐O   ⋯    │
-│ │▤ │ from quill · Writes release notes from the git log                               │
+│ │▤ │ from Newen · Writes release notes from the git log                               │
 │ (C) Claude Code › User  (3)        …las filas de hoy, con su estado al final           │
 │ (C) Claude Code › Plugin  (12)                                                        │
 │ (X) Codex › User  (9)              On / Off                                          │
 │ (X) Codex › System  (4)            [locked: "Built into Codex"]                       │
 ```
 
-- **Global de skills:** son las carpetas `SKILL.md` que quill guarda (§4.1). "+ Add ▾" ofrece "New skill…", "Import folder…" y "Make global" desde la fila de un agente, que copia la carpeta.
+- **Global de skills:** son las carpetas `SKILL.md` que Newen guarda (§4.1). "+ Add ▾" ofrece "New skill…", "Import folder…" y "Make global" desde la fila de un agente, que copia la carpeta.
 - **Avisos por agente** en la marca: "Name must be lowercase-with-dashes for OpenCode" o "Uses `allowed-tools`, which Codex ignores". Son avisos, no bloquean: el skill se aplica igual. Lo que lo hace inusable (un nombre que el agente rechaza) sale como ⊘.
 - **Plugins no tiene sección Global** (§2.3). En cambio:
   - el "+" de una tarjeta de Discover abre "Install for ▸", con un submenú por agente y sus alcances;
@@ -177,7 +177,7 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 ```text
 │ Connectors   [Yours] Discover          [(X) Codex ▾]  [+ Add ▾]                          │
 │ Codex will use  (6)                                                                  │
-│ ┌──┐ github      [Global]           from quill · npx -y …                         ⋯  │
+│ ┌──┐ github      [Global]           from Newen · npx -y …                         ⋯  │
 │ ┌──┐ linear                         On · All my projects ·                         ⋯  │
 │ │  │             Global "linear" is not used: Codex has its own                       │
 │ ┌──┐ node_repl                      On · from a plugin                                │
@@ -193,8 +193,8 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 │ Runs        (•) Command   ( ) Address                      │
 │ Command     [npx -y @modelcontextprotocol/server-github]   │
 │ Variables   GITHUB_TOKEN = [••••••••••]  [🔒 Secret ✓]     │
-│ Where       [All agents (quill)                       ▾]   │
-│                All agents (quill)                          │
+│ Where       [All agents (Newen)                       ▾]   │
+│                All agents (Newen)                          │
 │                ── Claude Code ──                           │
 │                All my projects                             │
 │                This project, shared                        │
@@ -206,13 +206,13 @@ En quill solo se **leen**. La capa Global no los incluye, porque pertenecen a la
 └────────────────────────────────────────────────────────────┘
 ```
 
-- "Where" es la lista de hoy (`server_scopes`), agrupada por agente, con "All agents (quill)" primero. Si `DropdownMenu` de limn no tiene títulos de grupo, se pide un PR a limn (AGENTS.md).
+- "Where" es la lista de hoy (`server_scopes`), agrupada por agente, con "All agents (Newen)" primero. Si `DropdownMenu` de limn no tiene títulos de grupo, se pide un PR a limn (AGENTS.md).
 - Con "All agents", "Address" ofrece http y sse. Un agente sin sse sale desmarcado y con su motivo.
 - Una variable o un header marcados "Secret" no se escriben en ningún archivo (§4.3).
 
 ### 3.6 Diálogo `/mcp` de la sesión
 
-La columna Type suma "Global", como pastilla y con el logo de quill no, con la palabra. El motor la pone cuando el nombre del servidor está entre los que inyectó (§5.2). El resto no cambia.
+La columna Type suma "Global", como pastilla y con el logo de Newen no, con la palabra. El motor la pone cuando el nombre del servidor está entre los que inyectó (§5.2). El resto no cambia.
 
 ---
 
@@ -220,8 +220,8 @@ La columna Type suma "Global", como pastilla y con el logo de quill no, con la p
 
 ### 4.1 Dónde vive
 
-- **Archivo propio:** `config_dir()/quill/extensions.json`, al lado de `settings.json`. Lo escribe solo el motor (`quill-engine`, fuera del hilo de la UI), y guarda antes de avisar (AGENTS.md).
-- **Skills globales:** `config_dir()/quill/skills/<name>/SKILL.md`. Así un repositorio de dotfiles se los lleva con el resto de la configuración.
+- **Archivo propio:** `config_dir()/newen/extensions.json`, al lado de `settings.json`. Lo escribe solo el motor (`newen-engine`, fuera del hilo de la UI), y guarda antes de avisar (AGENTS.md).
+- **Skills globales:** `config_dir()/newen/skills/<name>/SKILL.md`. Así un repositorio de dotfiles se los lleva con el resto de la configuración.
 
 ```json
 {
@@ -242,25 +242,25 @@ La columna Type suma "Global", como pastilla y con el logo de quill no, con la p
 ```
 
 - `except` es una lista negra: **un agente nuevo recibe todo** lo que es compatible con él (P6).
-- Un valor es texto plano, o `{ "secret": "<clave>" }` en el llavero, o `{ "env": "NAME" }`, que toma la variable del entorno de quill.
+- Un valor es texto plano, o `{ "secret": "<clave>" }` en el llavero, o `{ "env": "NAME" }`, que toma la variable del entorno de Newen.
 
 ### 4.2 Cómo se aplica: inyección por sesión (recomendada)
 
 | Agente | Servidores | Skills |
 |---|---|---|
-| Claude | `--mcp-config '<json>'` ✔, sin `--strict-mcp-config`, así que suma a los de la persona. Los secretos van como `${QUILL_MCP_…}` (inferido: Claude expande `${VAR}` en `.mcp.json`; hay que verificar que haga lo mismo en `--mcp-config`, V1) | `--plugin-dir <config>/quill/claude-plugin` ✔: un plugin que quill genera con `.claude-plugin/plugin.json {"name":"quill"}` y `skills/` apuntando a la carpeta global. Los skills quedan como `quill:<name>` (inferido, V4) |
-| Codex | `thread/start.config.mcp_servers.<n>` (inferido, V2), que viaja por stdin y no por argv. Los secretos se pasan con `env_vars`, `env_http_headers` y `bearer_token_env_var` ✔, que solo nombran variables | `skills/extraRoots/set{extraRoots:[<config>/quill/skills]}` ✔, después de `initialize` |
-| Gemini | ACP `session/new{mcpServers}` (inferido) | una extensión que quill genere, o `~/.agents/skills` (inferido) |
+| Claude | `--mcp-config '<json>'` ✔, sin `--strict-mcp-config`, así que suma a los de la persona. Los secretos van como `${NEWEN_MCP_…}` (inferido: Claude expande `${VAR}` en `.mcp.json`; hay que verificar que haga lo mismo en `--mcp-config`, V1) | `--plugin-dir <config>/newen/claude-plugin` ✔: un plugin que Newen genera con `.claude-plugin/plugin.json {"name":"newen"}` y `skills/` apuntando a la carpeta global. Los skills quedan como `newen:<name>` (inferido, V4) |
+| Codex | `thread/start.config.mcp_servers.<n>` (inferido, V2), que viaja por stdin y no por argv. Los secretos se pasan con `env_vars`, `env_http_headers` y `bearer_token_env_var` ✔, que solo nombran variables | `skills/extraRoots/set{extraRoots:[<config>/newen/skills]}` ✔, después de `initialize` |
+| Gemini | ACP `session/new{mcpServers}` (inferido) | una extensión que Newen genere, o `~/.agents/skills` (inferido) |
 | OpenCode | `OPENCODE_CONFIG_CONTENT='{"mcp":…}'` (doc) | `OPENCODE_CONFIG_CONTENT` (inferido) |
 
 **Inyectar o escribir en los archivos de cada CLI:**
 
 | | Inyección por sesión | Escribir con `claude mcp add -s user` o `codex mcp add` |
 |---|---|---|
-| Los archivos de la persona | No se tocan | Se modifican, y hay que saber cuáles creó quill y cuáles no |
+| Los archivos de la persona | No se tocan | Se modifican, y hay que saber cuáles creó Newen y cuáles no |
 | Fuente de verdad | Una: `extensions.json` | Dos, que se desincronizan si la persona edita a mano |
 | Secretos | En el llavero; solo llegan al proceso | En texto plano dentro de `~/.claude.json` o `config.toml` |
-| Fuera de quill (la terminal) | No se aplican | Se aplican |
+| Fuera de Newen (la terminal) | No se aplican | Se aplican |
 | Estado y OAuth | Los da la sesión (`/mcp`). `mcp list` desde la terminal no los ve | Los ve el CLI como cualquier otro |
 | Quitar | Se borra la entrada y listo | Hay que adivinar en qué alcance quedó |
 
@@ -268,29 +268,29 @@ La columna Type suma "Global", como pastilla y con el logo de quill no, con la p
 
 ### 4.3 Secretos
 
-- Se guardan en el llavero del sistema: el crate `keyring`, servicio `quill`, cuenta `mcp/<server>/<KEY>`. engine.md §7 ya preveía esto, con la política de no seguir si no hay Secret Service. Agregar `keyring` necesita su comentario en `Cargo.toml` (AGENTS.md).
-- **Al arrancar una sesión**, el motor resuelve cada secreto y lo pone en el **entorno del proceso** del agente, como `QUILL_MCP_<SERVER>_<KEY>`. La configuración inyectada solo lleva el *nombre* de la variable. Ningún secreto queda en argv (`/proc/<pid>/cmdline` lo puede leer cualquier usuario), en un archivo ni en el log.
-- **Límite conocido:** las herramientas de shell del agente heredan su entorno, así que el modelo podría leer la variable. Codex filtra por defecto las variables con `KEY`, `SECRET` o `TOKEN` en el nombre al pasárselas al shell (inferido de `shell_environment_policy`), y por eso el nombre termina en `_TOKEN`. De Claude no se sabe que filtre nada (inferido). Si esto no alcanza: un archivo `0600` en `$XDG_RUNTIME_DIR/quill/<session>.mcp.json`, que se borra al terminar (P3).
+- Se guardan en el llavero del sistema: el crate `keyring`, servicio `newen`, cuenta `mcp/<server>/<KEY>`. engine.md §7 ya preveía esto, con la política de no seguir si no hay Secret Service. Agregar `keyring` necesita su comentario en `Cargo.toml` (AGENTS.md).
+- **Al arrancar una sesión**, el motor resuelve cada secreto y lo pone en el **entorno del proceso** del agente, como `NEWEN_MCP_<SERVER>_<KEY>`. La configuración inyectada solo lleva el *nombre* de la variable. Ningún secreto queda en argv (`/proc/<pid>/cmdline` lo puede leer cualquier usuario), en un archivo ni en el log.
+- **Límite conocido:** las herramientas de shell del agente heredan su entorno, así que el modelo podría leer la variable. Codex filtra por defecto las variables con `KEY`, `SECRET` o `TOKEN` en el nombre al pasárselas al shell (inferido de `shell_environment_policy`), y por eso el nombre termina en `_TOKEN`. De Claude no se sabe que filtre nada (inferido). Si esto no alcanza: un archivo `0600` en `$XDG_RUNTIME_DIR/newen/<session>.mcp.json`, que se borra al terminar (P3).
 - **Sin llavero:** solo se aceptan `{ "env": "NAME" }` y texto que no es secreto, y el diálogo lo dice.
-- **OAuth:** quill no guarda tokens (engine.md §2, auth delegada). Cada CLI guarda la sesión de cada servidor inyectado, así que un servidor Global con OAuth se conecta una vez *por agente*. La fila Global lo muestra por agente: "Claude Code: signed in · Codex: Connect".
+- **OAuth:** Newen no guarda tokens (engine.md §2, auth delegada). Cada CLI guarda la sesión de cada servidor inyectado, así que un servidor Global con OAuth se conecta una vez *por agente*. La fila Global lo muestra por agente: "Claude Code: signed in · Codex: Connect".
 
 ### 4.4 Precedencia
 
 De mayor a menor:
 
-1. **Lo gestionado** (managed o enterprise del CLI), que el CLI impone y quill no puede cambiar.
+1. **Lo gestionado** (managed o enterprise del CLI), que el CLI impone y Newen no puede cambiar.
 2. **El interruptor de la sesión** (`/mcp`, `mcp_toggle`), que dura solo esa sesión.
 3. **El proyecto según el CLI** (`.mcp.json`, `projects[...]`, `.codex/config.toml`, `.claude/skills`, `.agents/skills`).
 4. **La persona según el CLI** (user o local).
-5. **Global de quill.**
+5. **Global de Newen.**
 
-**Regla de nombres:** si el agente ya tiene un servidor (o un skill) con el mismo nombre, **gana el del agente y quill no inyecta el Global en ese agente**. La fila muestra ⚠, salvo que la definición sea la misma, y entonces dice "Same as Global" sin aviso. Esto hace falta porque Codex pone `sessionFlags` por encima de todo: si quill no lo filtrara, el Global taparía el servidor de la persona. El motor decide con la última lista que leyó de ese agente (`Event::Servers` y `Event::Extensions`, que quedan guardadas en el motor). Si todavía no tiene ninguna, inyecta igual y deja la decisión al CLI (V3).
+**Regla de nombres:** si el agente ya tiene un servidor (o un skill) con el mismo nombre, **gana el del agente y Newen no inyecta el Global en ese agente**. La fila muestra ⚠, salvo que la definición sea la misma, y entonces dice "Same as Global" sin aviso. Esto hace falta porque Codex pone `sessionFlags` por encima de todo: si Newen no lo filtrara, el Global taparía el servidor de la persona. El motor decide con la última lista que leyó de ese agente (`Event::Servers` y `Event::Extensions`, que quedan guardadas en el motor). Si todavía no tiene ninguna, inyecta igual y deja la decisión al CLI (V3).
 
 ---
 
 ## 5. Cambios
 
-### 5.1 Contrato (`quill-agent`, sin nombres de proveedor)
+### 5.1 Contrato (`newen-agent`, sin nombres de proveedor)
 
 ```rust
 pub enum Transport { Stdio, Http, Sse }
@@ -353,7 +353,7 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
   - `customize_header` suma el chip de agente;
   - `connectors_page`, `skills_page` y `plugins_page` arman la sección Global y la vista efectiva;
   - se quita el atajo "primer agente" (view.rs:9541, 9585) y se corrige el filtro de alcances vacíos en `skills_page`.
-- **quill-components:** `customize::agent_marks`, que es composición de quill y no un componente genérico.
+- **newen-components:** `customize::agent_marks`, que es composición de Newen y no un componente genérico.
 - **Diálogo Add:** "Where" agrupado por agente y "Secret" en cada variable o header.
 - **El estado de la UI** suma `ui.global: Option<GlobalExtensions>` y `ui.customize_agent: Option<String>`. La elección se guarda en `settings.json` (`customize_agent`), como el resto de las preferencias de página.
 
@@ -361,7 +361,7 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
 
 ## 6. Migración
 
-- **Datos:** no hay nada que migrar. quill no guarda extensiones: `ui.extensions` y `connectors.listed` ya están separados por agente. `extensions.json` se crea cuando se agrega el primer Global.
+- **Datos:** no hay nada que migrar. Newen no guarda extensiones: `ui.extensions` y `connectors.listed` ya están separados por agente. `extensions.json` se crea cuando se agrega el primer Global.
 - **`NewServer.remote`** viaja solo en un Intent y no se guarda. Pasa a `transport` sin compatibilidad hacia atrás.
 - **"Make global"** es opcional y lo hace la persona, fila por fila. Toma la definición completa de `codex mcp get <n> --json` ✔ o de `claude mcp get <n>` (texto: el parser se arma con una captura, V5). Si la definición trae valores de variables, se guardan **directo en el llavero**: no se muestran ni van al log. Después pregunta "Remove it from Claude Code's config?" (`RemoveServer`).
 - **Textos:** "from your account" y "from a plugin" siguen viniendo de `McpSource`. Lo que solo dice "Claude" pasa a nombrar al agente (`AgentInfo.name`).
@@ -372,9 +372,9 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
 
 | Fase | Contenido | Pruebas |
 |---|---|---|
-| **0. Codex al nivel de Claude, por agente** | Lo de Codex de §5.1 (servidores, plugins, marketplaces, skills, MCP de la sesión), `mcp_toggle`, la corrección de `skills_page` y el Add por agente | Captura nueva `fixtures/0.163.0/mcp-list.json` (sin valores); parseo de `mcp list --json`, de `plugin list --json` y de `skills/list`; los `ProgramRun` de cada `ExtensionOp`, como los de Claude (`crates/quill-agent-codex/src/tests.rs`); en la UI, que una página con dos agentes muestre las dos secciones y que el Add de cada sección mande su `agent` |
+| **0. Codex al nivel de Claude, por agente** | Lo de Codex de §5.1 (servidores, plugins, marketplaces, skills, MCP de la sesión), `mcp_toggle`, la corrección de `skills_page` y el Add por agente | Captura nueva `fixtures/0.163.0/mcp-list.json` (sin valores); parseo de `mcp list --json`, de `plugin list --json` y de `skills/list`; los `ProgramRun` de cada `ExtensionOp`, como los de Claude (`crates/newen-agent-codex/src/tests.rs`); en la UI, que una página con dos agentes muestre las dos secciones y que el Add de cada sección mande su `agent` |
 | **1. Secciones y selector de agente** | Chip de agente, secciones con logo, vista efectiva sin Global, "Where" agrupado | Pruebas de la UI en `tests.rs`: el chip filtra y una sección vacía dice "No connectors yet" con el nombre del agente |
-| **2. Servidores Global** | `global.rs`, el llavero, `SessionSpec.servers`, cómo aplica cada adaptador, la regla de nombres, `McpSource::Global`, la sección Global y las marcas | Ida y vuelta de `extensions.json`; `plan()` con conflicto, servidor excluido, transporte rechazado y lista desconocida; en `launch` de Claude, `--mcp-config` con `${QUILL_MCP_…}` **y ningún valor secreto en args**; en `thread/start` de Codex, `config.mcp_servers` con `env_vars` y sin valores; un `LaunchPlan` con el secreto solo en `env`; persistir antes de notificar (el archivo existe cuando sale `Event::Global`) |
+| **2. Servidores Global** | `global.rs`, el llavero, `SessionSpec.servers`, cómo aplica cada adaptador, la regla de nombres, `McpSource::Global`, la sección Global y las marcas | Ida y vuelta de `extensions.json`; `plan()` con conflicto, servidor excluido, transporte rechazado y lista desconocida; en `launch` de Claude, `--mcp-config` con `${NEWEN_MCP_…}` **y ningún valor secreto en args**; en `thread/start` de Codex, `config.mcp_servers` con `env_vars` y sin valores; un `LaunchPlan` con el secreto solo en `env`; persistir antes de notificar (el archivo existe cuando sale `Event::Global`) |
 | **3. Skills Global** | La carpeta global, el plugin generado para Claude, `skills/extraRoots/set`, las validaciones `refuses_skill`, New, Import y Make global | El frontmatter que acepta y el que rechaza cada adaptador; el plugin generado tiene `plugin.json` válido; `Start` de Codex incluye `skills/extraRoots/set` |
 | **4. Copiar entre capas, y marketplaces para varios agentes** | "Copy into…", "Make global…", "Add marketplace" e "Install for" para varios agentes | Que `extension_op` se llame para cada agente marcado; que el error de uno no corte los demás |
 | **5. Gemini y OpenCode** | Cada uno con su adaptador y su fase de captura, como Codex (agents.md) | Sus propias capturas |
@@ -393,21 +393,21 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
 
 ## 8. Preguntas para el dueño
 
-1. **¿Global solo dentro de quill (inyección) o también en la terminal?** La recomendación es solo en quill, más "Copy into…" cuando haga falta.
-2. **¿La carpeta global de skills es la de quill o `~/.agents/skills`?** `~/.agents/skills` ya la leen Codex, Gemini y OpenCode también fuera de quill, pero es una carpeta compartida que quill pasaría a escribir.
+1. **¿Global solo dentro de Newen (inyección) o también en la terminal?** La recomendación es solo en Newen, más "Copy into…" cuando haga falta.
+2. **¿La carpeta global de skills es la de Newen o `~/.agents/skills`?** `~/.agents/skills` ya la leen Codex, Gemini y OpenCode también fuera de Newen, pero es una carpeta compartida que Newen pasaría a escribir.
 3. **Secretos:** ¿alcanza con la variable de entorno del proceso (que el shell del agente puede leer), o se prefiere el archivo `0600` temporal para Claude?
 4. **Conflicto de nombres:** ¿gana el del agente (propuesto) o el Global?
 5. **Agente nuevo:** ¿recibe todo lo Global compatible (lista negra, propuesto) o hay que habilitarlo uno por uno?
-6. **¿Hace falta un Global por proyecto** (por ejemplo `.quill/extensions.json`)? Hoy no está en el diseño.
+6. **¿Hace falta un Global por proyecto** (por ejemplo `.newen/extensions.json`)? Hoy no está en el diseño.
 7. **Plugins:** ¿alcanza con "Install for" y "Add marketplace" para varios agentes, o se quiere una capa Global de plugins?
 8. **¿Se acepta la dependencia `keyring`?** Sin Secret Service: ¿no se guardan secretos, o se avisa y se permite el texto plano?
-9. **¿Se ofrece el importador propio de Codex** (`externalAgentConfig/detect|import` ✔: MCP_SERVER_CONFIG, SKILLS, PLUGINS…)? Escribe en la configuración de Codex, no en la de quill.
+9. **¿Se ofrece el importador propio de Codex** (`externalAgentConfig/detect|import` ✔: MCP_SERVER_CONFIG, SKILLS, PLUGINS…)? Escribe en la configuración de Codex, no en la de Newen.
 10. **Conectores de cuenta** (claude.ai, apps de ChatGPT): ¿solo se leen por agente, o se abren las páginas del proveedor para administrarlos?
 
 ## 9. Decisiones del dueño (2026-10-28)
 
-1. **Alcance.** Desde quill se agregan, quitan y activan skills, MCPs y conectores **en cada CLI** (Claude, Codex y los que vengan), con los comandos propios de cada uno (`claude mcp add|remove`, `codex mcp add|remove`, carpetas de skills de cada CLI). Eso queda también en la terminal. Además existe la capa **"All agents"**, que quill inyecta por sesión (no escribe en los archivos de los CLIs). El diálogo de agregar ofrece el destino: uno o varios CLIs, o "All agents".
-2. **Skills globales:** carpeta propia de quill (`config_dir/quill/skills/`), inyectada por sesión. Las skills de un CLI van a la carpeta de ese CLI.
+1. **Alcance.** Desde Newen se agregan, quitan y activan skills, MCPs y conectores **en cada CLI** (Claude, Codex y los que vengan), con los comandos propios de cada uno (`claude mcp add|remove`, `codex mcp add|remove`, carpetas de skills de cada CLI). Eso queda también en la terminal. Además existe la capa **"All agents"**, que Newen inyecta por sesión (no escribe en los archivos de los CLIs). El diálogo de agregar ofrece el destino: uno o varios CLIs, o "All agents".
+2. **Skills globales:** carpeta propia de Newen (`config_dir/newen/skills/`), inyectada por sesión. Las skills de un CLI van a la carpeta de ese CLI.
 3. **Secretos:** llavero del sistema (dependencia `keyring`), llegan al agente como variable de entorno.
 4. **Conflicto de nombres:** gana el del CLI; el global queda marcado como reemplazado.
 5. Para el resto de las preguntas (5–10) rige la recomendación de este documento.
@@ -420,10 +420,10 @@ pub struct AgentCapabilities { /* … */ pub mcp_toggle: bool } // Codex informa
 
 ## 11. Estado, fases 2 y 3 (2026-10-28, rama `wip/global` de `quill-wt-global`)
 
-- **Fase 2 (servidores globales), hecha.** `quill-engine/src/global.rs`: `extensions.json` (escritura atómica, guarda antes de avisar con `Event::Global`), llavero con `keyring` (`Secrets`: `Keychain` real y `MemorySecrets` para pruebas), `plan()` con la regla de nombres, la exclusión por agente y lo que cada adaptador rechaza. Inyección: Claude con `--mcp-config` (secretos como `${QUILL_MCP_…}`), Codex con `thread/start.config.mcp_servers`. `McpSource::Global`. UI: "All agents" como primera sección de Connectors, "Add to" con "All agents", marcas por agente con su estado.
-- **Fase 3 (skills globales), hecha.** `config_dir/quill/skills/`, "New skill" e "Import a folder", quitar, apagar por agente. Claude: `--plugin-dir` con un plugin que el adaptador genera (`quill:<nombre>`); Codex: `skills/extraRoots/set`.
+- **Fase 2 (servidores globales), hecha.** `newen-engine/src/global.rs`: `extensions.json` (escritura atómica, guarda antes de avisar con `Event::Global`), llavero con `keyring` (`Secrets`: `Keychain` real y `MemorySecrets` para pruebas), `plan()` con la regla de nombres, la exclusión por agente y lo que cada adaptador rechaza. Inyección: Claude con `--mcp-config` (secretos como `${NEWEN_MCP_…}`), Codex con `thread/start.config.mcp_servers`. `McpSource::Global`. UI: "All agents" como primera sección de Connectors, "Add to" con "All agents", marcas por agente con su estado.
+- **Fase 3 (skills globales), hecha.** `config_dir/newen/skills/`, "New skill" e "Import a folder", quitar, apagar por agente. Claude: `--plugin-dir` con un plugin que el adaptador genera (`newen:<nombre>`); Codex: `skills/extraRoots/set`.
 - **Distinto de lo propuesto.** `servers` es una lista y no un mapa en `extensions.json`; `NewServer` conserva `remote` (la capa global tiene su propio `GlobalServer { remote, sse }`, así que no hizo falta el enum `Transport`); no hay `{ "env": NAME }` como valor ni "Edit…" (se agrega de nuevo con el mismo nombre); quitar no pide confirmación; "Use in" es un menú de opciones, no de casillas; la ruta de "Import" se escribe (no hay selector de carpetas); el secreto de un servidor stdio de Codex va con el nombre de la clave (`env_vars` no renombra), con choque entre servidores.
-- **Verificaciones.** V1: sí (también en línea, no solo con archivo). V2: sí. V3: en Claude gana el de `--mcp-config` (por eso filtra quill). V4: `quill:<nombre>`, y `--add-dir` sí carga `.claude/skills`. V7: sí. V5 y V6 sin verificar (no bloquean). Detalle en `docs/agents.md`.
+- **Verificaciones.** V1: sí (también en línea, no solo con archivo). V2: sí. V3: en Claude gana el de `--mcp-config` (por eso filtra Newen). V4: `newen:<nombre>`, y `--add-dir` sí carga `.claude/skills`. V7: sí. V5 y V6 sin verificar (no bloquean). Detalle en `docs/agents.md`.
 - **Sin verificar:** el llavero real (Secret Service); una sesión real de cada CLI con un servidor y un skill globales de punta a punta (se probó cada pieza contra el CLI real, y el motor con el agente falso).
 - **Pendiente:** fase 4 (copiar entre capas, "Make global", marketplaces para varios agentes) y fase 5 (Gemini, OpenCode); recargar una sesión en curso al cambiar Global; el chip de agente y la vista efectiva (§3.1, §3.4).
 
@@ -435,7 +435,7 @@ Customize deja de ser una columna de Ajustes. Lo que sigue es lo que la persona 
 
 - **Entrada:** el «Customize» de la barra lateral abre la página en el lugar de la conversación; la barra lateral queda. Elegir una sesión o «New» la cierra. Ajustes › General conserva «Customize…». El «+» del composer («Browse connectors», «Manage plugins», «Browse plugins») y `/skills` y `/plugin` también abren la página.
 - **Encabezado:** «Customize» en negrita de 22 y el chip de la capa, que abre su menú (All agents y cada agente). No hay engranaje: Ajustes se abre desde la barra lateral o con Ctrl+,.
-- **Pestañas:** Skills, Connectors y Plugins. Una pestaña en la que ningún agente mostrado participa se ve atenuada, no responde y dice por qué en su tooltip («Codex has no plugins quill can manage.»). El motivo sale de lo que declara cada adaptador (`AgentInfo.customize`: si tiene `plugins_query` y `servers_query`), no del nombre del agente.
+- **Pestañas:** Skills, Connectors y Plugins. Una pestaña en la que ningún agente mostrado participa se ve atenuada, no responde y dice por qué en su tooltip («Codex has no plugins Newen can manage.»). El motivo sale de lo que declara cada adaptador (`AgentInfo.customize`: si tiene `plugins_query` y `servers_query`), no del nombre del agente.
 - **Migas:** dentro de un elemento, `Customize › Connectors › github`. Cada parte vuelve atrás. Son el `Breadcrumb` de limn.
 - **Listas largas:** el cuerpo de la página es una lista virtual de limn (`measured_list`): cada fila guarda lo que muestra y se arma y se mide solo al entrar en vista, así que con cientos de skills o conectores un cuadro arma unas 15 filas. Las marcas de «en qué otros agentes está» y la descripción de cada plugin se buscan una vez por cuadro, no por fila, y el logo de un conector se pide por su propia etiqueta.
 - **Barra de cada pestaña, una sola fila:** búsqueda; en Connectors, el filtro de estado como menú compacto (All / Connected / Not connected, con el elegido como rótulo); en Skills y Plugins, el chip de carpeta (y en Skills, «Sort»); «Discover»; y «+ Add ▾». El botón relleno es el que más sirve: Discover mientras la lista está vacía y Add después. En una ventana angosta la barra baja de línea. Arriba quedan solo el título con el chip de la capa y las pestañas.
@@ -444,7 +444,7 @@ Customize deja de ser una columna de Ajustes. Lo que sigue es lo que la persona 
 
 El chip del encabezado elige qué se ve:
 
-- **All agents** (por defecto): primero la sección «All agents», que es la capa propia de quill (§4, se agrega a cada sesión), y después una sección por agente, como antes. Las marcas por agente de cada fila global siguen igual (§3.2).
+- **All agents** (por defecto): primero la sección «All agents», que es la capa propia de Newen (§4, se agrega a cada sesión), y después una sección por agente, como antes. Las marcas por agente de cada fila global siguen igual (§3.2).
 - **Un agente:** solo la sección de ese agente. La capa global no se muestra como sección; en el detalle de un skill global aparece un interruptor para ese agente.
 
 Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
@@ -460,7 +460,7 @@ Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
 ### 12.4 El detalle de un conector
 
 - Encabezado: logo de 36, nombre en 18 negrita, estado, un interruptor y «⋯» (Read its tools again, Remove). El interruptor está apagado con su motivo: un CLI prende y apaga un servidor solo dentro de la sesión (`/mcp`), y la capa global se prende por agente desde su fila.
-- Datos con recuadro de 20: tipo, el comando o la dirección, «Added by» (You, for all your projects / This project's settings / Your organization / A plugin / Your account / quill, for all agents) y «Used by».
+- Datos con recuadro de 20: tipo, el comando o la dirección, «Added by» (You, for all your projects / This project's settings / Your organization / A plugin / Your account / Newen, for all agents) y «Used by».
 - **What it can do:** «Can run code without asking» (un comando: corre un programa en esta computadora al empezar la sesión), «Can send data to other services» (una dirección), y según lo que dicen sus herramientas de sí mismas, «Only reads» o «Can change or delete things». Es **inferido**: la (i) lo dice, porque un servidor puede hacer más de lo que declara.
 - **Tool permissions:** grupos Read-only, Write/delete y Other (por `read_only` y `destructive` del servidor), cada uno con su contador y un menú que fija todo el grupo (Always allow, Needs approval, Blocked, «As the agent decides»). Cada herramienta es una fila de 56 con sangría de 24 y tres íconos con tooltip: círculo con tilde, mano y prohibido. Una bloqueada se ve atenuada. Sin elegir, decide el agente con su propia configuración. Los grupos no se pliegan y no hay «Custom».
 - **De dónde salen las herramientas:** de la última sesión del agente que cargó el servidor; si ninguna lo hizo, el motor arranca el programa del agente sin sesión y le pide el estado de sus servidores (`Intent::ServerTools`), repitiendo cada segundo mientras alguno conecta, 30 s como máximo.
@@ -485,7 +485,7 @@ Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
 ### 12.7 Plugins
 
 - La lista de antes, con una flecha que abre el detalle: descripción del marketplace, «From the {marketplace} marketplace», qué puede hacer y «Connectors & tools» (los servidores de origen plugin con su nombre y los skills `plugin:…`).
-- Las líneas de confianza se deducen de lo que quill ve que trae: solo skills → «Only adds instructions»; un comando → «Can run code without asking»; una dirección → «Can send data to other services». Es **inferido**: hooks y commands no se listan, así que puede hacer más.
+- Las líneas de confianza se deducen de lo que Newen ve que trae: solo skills → «Only adds instructions»; un comando → «Can run code without asking»; una dirección → «Can send data to other services». Es **inferido**: hooks y commands no se listan, así que puede hacer más.
 
 ### 12.8 Add custom connector
 
@@ -497,7 +497,7 @@ Elegir un agente que no tiene la pestaña abierta vuelve a Skills.
 
 ### 12.9 Íconos
 
-Se quedan los de quill, sin biblioteca de terceros. El trazo baja de 1,7 a **1,25** sobre la grilla de 20 (`icons::STROKE`), y una prueba lo controla en todos. Íconos nuevos, en el mismo estilo y descritos por lo que muestran: `SKILL` (un libro abierto), `PLUGIN` (una pieza de rompecabezas), `TOOL` (una llave), `LOCK`, `BLOCKED` (un aro con una barra), `UPLOAD`, `DOWNLOAD`, `INFO`, `DISCOVER` (una brújula), `STOREFRONT` (una tienda con toldo) y `SORT`.
+Se quedan los de Newen, sin biblioteca de terceros. El trazo baja de 1,7 a **1,25** sobre la grilla de 20 (`icons::STROKE`), y una prueba lo controla en todos. Íconos nuevos, en el mismo estilo y descritos por lo que muestran: `SKILL` (un libro abierto), `PLUGIN` (una pieza de rompecabezas), `TOOL` (una llave), `LOCK`, `BLOCKED` (un aro con una barra), `UPLOAD`, `DOWNLOAD`, `INFO`, `DISCOVER` (una brújula), `STOREFRONT` (una tienda con toldo) y `SORT`.
 
 ### 12.10 Sin verificar
 

@@ -1,28 +1,28 @@
-# quill — Especificación técnica: Motor de agente (borrador)
+# Newen — Especificación técnica: Motor de agente (borrador)
 
-> **Nombres (2026-10-25):** quill es multi-agente. Lo que este borrador llama `quill-protocol` es el adaptador `quill-agent-claude`; lo genérico va en `quill-agent` (trait `AgentAdapter` + `AgentCapabilities`) y en `quill-engine`, sin nombres de proveedor. Ver spec.md D11.
+> **Nombres (2026-10-25):** Newen es multi-agente. Lo que este borrador llama `newen-protocol` es el adaptador `newen-agent-claude`; lo genérico va en `newen-agent` (trait `AgentAdapter` + `AgentCapabilities`) y en `newen-engine`, sin nombres de proveedor. Ver spec.md D11.
 
 > Estado: borrador v0, 2026-10-25. Alcance: MVP de la surface "Code" (sesiones locales que manejan el CLI `claude` como subproceso). Resumen y decisiones finales: [`spec.md`](spec.md).
-> No se copia código ni prompts de Anthropic. Lo que dice "Desktop" describe cómo se comporta Claude Desktop a ojos de la persona; todo lo que dice "quill" es diseño propio.
+> No se copia código ni prompts de Anthropic. Lo que dice "Desktop" describe cómo se comporta Claude Desktop a ojos de la persona; todo lo que dice "Newen" es diseño propio.
 
 ## 0. Convenciones de este documento
 
 | Marca | Significado |
 |---|---|
 | **Desktop** | Comportamiento visible de Claude Desktop. |
-| **quill** | Diseño propuesto. |
+| **Newen** | Diseño propuesto. |
 | *(inferido)* | Deducción, sin evidencia directa. |
 | *(verificar)* | Hay que confirmarlo en ejecución contra un CLI real antes de depender de ello (ver §11). |
 
 Arquitectura: UI → `Intent`/`Event` → motor → proceso `claude` por stdin/stdout en stream-json. La app **no** implementa el loop del agente: lo hace el CLI. La app orquesta: arma opciones/env, encola entradas, traduce mensajes, intercepta permisos y gestiona el proceso.
 
-**Decisión base de quill:** no hay Agent SDK en Rust, así que quill implementa directamente la capa delgada que el SDK pone entre la app y el CLI (framing JSON por línea, multiplexado de control, callbacks de hooks y permisos). Es la parte de §3. El resto es el gestor de sesiones del motor.
+**Decisión base de Newen:** no hay Agent SDK en Rust, así que Newen implementa directamente la capa delgada que el SDK pone entre la app y el CLI (framing JSON por línea, multiplexado de control, callbacks de hooks y permisos). Es la parte de §3. El resto es el gestor de sesiones del motor.
 
 ---
 
 ## 1. Ciclo de vida de sesión
 
-### 1.2 quill
+### 1.2 Newen
 
 **Modelo: estado derivado de hechos, no máquina de estados almacenada.** Persistimos hechos y calculamos la vista.
 
@@ -39,7 +39,7 @@ SessionFacts {
 SessionStatus (vista) = Draft | Starting | Running | AwaitingPermission | Idle | Paused | Parked | Errored | Archived
 ```
 
-| Operación | quill |
+| Operación | Newen |
 |---|---|
 | `create(cwd, opts)` | Valida que `cwd` exista y sea dir; crea fila `sessions` con `id = uuid v7` (ordenable); `status = Draft`. Worktree opcional (§8). No hace spawn si no hay mensaje. |
 | `send(first message)` | Spawn (§2) → `initialize` → escribe `user`. |
@@ -47,7 +47,7 @@ SessionStatus (vista) = Draft | Starting | Running | AwaitingPermission | Idle |
 | Pausar | Actor de sesión cierra stdin y espera salida (timeout → SIGTERM → SIGKILL al grupo). Gobernador global: tope `max(6, RAM/3 GiB)`; idle timeout configurable (proponemos 15 min). |
 | Reanudar | Spawn con `--resume=<engine_session_id>`. La UI se pinta desde el store propio (no relee el JSONL). Mantener el `cwd` del registro: el JSONL vive en `projects/<cwd saneado>/`; si el cwd cambió (worktree movido), copiar el JSONL o rechazar *(verificar algoritmo de saneado)*. |
 | Fork | `--resume=<padre> --fork-session` (+ `--resume-session-at=<uuid>` para fork en un punto) en vez de copiar el JSONL. Así no dependemos del formato/ubicación interna del JSONL. El CLI devuelve un `session_id` nuevo en `system/init` *(verificar)*. |
-| Rewind conversación | Como en Desktop ("Rewind to here" en el mensaje del usuario). `Intent::RewindTo { request, at }` detiene el CLI y el próximo spawn usa `--resume --resume-session-at=<at> --fork-session`, donde `at` es la respuesta anterior al mensaje. Si no hay respuesta anterior, arranca de cero. `Event::RewoundTo` queda guardado: la UI recorta desde ese mensaje, el texto vuelve al composer y, si quill se reinicia antes del próximo mensaje, `Restored` retoma desde ese punto. `Intent::UndoRewind` (Desktop's "Undo rewind", ubicación inferida) devuelve los mensajes y el agente retoma la conversación anterior, hasta que la persona envía un mensaje; tras un reinicio, deshacer vuelve a la última conversación del CLI. |
+| Rewind conversación | Como en Desktop ("Rewind to here" en el mensaje del usuario). `Intent::RewindTo { request, at }` detiene el CLI y el próximo spawn usa `--resume --resume-session-at=<at> --fork-session`, donde `at` es la respuesta anterior al mensaje. Si no hay respuesta anterior, arranca de cero. `Event::RewoundTo` queda guardado: la UI recorta desde ese mensaje, el texto vuelve al composer y, si Newen se reinicia antes del próximo mensaje, `Restored` retoma desde ese punto. `Intent::UndoRewind` (Desktop's "Undo rewind", ubicación inferida) devuelve los mensajes y el agente retoma la conversación anterior, hasta que la persona envía un mensaje; tras un reinicio, deshacer vuelve a la última conversación del CLI. |
 | Archivar | Detiene proceso, marca `archived`; limpieza de worktree solo si no hay cambios sin commitear (§8). |
 | Borrar | Borra filas propias y snapshots. **No** borra el JSONL del CLI por defecto (opción explícita "borrar también transcript del CLI"). |
 | Importar del CLI | Fuera del MVP. Si se hace: solo lectura del JSONL + adopción con `--resume`, con chequeos de identidad del archivo, liveness y confianza. |
@@ -57,7 +57,7 @@ SessionStatus (vista) = Draft | Starting | Running | AwaitingPermission | Idle |
 
 ## 2. Lanzamiento del CLI
 
-### 2.4 quill
+### 2.4 Newen
 
 **Resolución del binario (MVP):**
 
@@ -66,9 +66,9 @@ SessionStatus (vista) = Draft | Starting | Running | AwaitingPermission | Idle |
 3. Si no hay, error accionable ("instalá Claude Code") — **sin descarga propia en el MVP**.
 4. Preflight por spawn: `claude --version` cacheado por (ruta, mtime, tamaño); rechazo si `< MIN_CLI_VERSION` (piso global) y gating por feature (p. ej. `auto` ≥ 2.1.71).
 
-Descarga gestionada (post-MVP): bajar `manifest.json` + `.sig` de releases, verificar firma con la clave pública embebida (crate `sequoia-openpgp` o `pgp`), verificar SHA-256 del binario, escribir a `.partial` → rename → marcador `.verified` con el hash (no solo existencia, a diferencia de). Ubicación `$XDG_DATA_HOME/quill/cli/<ver>/claude`.
+Descarga gestionada (post-MVP): bajar `manifest.json` + `.sig` de releases, verificar firma con la clave pública embebida (crate `sequoia-openpgp` o `pgp`), verificar SHA-256 del binario, escribir a `.partial` → rename → marcador `.verified` con el hash (no solo existencia, a diferencia de). Ubicación `$XDG_DATA_HOME/newen/cli/<ver>/claude`.
 
-**Línea de comando de quill:**
+**Línea de comando de Newen:**
 
 ```text
 claude --output-format stream-json --verbose --input-format stream-json
@@ -85,10 +85,10 @@ claude --output-format stream-json --verbose --input-format stream-json
 cwd = worktree_path || cwd
 ```
 
-**Entorno de quill:** login-shell env + `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true`, `CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL=true`, `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES=false`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`, `MCP_CONNECTION_NONBLOCKING=true`, `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`, `CLAUDE_CODE_EAGER_FLUSH=1`, `QUILL_SESSION_ID=<id>`; quitar `NODE_OPTIONS`.
+**Entorno de Newen:** login-shell env + `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true`, `CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL=true`, `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES=false`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`, `MCP_CONNECTION_NONBLOCKING=true`, `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`, `CLAUDE_CODE_EAGER_FLUSH=1`, `NEWEN_SESSION_ID=<id>`; quitar `NODE_OPTIONS`.
 
 - `CLAUDE_CODE_ENTRYPOINT`: **no** usar `claude-desktop` (sería hacerse pasar por Desktop). Opciones: dejarla sin definir o un valor propio *(verificar qué acepta el CLI y si cambia comportamiento)*.
-- **Autenticación delegada al CLI**: quill no maneja tokens OAuth en el MVP; el CLI usa su propio login (`~/.claude`). Se responde `oauth_token_refresh` con error si llega. Evita guardar secretos.
+- **Autenticación delegada al CLI**: Newen no maneja tokens OAuth en el MVP; el CLI usa su propio login (`~/.claude`). Se responde `oauth_token_refresh` con error si llega. Evita guardar secretos.
 - stderr del CLI → log rotado por sesión (`logs/cli-<session>.log`).
 
 ---
@@ -128,7 +128,7 @@ Subagentes: un mensaje es de subagente si `isSidechain === true` o `parent_tool_
  "priority":"next|later|now (opcional)","timestamp":"…"}
 ```
 
-**quill no envía `client_platform:"desktop_app"`**. Imágenes como bloques `image` base64 de la Messages API *(inferido)*.
+**Newen no envía `client_platform:"desktop_app"`**. Imágenes como bloques `image` base64 de la Messages API *(inferido)*.
 
 ### 3.3 Protocolo de control
 
@@ -143,7 +143,7 @@ Envoltorio (en ambos sentidos):
 
 **App → CLI**:
 
-| subtype | request | respuesta | Uso en quill MVP |
+| subtype | request | respuesta | Uso en Newen MVP |
 |---|---|---|---|
 | `initialize` | `hooks{<Evento>:[{matcher, hookCallbackIds:["hook_0",…], timeout}]}`, `sdkMcpServers`, `systemPrompt`/`appendSystemPrompt`, `agents`, `promptSuggestions`, `supportedDialogKinds`, `perTaskStopAffordance`, `workspaceTrust`, `plugins`, `planModeInstructions`, `jsonSchema` | success con datos de sesión (pid, commands, models…, forma exacta *(verificar)*) | **sí**, siempre primero; con `promptSuggestions: true` mientras la opción "Prompt suggestions" del adaptador esté prendida (lo está por defecto) |
 | `interrupt` | `cancel_queued?` | `still_queued` / `cancelled` | **sí** |
@@ -170,25 +170,25 @@ El adaptador dice qué correr (`AgentAdapter::plugins_query`, `marketplaces_quer
 
 **CLI → app**:
 
-| subtype | request | respuesta esperada | quill MVP |
+| subtype | request | respuesta esperada | Newen MVP |
 |---|---|---|---|
 | `can_use_tool` | `tool_name`, `input`, `tool_use_id`, `permission_suggestions`, `blocked_path`, `decision_reason`, `title`, `display_name`, `description`, `default_to_no`, `suppress_always_allow_rule`, `agent_id`, `requires_user_interaction?`, `matched_ask_rule?`, `mcp_server?` | allow: `{behavior:"allow", updatedInput, updatedPermissions?, toolUseID}`; deny: `{behavior:"deny", message, interrupt?, toolUseID}` | **sí** (§4) |
 | `hook_callback` | `callback_id`, `input{hook_event_name, tool_name, tool_input, tool_response, tool_use_id, agent_id, cwd}`, `tool_use_id` | `{}` / `{hookSpecificOutput:{hookEventName, permissionDecision\|additionalContext\|updatedInput}}` / `{decision:"block", reason}` | **sí** (§6) |
 | `mcp_message` | `server_name`, `message` (JSON-RPC) | `{mcp_response}` | post-MVP (tools propias, p. ej. terminal) |
 | `elicitation` | `mcp_server_name`, `message`, `mode`, `url`, `elicitation_id`, `requested_schema` | decline *(inferido)* | responder decline |
 | `request_user_dialog` | `dialog_kind`, `payload`, `tool_use_id` | según `supportedDialogKinds` | declarar `[]` y responder error |
-| `oauth_token_refresh`, `host_auth_token_refresh`, `remote_control_work_secret` | — | — | error (auth delegada al CLI; con Remote Control prendido desde quill no llegó ninguno, 2.1.316) |
+| `oauth_token_refresh`, `host_auth_token_refresh`, `remote_control_work_secret` | — | — | error (auth delegada al CLI; con Remote Control prendido desde Newen no llegó ninguno, 2.1.316) |
 
 Reglas de transporte (SDK):
 
-- Las herramientas propias de quill (`HOST_TOOLS`: `start_session`, `dismiss_task`, `send_to_session`, `read_session`, `list_sessions`, `wait_for_session`) llegan por `mcp_message` y el router las responde; se permiten sin preguntar. `read_session` lee los eventos de otra sesión del store con `spawn_blocking`, fuera del router, y `list_sessions` corre `git` igual. `wait_for_session` se describe en [agents.md](agents.md).
-- `null` del callback deja el pedido sin responder (caso de tools servidas por otra máquina). quill: siempre responder.
+- Las herramientas propias de Newen (`HOST_TOOLS`: `start_session`, `dismiss_task`, `send_to_session`, `read_session`, `list_sessions`, `wait_for_session`) llegan por `mcp_message` y el router las responde; se permiten sin preguntar. `read_session` lee los eventos de otra sesión del store con `spawn_blocking`, fuera del router, y `list_sessions` corre `git` igual. `wait_for_session` se describe en [agents.md](agents.md).
+- `null` del callback deja el pedido sin responder (caso de tools servidas por otra máquina). Newen: siempre responder.
 - Con callbacks bidireccionales el stdin no se cierra hasta el fin de la corrida.
-- Con `prompt` string el SDK manda un `user` y cierra (single-turn); quill: siempre streaming input.
+- Con `prompt` string el SDK manda un `user` y cierra (single-turn); Newen: siempre streaming input.
 
-### 3.4 quill: implementación del protocolo
+### 3.4 Newen: implementación del protocolo
 
-- `quill-protocol`: tipos serde con **fallback que preserva lo desconocido**: `enum Inbound { Known(KnownMsg), Unknown(serde_json::Value) }`; cada tipo conocido conserva `extra: serde_json::Map` (`#[serde(flatten)]`) para no perder campos al persistir. Nunca fallar el stream por un campo nuevo.
+- `newen-protocol`: tipos serde con **fallback que preserva lo desconocido**: `enum Inbound { Known(KnownMsg), Unknown(serde_json::Value) }`; cada tipo conocido conserva `extra: serde_json::Map` (`#[serde(flatten)]`) para no perder campos al persistir. Nunca fallar el stream por un campo nuevo.
 - Codec: `tokio::io::BufReader::lines()` sobre stdout con tope por línea (p. ej. 64 MiB; los `tool_result` pueden ser grandes); escritura serializada por un único `mpsc` → task escritor.
 - Pedidos salientes: `request_id = "q_<n>"`; `HashMap<RequestId, oneshot::Sender<Result<Value>>>` con timeout por subtipo (initialize 60 s, interrupt 10 s, rewind_files 30 s).
 - Pedidos entrantes: cada uno en su task con `CancellationToken`; `control_cancel_request` cancela el token.
@@ -199,17 +199,17 @@ Reglas de transporte (SDK):
 
 ### 3.5 Imágenes en un mensaje
 
-Un mensaje lleva archivos de imagen (`Intent::Send.images`, `Event::Queued.images`): PNG, JPEG, GIF o WebP, reconocidos por su contenido y no por la extensión, hasta 20 por mensaje y 30 MB cada una; lo demás se omite con «Only PNG, JPEG, GIF, and WebP images are supported.», lo que pasa de 30 MB con «Some images were too large to attach. Maximum size is 30 MB.» y el resto del límite de 20 con «Maximum of 20 images allowed.». Una imagen de a lo sumo 2000×2000 px y 500 KB va tal cual; si no, se recodifica con lado máximo 2000 px, JPEG a calidad 0.9 y luego 0.7, reduciendo el lado ×0.75 hasta 500 px hasta caber en `min(500 KB, tamaño original)`, y se conserva el original si la recodificación no es menor y el original cabía en 500 KB. Desktop prefiere WebP cuando el canvas lo codifica; quill usa JPEG (sobre blanco si hay transparencia) porque el codificador WebP del crate `image` es solo sin pérdida (equivalencia *inferida*). El procesamiento corre en un hilo bloqueante, después de guardar el `Queued` con las rutas originales; los avisos llegan como `Event::Notice`, que no se guarda. Al CLI, el mensaje va con los bloques `image` base64 (`{"type":"image","source":{"type":"base64","media_type","data"}}`) antes del bloque `text`, o solo el `text` sin imágenes; que el CLI 2.1.310 acepte esos bloques no está verificado con una captura *(inferido)*.
+Un mensaje lleva archivos de imagen (`Intent::Send.images`, `Event::Queued.images`): PNG, JPEG, GIF o WebP, reconocidos por su contenido y no por la extensión, hasta 20 por mensaje y 30 MB cada una; lo demás se omite con «Only PNG, JPEG, GIF, and WebP images are supported.», lo que pasa de 30 MB con «Some images were too large to attach. Maximum size is 30 MB.» y el resto del límite de 20 con «Maximum of 20 images allowed.». Una imagen de a lo sumo 2000×2000 px y 500 KB va tal cual; si no, se recodifica con lado máximo 2000 px, JPEG a calidad 0.9 y luego 0.7, reduciendo el lado ×0.75 hasta 500 px hasta caber en `min(500 KB, tamaño original)`, y se conserva el original si la recodificación no es menor y el original cabía en 500 KB. Desktop prefiere WebP cuando el canvas lo codifica; Newen usa JPEG (sobre blanco si hay transparencia) porque el codificador WebP del crate `image` es solo sin pérdida (equivalencia *inferida*). El procesamiento corre en un hilo bloqueante, después de guardar el `Queued` con las rutas originales; los avisos llegan como `Event::Notice`, que no se guarda. Al CLI, el mensaje va con los bloques `image` base64 (`{"type":"image","source":{"type":"base64","media_type","data"}}`) antes del bloque `text`, o solo el `text` sin imágenes; que el CLI 2.1.310 acepte esos bloques no está verificado con una captura *(inferido)*.
 
 ### 3.6 Imágenes en el resultado de una herramienta
 
-Una herramienta puede responder con imágenes: el `Read` de una imagen, una captura del navegador de quill, una herramienta MCP. El adaptador las lee de su protocolo y las deja en `AgentEvent::ToolResult.inline` como `ToolContent::Image` (base64): Claude Code, los bloques `image` de la Messages API (`{"type":"image","source":{"type":"base64","media_type","data"}}`) dentro del `content` del `tool_result`; Codex, los bloques de imagen de MCP (`{"type":"image","data","mimeType"}`) en `result.content` de un `mcpToolCall` *(inferido en los dos: ninguna captura tiene uno)*. Un bloque con otra fuente (una dirección) se omite. El `imageView` de Codex no trae la imagen, solo su ruta: es el `Read` de ese archivo.
+Una herramienta puede responder con imágenes: el `Read` de una imagen, una captura del navegador de Newen, una herramienta MCP. El adaptador las lee de su protocolo y las deja en `AgentEvent::ToolResult.inline` como `ToolContent::Image` (base64): Claude Code, los bloques `image` de la Messages API (`{"type":"image","source":{"type":"base64","media_type","data"}}`) dentro del `content` del `tool_result`; Codex, los bloques de imagen de MCP (`{"type":"image","data","mimeType"}`) en `result.content` de un `mcpToolCall` *(inferido en los dos: ninguna captura tiene uno)*. Un bloque con otra fuente (una dirección) se omite. El `imageView` de Codex no trae la imagen, solo su ruta: es el `Read` de ese archivo.
 
-El actor guarda las imágenes antes de emitir el evento: en un hilo bloqueante (`images::keep`), las decodifica, reconoce el formato por su contenido (PNG, JPEG, GIF o WebP; lo demás se omite) y escribe cada una en `<Config::pictures>/<sesión>/<uuid>.<ext>`, con nombres propios de quill (nada de lo que manda el agente nombra un archivo). Recién entonces el evento sigue, con las rutas en `images` e `inline` vacío: así se guarda y así le llega a la interfaz. `inline` nunca se serializa (`#[serde(skip)]`), de modo que el registro guarda rutas y no imágenes. Sin `Config::pictures` (las pruebas) no se guarda ninguna. Al borrar una sesión se borra su carpeta de imágenes.
+El actor guarda las imágenes antes de emitir el evento: en un hilo bloqueante (`images::keep`), las decodifica, reconoce el formato por su contenido (PNG, JPEG, GIF o WebP; lo demás se omite) y escribe cada una en `<Config::pictures>/<sesión>/<uuid>.<ext>`, con nombres propios de Newen (nada de lo que manda el agente nombra un archivo). Recién entonces el evento sigue, con las rutas en `images` e `inline` vacío: así se guarda y así le llega a la interfaz. `inline` nunca se serializa (`#[serde(skip)]`), de modo que el registro guarda rutas y no imágenes. Sin `Config::pictures` (las pruebas) no se guarda ninguna. Al borrar una sesión se borra su carpeta de imágenes.
 
 ## 4. Permisos
 
-### 4.2 quill
+### 4.2 Newen
 
 | Aspecto | Diseño |
 |---|---|
@@ -222,13 +222,13 @@ El actor guarda las imágenes antes de emitir el evento: en un hilo bloqueante (
 | Estancados | Re-notificación a los 300 s; sin deny automático en el MVP. |
 | Modo | `set_mode(m)`: validar (bypass prohibido como root; sin gate → error), `set_permission_mode`, persistir al ack. `system/status.permissionMode` actualiza el registro con `source: cli`. |
 | Hooks guardia | PreToolUse propio solo para el worktree-write-guard cuando la sesión tiene worktree (§8). Carpetas permitidas: post-MVP. |
-| Auditoría | Toda decisión queda en `permission_requests` con `decided_at`, `decision`, `decided_by` (user/rule/abort). quill lo guarda local. |
+| Auditoría | Toda decisión queda en `permission_requests` con `decided_at`, `decision`, `decided_by` (user/rule/abort). Newen lo guarda local. |
 
 ---
 
 ## 5. Cola de mensajes, steering, interrupción y recuperación
 
-### 5.2 quill
+### 5.2 Newen
 
 **Una cola persistente por sesión** (tabla `engine_inputs`), lane derivada:
 
@@ -247,13 +247,13 @@ lane = if priority ∈ {Next, Now} { Steer } else { Queued }
 | Cancelar steer ya enviado | `cancel_async_message(engine_uuid)`; si OK → attempt `cancelled`; si "too late" → informar, el mensaje sigue en el turno. |
 | `Now` (escalada) | post-MVP. |
 
-**Implementado: steer y cola** (como el steer y la cola de Desktop). Un mensaje enviado con turno activo lleva un `Lane`. `Steer` (Enter) se escribe al CLI con `priority:"next"` si el agente declara `steer` en sus capacidades; el adaptador traduce el flag, y la cadena del CLI solo vive en `quill-agent-claude`. Si el agente no lo declara, el mensaje va a la cola. `Queue` (Ctrl+Enter) nunca se escribe mientras corre el turno: queda en la cola de la sesión, que se emite entera en cada cambio (`Event::QueueChanged`) y el store la guarda antes de que la UI la vea. Al terminar el turno (`TurnFinished`), si la cola no está retenida, se envía: si hay varios mensajes y ninguno empieza por `/`, se unen en uno solo con una línea en blanco entre textos (imágenes y menciones en orden); si no, sale el primero y el resto espera al siguiente fin de turno. Interrumpir no vacía la cola, que se drena al terminar el turno interrumpido; si el agente sale, espera al siguiente fin de turno. Al reiniciar, la cola guardada vuelve **retenida** (`held`): no se envía sola, y solo `QueueSendNow` la libera. Todavía no hay recibo de lectura (`command_lifecycle`).
+**Implementado: steer y cola** (como el steer y la cola de Desktop). Un mensaje enviado con turno activo lleva un `Lane`. `Steer` (Enter) se escribe al CLI con `priority:"next"` si el agente declara `steer` en sus capacidades; el adaptador traduce el flag, y la cadena del CLI solo vive en `newen-agent-claude`. Si el agente no lo declara, el mensaje va a la cola. `Queue` (Ctrl+Enter) nunca se escribe mientras corre el turno: queda en la cola de la sesión, que se emite entera en cada cambio (`Event::QueueChanged`) y el store la guarda antes de que la UI la vea. Al terminar el turno (`TurnFinished`), si la cola no está retenida, se envía: si hay varios mensajes y ninguno empieza por `/`, se unen en uno solo con una línea en blanco entre textos (imágenes y menciones en orden); si no, sale el primero y el resto espera al siguiente fin de turno. Interrumpir no vacía la cola, que se drena al terminar el turno interrumpido; si el agente sale, espera al siguiente fin de turno. Al reiniciar, la cola guardada vuelve **retenida** (`held`): no se envía sola, y solo `QueueSendNow` la libera. Todavía no hay recibo de lectura (`command_lifecycle`).
 
 **Interrupción:** `interrupt` (timeout 10 s) → si no hay ack: SIGTERM al grupo de procesos, 3 s, SIGKILL; marcar turno `interrupted`; deny a permisos pendientes. Un `interrupt` con `cancel_queued` *(verificar semántica)* para vaciar los steers no consumidos.
 
 **Recuperación:**
 
-| Situación | quill |
+| Situación | Newen |
 |---|---|
 | CLI muere con turno abierto | turno `failed{reason: stream_ended_no_result}`; sesión `Errored`; próximo send relanza con `--resume`. |
 | Crash-loop | 3 caídas con < 30 s de vida → `Parked`; solo un send explícito del usuario re-arma (como). |
@@ -266,7 +266,7 @@ lane = if priority ∈ {Next, Now} { Steer } else { Queued }
 
 ## 6. Atribución por petición y checkpoints/rewind
 
-### 6.2 quill: modelo de datos
+### 6.2 Newen: modelo de datos
 
 Separar **petición del usuario** (estable) de **mensaje entregado al motor** (uuid que puede cambiar) y de **turno** (ejecución):
 
@@ -288,7 +288,7 @@ Snapshot      { snapshot_id, session_id, tree_oid, kind: pre_turn|post_tool|post
 LineageEvent  { kind: rekeyed|coalesced|withdrawn|forked|rewound|compacted, source_ids[], target_ids[], at }
 ```
 
-### 6.3 quill: reglas
+### 6.3 Newen: reglas
 
 1. `request_id` se crea al aceptar el envío y no cambia nunca; rekey/cancel crean un attempt nuevo.
 2. Turno abierto al escribir el `user` (ocioso) o al drenar la cola; se confirma con el eco; se cierra con el `result` sin `parent_tool_use_id`. Todo `assistant`/`user(tool_result)`/`system/*` entre medio pertenece al turno abierto.
@@ -301,24 +301,24 @@ LineageEvent  { kind: rekeyed|coalesced|withdrawn|forked|rewound|compacted, sour
    - `Edit/Write` `input.file_path` y `toolUseResult.structuredPatch` se guardan como evidencia secundaria (`detected_by: tool_input`), útil si no hay snapshot.
 5. Concurrencia: dos escritores en el mismo intervalo → `confidence: shared`; no inventar autoría.
 6. Tareas de fondo (`run_in_background`, `task_*`): sus efectos se atribuyen al turno que lanzó el `tool_use_id` aunque ocurran después del cierre.
-7. Inyección de contexto al modelo (patrón `<desktop-app-activity>`): en `UserPromptSubmit`, si hubo rewind o cambios externos desde el último turno, `additionalContext` con una nota propia (texto escrito por quill, no copiado).
+7. Inyección de contexto al modelo (patrón `<desktop-app-activity>`): en `UserPromptSubmit`, si hubo rewind o cambios externos desde el último turno, `additionalContext` con una nota propia (texto escrito por Newen, no copiado).
 
-### 6.4 quill: checkpoints y rewind
+### 6.4 Newen: checkpoints y rewind
 
 **Snapshots en un repo git "sombra" por workspace**, no en el repo del usuario:
 
 ```text
-$XDG_DATA_HOME/quill/snapshots/<hash(cwd)>.git   (bare)
+$XDG_DATA_HOME/newen/snapshots/<hash(cwd)>.git   (bare)
 GIT_DIR=<sombra> GIT_WORK_TREE=<cwd> GIT_INDEX_FILE=<sombra>/index-<session>
 snapshot = git add -A && git write-tree   → tree_oid
-ref      = refs/quill/<session>/<n> (commit-tree) para que gc no lo borre
+ref      = refs/newen/<session>/<n> (commit-tree) para que gc no lo borre
 ```
 
 - Funciona también en carpetas sin git. Respeta los `.gitignore` del árbol; excluir siempre `.git/` y usar `objects/info/alternates` al repo real si existe (velocidad/espacio).
 - Cubre lo que hace Bash (borrados, renombres, archivos nuevos), a diferencia del checkpoint del CLI.
 - Topes: desactivar snapshots si cwd = `$HOME` o `/`, o si el primer snapshot supera N archivos / M MB (configurable); en ese caso caer al checkpoint del CLI.
 
-**Rewind de código (quill):** `rewind_code(request_id, dry_run)`:
+**Rewind de código (Newen):** `rewind_code(request_id, dry_run)`:
 - rechaza si hay turno abierto ("busy") o restore en vuelo (como);
 - objetivo = `pre_turn` del turno del request; dry-run = `git diff --numstat <objetivo> <snapshot actual>` → `{files[], insertions, deletions}`;
 - real: tomar snapshot "pre_rewind" (permite deshacer), restaurar con `read-tree` + `checkout-index -a -f` y borrar archivos que no existen en el objetivo; reportar `skipped[]` (symlinks fuera del árbol, sin permisos);
@@ -332,22 +332,22 @@ ref      = refs/quill/<session>/<n> (commit-tree) para que gc no lo borre
 
 ## 7. Persistencia
 
-### 7.2 quill
+### 7.2 Newen
 
 | Qué | Dónde | Formato |
 |---|---|---|
-| Config editable | `$XDG_CONFIG_HOME/quill/config.toml` | TOML validado (`serde`), errores por entrada |
-| Estado | `$XDG_DATA_HOME/quill/quill.db` | SQLite (WAL, `foreign_keys=ON`, migraciones versionadas), 0600 |
-| Payloads grandes (`tool_result` > 256 KiB, salidas de comandos) | `$XDG_DATA_HOME/quill/blobs/<sha256>` | archivos direccionados por contenido; la fila guarda `*_ref` |
-| Snapshots | `$XDG_DATA_HOME/quill/snapshots/<hash(cwd)>.git` | repo git sombra (§6.4) |
-| Imágenes de las herramientas | `$XDG_DATA_HOME/quill/pictures/<sesión>/<uuid>.<ext>` (`Config::pictures`) | los archivos tal como llegaron (§3.6); el evento guarda sus rutas |
-| Logs | `$XDG_STATE_HOME/quill/logs/{quill.log, cli-<session>.log}` | `tracing-appender`, rotación diaria, retención N días |
-| Transcript del CLI | lo sigue escribiendo el CLI en `~/.claude/projects/…`; quill lo usa **solo** para `--resume` (vía CLI) e importación | no se parsea en el camino normal |
+| Config editable | `$XDG_CONFIG_HOME/newen/config.toml` | TOML validado (`serde`), errores por entrada |
+| Estado | `$XDG_DATA_HOME/newen/newen.db` | SQLite (WAL, `foreign_keys=ON`, migraciones versionadas), 0600 |
+| Payloads grandes (`tool_result` > 256 KiB, salidas de comandos) | `$XDG_DATA_HOME/newen/blobs/<sha256>` | archivos direccionados por contenido; la fila guarda `*_ref` |
+| Snapshots | `$XDG_DATA_HOME/newen/snapshots/<hash(cwd)>.git` | repo git sombra (§6.4) |
+| Imágenes de las herramientas | `$XDG_DATA_HOME/newen/pictures/<sesión>/<uuid>.<ext>` (`Config::pictures`) | los archivos tal como llegaron (§3.6); el evento guarda sus rutas |
+| Logs | `$XDG_STATE_HOME/newen/logs/{newen.log, cli-<session>.log}` | `tracing-appender`, rotación diaria, retención N días |
+| Transcript del CLI | lo sigue escribiendo el CLI en `~/.claude/projects/…`; Newen lo usa **solo** para `--resume` (vía CLI) e importación | no se parsea en el camino normal |
 
 Tablas (mínimo MVP): `sessions`, `requests`, `engine_inputs`, `engine_input_attempts`, `turns`, `events` (cada línea de stdout excepto `stream_event`/`keep_alive`, con `seq`, `turn_id?`, `type`, `subtype`, `uuid?`, `json` o `json_ref`), `tool_calls`, `permission_requests`, `session_permission_rules`, `command_runs`, `file_effects`, `snapshots`, `rewinds`, `lineage_events`, `worktrees`.
 
 Decisiones:
-- **La UI se pinta desde `events` de quill**, no desde el JSONL: el formato del JSONL es interno del CLI y tiene varias proyecciones incompatibles. Guardar el evento crudo + su proyección permite re-derivar sin pérdida.
+- **La UI se pinta desde `events` de Newen**, no desde el JSONL: el formato del JSONL es interno del CLI y tiene varias proyecciones incompatibles. Guardar el evento crudo + su proyección permite re-derivar sin pérdida.
 - Escritura: un único task escritor por DB (canal `mpsc`) con transacciones por lote (≤16 ms o 256 filas). Los hechos que gobiernan la UI (turno abierto/cerrado, permiso pendiente) se commitean **antes** de emitir el evento a la UI.
 - Sin cuentas/organizaciones en el MVP (el CLI maneja la identidad). Columna `profile` reservada.
 - Sin secretos persistidos en el MVP; si aparecen (env vars de sesión), crate `keyring` y rechazo si no hay Secret Service.
@@ -356,7 +356,7 @@ Decisiones:
 
 ## 8. Git, diff y worktrees
 
-### 8.2 quill
+### 8.2 Newen
 
 | Tema | Diseño |
 |---|---|
@@ -365,7 +365,7 @@ Decisiones:
 | Lo sin commitear, en vivo | El motor vuelve a leer lo sin commitear de la carpeta de una sesión por su cuenta, sin que la UI lo pida: tras cada paso que escribió archivos o corrió un comando (`ToolResult` con `files` o `command`), cuando termina una tarea de fondo, al final de cada turno y tras deshacer un pedido. Cada sesión tiene un lector propio (`follow_tree`): deja que la carpeta se asiente 150 ms (una ráfaga de pasos, o varias herramientas a la vez, dan una sola lectura) y lee fuera del hilo del router; lo que llega mientras lee da una lectura más al terminar, así que git nunca corre dos veces a la vez para una sesión ni se acumulan procesos. Lo que pide la UI (`Intent::WorkingTree`, al elegir una sesión o abrir el diff) pasa por el mismo lector. Una lectura es un solo `git diff HEAD -M --raw -p`, partido por archivo en cada línea `diff --git` (un cambio de tipo escribe sus dos partes bajo la misma); solo si las partes no coinciden con la lista (como con un diff externo) se pide un `git diff` por archivo, como antes. Después, `git ls-files --others --exclude-standard -z`: lo que git no sigue ni ignora cuenta como archivo agregado, con el parche que git escribe para uno nuevo. Topes, inferidos de Desktop: se leen los primeros 200, hasta 1 MiB cada uno; uno con un byte NUL es binario (+0 −0, con la línea de git para un binario) y uno más grande queda sin líneas; hasta 2000 líneas lleva su parche entero y uno más largo solo su cuenta, sin hunk; los 200 siguientes se listan sin leer (+0 −0) y el resto queda afuera. Un archivo sacado del índice pero conservado cuenta una vez, como lo da el diff; un repositorio dentro de otro no cuenta. Todo se lee desde la raíz del repositorio, así que una sesión abierta en una de sus carpetas ve lo mismo y con las mismas rutas. Las líneas que cuentan son las de los hunks: una línea agregada `++i;` o una quitada `-- nota` ya no se toman por cabeceras. El historial del pedido (`Shadow::changes`) se parte igual. *Shortcut: no hay watcher de archivos; lo que cambia fuera de un paso (el editor de la persona, un `git commit` en su terminal) se ve en el paso siguiente o al volver a elegir la sesión. Si hace falta, un watcher del gitDir avisaría al mismo lector.* |
 | Diff de sesión | Árbol (incl. no rastreados) vs `merge-base(base, HEAD)`, `--numstat -M` + `--name-status`, forma compare-API, parches lazy por archivo, tope inline 5000 líneas. Base: `origin/<source_branch>` si existe, si no la local. Sin merge-base → `base_unknown`. |
 | Diff del turno | **Persistido**: `diff(pre_turn_snapshot, post_turn_snapshot)` del repo sombra (§6.4) + `file_effects` por tool. Incluye cambios de Bash. Botón "deshacer turno" = rewind de código al `pre_turn` (no un prompt, a diferencia de). |
-| Worktrees (MVP) | Opcional al crear sesión: `git worktree add -b quill/<slug>-<6hex> <repo>/.quill/worktrees/<nombre> <base>`; agregar `.quill/worktrees/` a `.git/info/exclude`; lease por sesión en tabla `worktrees`. Creación anticipada (no perezosa). |
+| Worktrees (MVP) | Opcional al crear sesión: `git worktree add -b newen/<slug>-<6hex> <repo>/.newen/worktrees/<nombre> <base>`; agregar `.newen/worktrees/` a `.git/info/exclude`; lease por sesión en tabla `worktrees`. Creación anticipada (no perezosa). |
 | Guardia | PreToolUse propio con matcher `Edit|Write|MultiEdit|NotebookEdit`: si `file_path` resuelto (canonicalizado) cae fuera del worktree → `{decision:"block", reason}`. |
 | `EnterWorktree`/`ExitWorktree` del CLI | seguir el cwd real como *(verificar forma del resultado)*. |
 | Limpieza | al archivar: `git status --porcelain` con timeout; si limpio y sin commits sin pushear → `git worktree remove`; si no, conservar y avisar. Nunca `--force` sin confirmación. |
@@ -375,17 +375,17 @@ Decisiones:
 
 ## 9. Terminal PTY y comandos `!`
 
-### 9.2 quill
+### 9.2 Newen
 
 | Tema | Diseño |
 |---|---|
-| Crate | `quill-pty` con `portable-pty`; un hilo lector por PTY → `tokio::mpsc`. En proceso (no proceso aparte en el MVP); `catch_unwind` + reinicio por PTY. *Shortcut: mismo proceso que la UI; mover a proceso hijo si un PTY puede tumbar la app.* |
+| Crate | `newen-pty` con `portable-pty`; un hilo lector por PTY → `tokio::mpsc`. En proceso (no proceso aparte en el MVP); `catch_unwind` + reinicio por PTY. *Shortcut: mismo proceso que la UI; mover a proceso hijo si un PTY puede tumbar la app.* |
 | Claves | `(session_id, tab_id)`; `opened_by: user|agent`. Tope 16 PTY global. |
-| Shell | `$SHELL -l` en `worktree || cwd`; env login-shell + `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=quill`. |
+| Shell | `$SHELL -l` en `worktree || cwd`; env login-shell + `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=newen`. |
 | Salida | ring buffer 256 KiB por pestaña; coalescido 16 ms hacia la UI (el emulador es de limn, fuera de este documento). Sin scrollback en disco en el MVP. |
 | OSC 133 | Scripts de integración **propios** para bash y zsh (mismo mecanismo: rcfile/`ZDOTDIR` que primero carga los dotfiles del usuario). Parser con `vte` (callback `osc_dispatch`). Nonce por PTY para descartar marcas falsificadas; si aparece fuera de marca, dejar de confiar. Produce `CommandRun{origin: user_terminal}` atribuido al turno abierto o al "último turno" con `actor: user`. |
-| Comandos `!` | MVP: un PTY oculto por sesión (reusa `quill-pty`) para que `cd`/`export` persistan entre comandos. Recorte por marcas C/D, tope 100 KiB, timeout 30 s sin datos, Ctrl-C → SIGKILL al grupo. Resultado → `CommandRun{origin: user_bang}` + mensaje a la conversación. |
-| `!` → modelo | Enviar como `user` con el comando y la salida en un bloque de texto con formato propio de quill (p. ej. "El usuario ejecutó `cmd` (exit N): …"). Cómo lo hace el CLI nativamente (modo bash de la TUI) *(verificar)*; no copiar etiquetas internas sin confirmar qué espera el modelo. |
+| Comandos `!` | MVP: un PTY oculto por sesión (reusa `newen-pty`) para que `cd`/`export` persistan entre comandos. Recorte por marcas C/D, tope 100 KiB, timeout 30 s sin datos, Ctrl-C → SIGKILL al grupo. Resultado → `CommandRun{origin: user_bang}` + mensaje a la conversación. |
+| `!` → modelo | Enviar como `user` con el comando y la salida en un bloque de texto con formato propio de Newen (p. ej. "El usuario ejecutó `cmd` (exit N): …"). Cómo lo hace el CLI nativamente (modo bash de la TUI) *(verificar)*; no copiar etiquetas internas sin confirmar qué espera el modelo. |
 | Agente ↔ terminal | Aviso de actividad del usuario al modelo vía `UserPromptSubmit.additionalContext` (MVP). Tools MCP de terminal vía `mcp_message`: post-MVP. |
 
 ---
@@ -393,29 +393,29 @@ Decisiones:
 ## 10. Crates propuestos
 
 ```text
-quill-protocol   ← sin IO de procesos; tipos + codec
-quill-store      ← SQLite + blobs
-quill-git        ← git CLI, repo sombra, watcher
-quill-pty        ← PTY + OSC 133
-quill-engine     ← orquesta todo; API para la UI (limn)
+newen-protocol   ← sin IO de procesos; tipos + codec
+newen-store      ← SQLite + blobs
+newen-git        ← git CLI, repo sombra, watcher
+newen-pty        ← PTY + OSC 133
+newen-engine     ← orquesta todo; API para la UI (limn)
 ```
 
 | Crate | Responsabilidad | Tipos principales | Externos |
 |---|---|---|---|
-| `quill-protocol` | Tipos serde de stream-json y control protocol; codec por línea; fallback `Unknown(Value)`; builders de flags/env (puro, testeable) | `Inbound`, `Outbound`, `SdkMessage{User, Assistant, System(SystemMsg), Result, StreamEvent, …}`, `ControlRequest{subtype…}`, `ControlResponse`, `CanUseTool`, `PermissionResult{Allow{updated_input, updated_permissions}, Deny{message, interrupt}}`, `PermissionUpdate`, `HookInput`, `HookOutput`, `PermissionMode`, `LaunchSpec` | `serde`, `serde_json`, `uuid`, `thiserror` |
-| `quill-engine` | Actor por sesión (task tokio dueño del proceso y del estado); `ProcessTransport` (spawn, stdin writer, stdout reader, stderr log, kill de grupo); `ControlMux` (request_id ↔ oneshot, cancelación); `PermissionBroker`; `InputQueue` (§5); `TurnTracker` (§6); `HookHost` (callbacks PreToolUse/PostToolUse/UserPromptSubmit/Stop); `Governor` (tope, idle, crash-loop); `CliLocator` (PATH login-shell, versión); fachada `Engine` para la UI con `EngineEvent` (equivalente a `session_updated`/`message`/`tool_permission_request`…) | `Engine`, `SessionHandle`, `SessionCmd`, `SessionView`, `SessionStatus`, `EngineEvent`, `TurnId`, `RequestId`, `PermId` | `tokio` (process, sync, time, io-util), `tokio-util` (`CancellationToken`), `tracing`, `nix` (setpgid, killpg, signals), `sysinfo` (RAM), `which` |
-| `quill-store` | Esquema, migraciones, escritor único por lotes, consultas de UI (timeline de sesión, efectos por request, historial de archivo), blobs por contenido | `Store`, `SessionRow`, `TurnRow`, `ToolCallRow`, `FileEffect`, `EventRow`, `BlobRef` | `rusqlite` (`bundled`), `rusqlite_migration`, `sha2`, `directories` |
-| `quill-git` | Wrapper de `git` (timeouts, parseo `--numstat -z`/`--name-status -z`/porcelain v2); diff compare-API; repo sombra (snapshot/restore/diff); worktrees; watcher de `.git` y árbol | `GitRepo`, `GitState`, `SessionDiff`, `DiffFile`, `ShadowRepo`, `SnapshotId`, `WorktreeLease`, `GitWatch` | `tokio::process`, `notify`, `notify-debouncer-full`, `ignore`; (`gix` opcional) |
-| `quill-pty` | PTYs por (sesión, pestaña), ring buffer, coalescido, parser OSC 133, integración bash/zsh, PTY oculto para `!` | `PtyManager`, `PtyKey`, `PtyEvent{Data, Exit, CommandStarted, CommandFinished}`, `ShellIntegration`, `BangResult` | `portable-pty`, `vte`, `tokio` |
+| `newen-protocol` | Tipos serde de stream-json y control protocol; codec por línea; fallback `Unknown(Value)`; builders de flags/env (puro, testeable) | `Inbound`, `Outbound`, `SdkMessage{User, Assistant, System(SystemMsg), Result, StreamEvent, …}`, `ControlRequest{subtype…}`, `ControlResponse`, `CanUseTool`, `PermissionResult{Allow{updated_input, updated_permissions}, Deny{message, interrupt}}`, `PermissionUpdate`, `HookInput`, `HookOutput`, `PermissionMode`, `LaunchSpec` | `serde`, `serde_json`, `uuid`, `thiserror` |
+| `newen-engine` | Actor por sesión (task tokio dueño del proceso y del estado); `ProcessTransport` (spawn, stdin writer, stdout reader, stderr log, kill de grupo); `ControlMux` (request_id ↔ oneshot, cancelación); `PermissionBroker`; `InputQueue` (§5); `TurnTracker` (§6); `HookHost` (callbacks PreToolUse/PostToolUse/UserPromptSubmit/Stop); `Governor` (tope, idle, crash-loop); `CliLocator` (PATH login-shell, versión); fachada `Engine` para la UI con `EngineEvent` (equivalente a `session_updated`/`message`/`tool_permission_request`…) | `Engine`, `SessionHandle`, `SessionCmd`, `SessionView`, `SessionStatus`, `EngineEvent`, `TurnId`, `RequestId`, `PermId` | `tokio` (process, sync, time, io-util), `tokio-util` (`CancellationToken`), `tracing`, `nix` (setpgid, killpg, signals), `sysinfo` (RAM), `which` |
+| `newen-store` | Esquema, migraciones, escritor único por lotes, consultas de UI (timeline de sesión, efectos por request, historial de archivo), blobs por contenido | `Store`, `SessionRow`, `TurnRow`, `ToolCallRow`, `FileEffect`, `EventRow`, `BlobRef` | `rusqlite` (`bundled`), `rusqlite_migration`, `sha2`, `directories` |
+| `newen-git` | Wrapper de `git` (timeouts, parseo `--numstat -z`/`--name-status -z`/porcelain v2); diff compare-API; repo sombra (snapshot/restore/diff); worktrees; watcher de `.git` y árbol | `GitRepo`, `GitState`, `SessionDiff`, `DiffFile`, `ShadowRepo`, `SnapshotId`, `WorktreeLease`, `GitWatch` | `tokio::process`, `notify`, `notify-debouncer-full`, `ignore`; (`gix` opcional) |
+| `newen-pty` | PTYs por (sesión, pestaña), ring buffer, coalescido, parser OSC 133, integración bash/zsh, PTY oculto para `!` | `PtyManager`, `PtyKey`, `PtyEvent{Data, Exit, CommandStarted, CommandFinished}`, `ShellIntegration`, `BangResult` | `portable-pty`, `vte`, `tokio` |
 
-Dependencias entre crates: `engine → {protocol, store, git, pty}`; `store`, `git`, `pty`, `protocol` no dependen entre sí (salvo ids compartidos, que pueden vivir en `quill-protocol` o en un módulo `ids` de `quill-store`).
+Dependencias entre crates: `engine → {protocol, store, git, pty}`; `store`, `git`, `pty`, `protocol` no dependen entre sí (salvo ids compartidos, que pueden vivir en `newen-protocol` o en un módulo `ids` de `newen-store`).
 
 Fuera del motor (otros documentos): índice de archivos para menciones `@` (`ignore` + `nucleo`, patrón de), emulador de terminal en limn, MCP propios.
 
 **Pruebas del motor:**
-- `quill-protocol`: round-trip de fixtures JSONL capturados de un CLI real (anonimizados) por versión de CLI soportada.
-- `quill-engine`: un **CLI falso** (binario de test que lee stdin y responde un guion de stream-json) para cubrir: turno simple, steer antes de primera respuesta, `can_use_tool` allow/deny/abort, `control_cancel_request`, crash antes de `init`, stream sin `result`, crash-loop.
-- `quill-git`: snapshots/rewind sobre repos temporales (`tempfile`), incluyendo borrado y rename por "Bash".
+- `newen-protocol`: round-trip de fixtures JSONL capturados de un CLI real (anonimizados) por versión de CLI soportada.
+- `newen-engine`: un **CLI falso** (binario de test que lee stdin y responde un guion de stream-json) para cubrir: turno simple, steer antes de primera respuesta, `can_use_tool` allow/deny/abort, `control_cancel_request`, crash antes de `init`, stream sin `result`, crash-loop.
+- `newen-git`: snapshots/rewind sobre repos temporales (`tempfile`), incluyendo borrado y rename por "Bash".
 
 ---
 
@@ -425,7 +425,7 @@ Fuera del motor (otros documentos): índice de archivos para menciones `@` (`ign
 
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
-| El protocolo stream-json/control es el contrato interno entre el SDK TS y el CLI, no una API pública estable | Un update del CLI rompe quill | Piso y techo de versión probados; fixtures por versión; tipos con fallback `Unknown`; ignorar subtipos desconocidos; tests de contrato en CI contra el CLI instalado. |
+| El protocolo stream-json/control es el contrato interno entre el SDK TS y el CLI, no una API pública estable | Un update del CLI rompe Newen | Piso y techo de versión probados; fixtures por versión; tipos con fallback `Unknown`; ignorar subtipos desconocidos; tests de contrato en CI contra el CLI instalado. |
 | Términos de uso del CLI / identificación del cliente | No hacerse pasar por Desktop | No usar `CLAUDE_CODE_ENTRYPOINT=claude-desktop` ni `client_platform:"desktop_app"`; auth propia del CLI; revisar términos antes de distribuir. |
 | Costo de snapshots por tool en repos grandes | Latencia en cada tool (el hook es síncrono para el CLI) | Índice temporal persistente (stat cache), topes por tamaño, desactivar en `$HOME`; medir; hook con timeout y fallback a snapshot solo por turno. |
 | Repo sombra y `.gitignore` | Archivos ignorados no se snapshotean (p. ej. `.env`) | Documentar; rewind no los toca; opcional incluir con lista blanca. |
@@ -461,11 +461,11 @@ Fuera del motor (otros documentos): índice de archivos para menciones `@` (`ign
 
 1. Script de captura: lanzar el CLI instalado con la línea de §2.4 en un repo temporal, con un cliente mínimo que loguee cada línea (cuenta propia del desarrollador, prompts triviales). Escenarios: turno simple; Edit + Bash con `rm`; permiso allow/deny/always; AskUserQuestion; plan → ExitPlanMode; steer durante un turno; interrupt; `--resume`; `--fork-session`; `rewind_files` dry-run.
 2. Guardar las capturas como fixtures versionados por versión de CLI (sin datos personales).
-3. Cerrar V1–V13 antes de congelar `quill-protocol` v1.
+3. Cerrar V1–V13 antes de congelar `newen-protocol` v1.
 
 ### 11.4 Resultados de la captura (2026-10-25, Claude Code 2.1.310)
 
-Capturas con `tools/capture` (`--model haiku`, `--setting-sources=project,local`), en un repo git temporal por escenario. Fixtures anonimizados en `crates/quill-agent-claude/fixtures/2.1.310/` (se regeneran con `scripts/fixtures.mjs`). `[F:<fixture>]` cita el fixture.
+Capturas con `tools/capture` (`--model haiku`, `--setting-sources=project,local`), en un repo git temporal por escenario. Fixtures anonimizados en `crates/newen-agent-claude/fixtures/2.1.310/` (se regeneran con `scripts/fixtures.mjs`). `[F:<fixture>]` cita el fixture.
 
 | # | Resultado |
 |---|---|
@@ -487,7 +487,7 @@ Otros hallazgos de la captura:
 
 - **Mensajes nuevos.** `command_lifecycle`; `system/status{status:"requesting", user_message_uuids[]}` (qué petición está corriendo); `system/thinking_tokens{estimated_tokens, user_message_uuid}`; `system/status{permissionMode}` cuando cambia el modo. `system/init` se emite de nuevo en cada turno.
 - **Capacidades del CLI.** `system/init.capabilities` declara funciones opcionales (`interrupt_receipt_v1`, `interrupt_cancel_queued_v1`, `interrupt_send_now_v1`, `interrupt_requeue_taken_v1`, `msg_lifecycle_v1`, `request_marker_lists_v1`…). El adaptador las mapea a `AgentCapabilities`.
-- **`permission_suggestions` mezcla reglas y modos.** Por ejemplo `[{type:"addRules", behavior:"allow", rules:[{toolName, ruleContent}], destination:"localSettings"}, {type:"addDirectories", directories[], destination:"session"}, {type:"setMode", mode:"acceptEdits", destination:"session"}]`. Si se devuelven todas en `updatedPermissions`, la sesión cambia de modo (`[F:always]`). **"Always allow" de quill debe devolver solo las reglas**; el cambio de modo es otra acción.
+- **`permission_suggestions` mezcla reglas y modos.** Por ejemplo `[{type:"addRules", behavior:"allow", rules:[{toolName, ruleContent}], destination:"localSettings"}, {type:"addDirectories", directories[], destination:"session"}, {type:"setMode", mode:"acceptEdits", destination:"session"}]`. Si se devuelven todas en `updatedPermissions`, la sesión cambia de modo (`[F:always]`). **"Always allow" de Newen debe devolver solo las reglas**; el cambio de modo es otra acción.
 - **Comandos seguros.** El CLI no pide permiso para comandos de solo lectura como `echo`. Las reglas de la configuración del usuario también evitan pedidos, así que las capturas corren sin `user` en `--setting-sources`.
 - **Plan mode.** `ExitPlanMode` llega como `can_use_tool` con `input.plan`; al aprobarlo el modo vuelve a `default`. El plan se escribe en `~/.claude/plans/`, fuera del repo.
 - **Datos personales en el protocolo.** `initialize` devuelve email y organización, y `system/init` incluye rutas del home. Los fixtures se anonimizan siempre (`scripts/fixtures.mjs` falla si queda algo).
@@ -495,11 +495,11 @@ Otros hallazgos de la captura:
 
 ## 12. Logos de conectores y plugins
 
-quill no trae ningún logo: los de los conectores (servidores MCP) y los plugins se buscan en la red la primera vez que la interfaz los pide (`Intent::Logos`, al abrir Connectors, Plugins o el diálogo `/mcp`), y quedan en la carpeta de datos de la persona, nunca en la sesión (`Event::Logo` no se guarda en el registro).
+Newen no trae ningún logo: los de los conectores (servidores MCP) y los plugins se buscan en la red la primera vez que la interfaz los pide (`Intent::Logos`, al abrir Connectors, Plugins o el diálogo `/mcp`), y quedan en la carpeta de datos de la persona, nunca en la sesión (`Event::Logo` no se guarda en el registro).
 
-- **Búsqueda, en `quill-engine/src/logos.rs`, en un hilo bloqueante por logo.** Primero svgl.app por nombre: `GET https://api.svgl.app?search=<nombre>`. Se toma la entrada cuyo `title` es igual al nombre sin distinguir mayúsculas (sin coincidencias parciales: "Google" no sirve para "Google Drive"). Su `route` es una dirección o `{light, dark}`; el tema claro usa `light` y el oscuro `dark`. Un error o una lista sin ese título no dan nada.
+- **Búsqueda, en `newen-engine/src/logos.rs`, en un hilo bloqueante por logo.** Primero svgl.app por nombre: `GET https://api.svgl.app?search=<nombre>`. Se toma la entrada cuyo `title` es igual al nombre sin distinguir mayúsculas (sin coincidencias parciales: "Google" no sirve para "Google Drive"). Su `route` es una dirección o `{light, dark}`; el tema claro usa `light` y el oscuro `dark`. Un error o una lista sin ese título no dan nada.
 - **Si svgl no tiene el nombre, el sitio del servidor.** Con una dirección `https://`, se toma el host sin una etiqueta inicial `mcp.` o `api.` (`mcp.context7.com` → `context7.com`) y se prueba `https://<dominio>/apple-touch-icon.png`, luego `/favicon.ico`. Se acepta PNG o ICO, que `image` decodifica.
 - **Dibujo.** Los SVG se rasterizan con `resvg` (sin texto ni fuentes, sin recursos externos) y las imágenes se escalan; ambos quedan en un PNG de 64×64, centrado y transparente.
 - **Límites.** Solo `https`, diez segundos por respuesta y 512 KB como máximo. Una imagen que decodifica a más de 2048 px o 64 MB se descarta. Las respuestas se tratan como datos no confiables: nada se ejecuta ni se sigue fuera del archivo.
-- **Caché**, en `$XDG_DATA_HOME/quill/logos/` (`Config::logos`): `<clave>-light.png` y `<clave>-dark.png` (el mismo archivo dos veces si el logo es uno solo). Una búsqueda sin resultado deja `<clave>.none`, y se vuelve a buscar pasados siete días. Un logo guardado se responde desde disco, sin red.
+- **Caché**, en `$XDG_DATA_HOME/newen/logos/` (`Config::logos`): `<clave>-light.png` y `<clave>-dark.png` (el mismo archivo dos veces si el logo es uno solo). Una búsqueda sin resultado deja `<clave>.none`, y se vuelve a buscar pasados siete días. Un logo guardado se responde desde disco, sin red.
 - **Apagado.** El ajuste `logos` (Settings › General) está encendido por defecto; apagado, la interfaz no pide ninguno. Las pruebas no usan red: `Config::logos` es `None` en ellas.

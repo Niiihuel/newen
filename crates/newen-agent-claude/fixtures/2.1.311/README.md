@@ -6,11 +6,11 @@ answer before the first turn.
 
 - `extensions.jsonl`: `initialize`, then `mcp_status` twice (at once, servers `pending`; 15 s
   later, `connected` with their tools), `mcp_reconnect`, `get_skills_dialog`,
-  `reload_plugins` and `reload_skills`. One `{t_ms, dir, msg}` per line, as `quill-capture`
+  `reload_plugins` and `reload_skills`. One `{t_ms, dir, msg}` per line, as `newen-capture`
   writes. Trimmed: two tools per server, two skills per source, a few commands; the home
   folder reads `/home/user`, the account `user@example.com`, connector ids are placeholders.
 - `websearch.jsonl`: `claude -p` stream-json with a WebSearch turn (haiku, 2026-10-27), not the
-  `{t_ms, dir, msg}` of `quill-capture`: each line is wrapped as `{"dir":"in","msg":<line>,"t_ms":0}`
+  `{t_ms, dir, msg}` of `newen-capture`: each line is wrapped as `{"dir":"in","msg":<line>,"t_ms":0}`
   for the replay. Two searches, their results and the final answer. Trimmed: `system/init`
   empties `mcp_servers` and `plugins`, keeps two `skills` and `slash_commands` and three
   `agents`; `commands_changed` keeps two commands; the home folder reads `/home/user`, the
@@ -44,8 +44,8 @@ Changes go through the CLI too, each printing one `--json` result line last:
 writes `skillOverrides` into the folder's `.claude/settings.local.json`. A plugin's result is
 `{command, outcome: ok|failed|…, pluginId, scope, message, …}`.
 
-`think.jsonl`: `quill-capture think --model sonnet --settings project,local` with
+`think.jsonl`: `newen-capture think --model sonnet --settings project,local` with
 `--thinking-display summarized` (2.1.311, 2026-10-27). One question with a thinking block: the
 `thinking_delta`s stream its text, and the final `assistant` message carries it whole, trimmed
-of the trailing blank lines by quill. Anonymised: the home folder reads `/home/user` and the
+of the trailing blank lines by Newen. Anonymised: the home folder reads `/home/user` and the
 account `user@example.com`.
