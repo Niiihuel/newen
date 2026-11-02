@@ -24,33 +24,78 @@ pub trait Secrets: Send + Sync + std::fmt::Debug {
     fn delete(&self, account: &str);
 }
 
-/// The system keychain (Secret Service on Linux), service `quill`.
+/// The system keychain (Secret Service on Linux), service `quill`; a secret it does not have is
+/// read from `newen`'s, where Newen, quill's next name, keeps the ones it writes, so a quill
+/// started after going back from Newen still has them (docs/UPDATES.md, «El paso a Newen»).
 #[derive(Debug)]
 pub struct Keychain;
 
 impl Keychain {
-    fn entry(account: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new("quill", account).map_err(|e| e.to_string())
+    fn services() -> Carried<Service, Service> {
+        Carried(Service("quill"), Service("newen"))
     }
 }
 
 impl Secrets for Keychain {
     fn get(&self, account: &str) -> Result<Option<String>, String> {
-        match Self::entry(account)?.get_password() {
+        Self::services().get(account)
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), String> {
+        Self::services().set(account, value)
+    }
+    fn delete(&self, account: &str) {
+        Self::services().delete(account)
+    }
+}
+
+/// One service of the system keychain.
+#[derive(Debug)]
+struct Service(&'static str);
+
+impl Service {
+    fn entry(&self, account: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(self.0, account).map_err(|e| e.to_string())
+    }
+}
+
+impl Secrets for Service {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        match self.entry(account)?.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
     }
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
-        Self::entry(account)?
+        self.entry(account)?
             .set_password(value)
             .map_err(|e| e.to_string())
     }
     fn delete(&self, account: &str) {
-        if let Ok(entry) = Self::entry(account) {
+        if let Ok(entry) = self.entry(account) {
             let _ = entry.delete_credential();
         }
+    }
+}
+
+/// Secrets written to the first; read from the second when the first has none. A delete
+/// removes both, or the second would give back a secret deleted here.
+#[derive(Debug)]
+struct Carried<A, B>(A, B);
+
+impl<A: Secrets, B: Secrets> Secrets for Carried<A, B> {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        match self.0.get(account)? {
+            Some(value) => Ok(Some(value)),
+            None => self.1.get(account),
+        }
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), String> {
+        self.0.set(account, value)
+    }
+    fn delete(&self, account: &str) {
+        self.0.delete(account);
+        self.1.delete(account);
     }
 }
 
@@ -701,6 +746,27 @@ pub fn remember(own: &Mutex<HashMap<String, Own>>, agent: &str, update: impl FnO
 mod tests {
     use super::*;
     use quill_model::GlobalVar;
+
+    /// What the keychain does with its two services, quill's and Newen's: a secret is written
+    /// to quill's, read from it first and from Newen's when quill's has none, and deleted from
+    /// both, so a deleted one never comes back from Newen's.
+    #[test]
+    fn a_secret_is_read_from_newen_s_service_when_quill_s_has_none() {
+        let both = Carried(MemorySecrets::default(), MemorySecrets::default());
+        let account = "mcp/github/env:TOKEN";
+        assert_eq!(both.get(account), Ok(None));
+        // Written by Newen: found.
+        both.1.set(account, "from newen").unwrap();
+        assert_eq!(both.get(account), Ok(Some("from newen".into())));
+        // Written here: quill's, which comes first; Newen's is left alone.
+        both.set(account, "from quill").unwrap();
+        assert_eq!(both.0.get(account), Ok(Some("from quill".into())));
+        assert_eq!(both.1.get(account), Ok(Some("from newen".into())));
+        assert_eq!(both.get(account), Ok(Some("from quill".into())));
+        both.delete(account);
+        assert_eq!(both.get(account), Ok(None));
+        assert_eq!(both.1.get(account), Ok(None));
+    }
 
     fn layer() -> (Layer, tempdir::Dir, Arc<MemorySecrets>) {
         let dir = tempdir::Dir::new();
