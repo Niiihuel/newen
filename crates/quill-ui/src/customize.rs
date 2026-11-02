@@ -869,13 +869,7 @@ fn connectors(ui: &Ui, page: &Page, width: f32) -> Element {
         };
         column.push(customize::attention(
             &words,
-            customize::button(
-                "czp:reconnect-all",
-                "Reconnect all",
-                Some(icons::RELOAD),
-                false,
-                false,
-            ),
+            ("czp:reconnect-all", "Reconnect all"),
             width,
         ));
     }

@@ -11284,3 +11284,32 @@ fn the_layer_chip_opens_its_menu_and_an_agent_chosen_filters_the_page() {
     click(&store, &mut ui, "cz:sort");
     assert_eq!(ui.settings_menu.as_deref(), Some("cz:sort"));
 }
+
+/// The strip of connectors that need the person is amber through and through: its words and
+/// its "Reconnect all" in the amber ink, on a translucent amber fill inside an amber edge.
+#[test]
+fn the_attention_strip_is_amber() {
+    let (store, ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let ink = |words: &str| {
+        frame.commands.iter().find_map(|c| match c {
+            limn::DrawCommand::Text { text, color, .. } if text.contains(words) => Some(*color),
+            _ => None,
+        })
+    };
+    assert_eq!(ink("need attention"), Some(look::manual()));
+    assert_eq!(ink("Reconnect all"), Some(look::manual()));
+    let amber = look::awaiting();
+    let fill = frame.commands.iter().any(|c| {
+        matches!(c, limn::DrawCommand::FillRect { color, rect, .. }
+            if (color.r, color.g, color.b) == (amber.r, amber.g, amber.b)
+                && color.a < 255 && rect.width > 600.0)
+    });
+    assert!(fill, "a translucent amber fill");
+    let edge = frame.commands.iter().any(|c| {
+        matches!(c, limn::DrawCommand::StrokeRect { color, rect, .. }
+            if *color == amber && rect.width > 600.0)
+    });
+    assert!(edge, "an amber edge");
+}
