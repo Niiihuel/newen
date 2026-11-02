@@ -8682,10 +8682,12 @@ fn question_card(
         .width(width - 74.0)
         .render()
     };
+    // The question takes the band but the pager's room, and as many lines as it needs.
+    let pager = if count > 1 { 140.0 } else { 26.0 };
     let mut band = vec![
         text(question["question"].as_str().unwrap_or_default().to_owned())
             .font_size(BODY)
-            .size(Some(width - 140.0), None)
+            .size(Some(width - pager), None)
             .centered_y(),
         Element::spacer().flex(1.0),
     ];
@@ -8717,7 +8719,7 @@ fn question_card(
         band.push(arrow("next", icons::CARET_RIGHT, "Next", page + 1 < count));
     }
     let mut rows = vec![
-        Element::panel(Element::row(band).gap(6.0).size(None, Some(24.0)))
+        Element::panel(Element::row(band).gap(6.0).min_size(0.0, 24.0))
             .background(look::user_bubble())
             // Inside the card's rounded edge.
             .corner_radii(limn::CornerRadii {
