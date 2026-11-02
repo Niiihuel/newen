@@ -117,6 +117,8 @@ impl Store {
                     | AgentEvent::RemotePairing { .. }
                     // Only until the person types, sends or the agent stops.
                     | AgentEvent::PromptSuggestion { .. }
+                    // A snapshot every few seconds while work in phases runs.
+                    | AgentEvent::TaskPhases { .. }
             ),
             _ => true,
         }

@@ -8,8 +8,8 @@ pub use newen_agent::{
     ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
     ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
-    TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage, UsageWindow, WebSearchRun,
-    WebSource,
+    TaskAgent, TaskPhase, TaskState, TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage,
+    UsageWindow, WebSearchRun, WebSource,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
