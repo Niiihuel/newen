@@ -5167,17 +5167,20 @@ fn browser_card(
         .radius(8.0)
         .size(Some(40.0), Some(40.0))
         .centered_y(),
+        // The words take what the globe and "Open" leave, fading out before the button.
         Element::column(vec![
             Element::faded_text(title, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
-                .foreground(look::palette().text)
-                .max_width(width - 160.0),
-            muted(line).font_size(SMALL),
+                .foreground(look::palette().text),
+            Element::faded_text(line, FADE)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::muted()),
         ])
         .gap(2.0)
+        .flex(1.0)
         .centered_y(),
-        Element::spacer().flex(1.0),
     ];
     if tab.is_some() {
         row.push(

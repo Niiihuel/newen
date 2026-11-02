@@ -8213,6 +8213,30 @@ fn crowded_turn() -> (Store, Ui) {
             },
         );
     }
+    // A page the agent opened: its card, with "Open" at its end.
+    use quill_model::{BrowserTab, BrowserUpdate};
+    let url = "https://code.claude.com/docs/en/overview";
+    store.apply(Event::Browser {
+        session: 1,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 7,
+                url: url.into(),
+                title: "Overview - Claude Code Docs".into(),
+                ..Default::default()
+            }],
+            active: Some(7),
+        },
+    });
+    tool(
+        &mut store,
+        "n1",
+        "mcp__browser__navigate",
+        serde_json::json!({ "url": url }),
+        None,
+    );
+    let card = serde_json::json!({ "type": "browser", "tabId": 7, "url": url });
+    result(&mut store, "n1", &card.to_string());
     // Two helpers at once: the first in a group, the last on the running line.
     for call in ["a8", "a9"] {
         let description = "REA: voice preview + timer, and a long account of what it does";
@@ -8284,7 +8308,7 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
     ui.expanded.push("steps:a8".into());
     ui.expanded.push("steps:r1".into());
     settle(&store, &mut ui);
-    for width in [648.0, 1000.0, 1600.0, 2400.0] {
+    for width in [648.0, 800.0, 1000.0, 1600.0, 2400.0] {
         let window = limn::Size::new(width, 2000.0);
         let frame = UiTree::new(view(&store, &ui, window)).layout(window);
         let dock = frame
@@ -8313,7 +8337,14 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
                 eprintln!("{s:?}");
             }
         }
-        for drawn in ["New", "Running agent", "Failed", "Find usages", "Searching"] {
+        for drawn in [
+            "New",
+            "Running agent",
+            "Failed",
+            "Find usages",
+            "Searching",
+            "Open",
+        ] {
             assert!(
                 spans.iter().any(|s| s.0.starts_with(drawn)),
                 "{width}: no {drawn}"
@@ -8322,6 +8353,12 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
         for s in &spans {
             assert!(s.3 <= right + 0.5, "{width}: {s:?} runs past {right}");
         }
+        // The browser card's "Open" keeps inside the card, and the card to the column.
+        let open = region(&frame, "browser:card:7").expect("the card's Open");
+        assert!(
+            open.x + open.width <= right - 12.0 + 0.5,
+            "{width}: {open:?}"
+        );
         for (i, a) in spans.iter().enumerate() {
             for b in &spans[i + 1..] {
                 // A fading or shimmering line is drawn as bands of the same words.
@@ -9028,7 +9065,7 @@ fn cards_that_grow_keep_their_rows_apart_open_and_folded() {
     let (store, mut ui) = crowded_turn();
     ui.expanded.extend(["steps:a8".into(), "steps:r1".into()]);
     settle(&store, &mut ui);
-    for width in [648.0, 1600.0] {
+    for width in [648.0, 800.0, 1600.0] {
         let window = limn::Size::new(width, 900.0);
         assert_rows_apart(
             &store,
