@@ -9399,3 +9399,56 @@ fn the_browser_address_shows_its_whole_line() {
         }
     }
 }
+
+/// A thumbnail's card goes with the viewer it opens: closed by the click, not there while the
+/// viewer is, and after it only on a fresh rest of the pointer on the thumbnail.
+#[test]
+fn a_thumbnail_s_card_does_not_outlive_the_viewer() {
+    let (mut store, mut ui) = store_with_session();
+    screenshot(&mut store, "c1", &["/work/a.png"]);
+    screenshot(&mut store, "c2", &["/work/b.png"]);
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let thumb = region(&frame, "image:step:c2:0").expect("the thumbnail");
+    let center = limn::Point::new(thumb.x + thumb.width / 2.0, thumb.y + thumb.height / 2.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_some(),
+        "the card"
+    );
+    // As the app runs: what the tree reports goes to `update`, and the view is built again.
+    let press = |tree: &mut UiTree, ui: &mut Ui, at: limn::Point| {
+        let mut actions = tree.handle_event(limn::UiEvent::PointerDown(at));
+        actions.extend(tree.handle_event(limn::UiEvent::PointerUp(at)));
+        for action in actions {
+            update(&store, ui, &action);
+        }
+        tree.set_root(view(&store, ui, window));
+        tree.layout(window)
+    };
+    let frame = press(&mut tree, &mut ui, center);
+    assert!(ui.viewer.is_some(), "the viewer opened");
+    let close = region(&frame, view::IMAGE_CLOSE).expect("its close");
+    let frame = press(
+        &mut tree,
+        &mut ui,
+        limn::Point::new(close.x + close.width / 2.0, close.y + close.height / 2.0),
+    );
+    assert!(ui.viewer.is_none(), "the viewer closed");
+    assert!(
+        painted(&frame, "2 of 2").is_none(),
+        "no card once it closed"
+    );
+    tree.handle_event(limn::UiEvent::PointerMove(limn::Point::new(700.0, 400.0)));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_none(),
+        "nor elsewhere"
+    );
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_some(),
+        "a fresh rest shows it"
+    );
+}
