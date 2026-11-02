@@ -381,6 +381,7 @@ pub fn key(
         key,
         ctrl: false,
         shift,
+        ..
     } = event
     else {
         return None;

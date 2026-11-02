@@ -3984,6 +3984,7 @@ fn key(key: limn::Key) -> limn::UiEvent {
         key,
         ctrl: false,
         shift: false,
+        alt: false,
     }
 }
 
@@ -4640,6 +4641,7 @@ fn ctrl_enter_in_the_composer_queues_and_a_plain_enter_steers() {
         key: limn::Key::Enter,
         shift: false,
         ctrl: true,
+        alt: false,
     };
     composer_key(&mut ui, Some(view::COMPOSER), &ctrl_enter);
     let queued = update(
