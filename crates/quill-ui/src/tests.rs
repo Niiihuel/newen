@@ -7585,14 +7585,13 @@ fn skills_show_one_section_per_agent_and_one_with_no_scopes_does_not_wait_foreve
     );
     assert!(!drawn(&store, &ui, "Looking for skills"));
     assert!(drawn(&store, &ui, "imagegen") && drawn(&store, &ui, "System"));
-    // A skill both have is marked with both agents, one only Codex has with Codex alone.
-    let on = |name: &str| -> Vec<String> {
-        view::marked_agents(&ui, |a| view::skill_on_in(&ui, a, name))
-            .map(|a| a.id.clone())
-            .collect()
-    };
-    assert_eq!(on("review"), ["claude", "codex"]);
-    assert_eq!(on("imagegen"), ["codex"]);
+    // A skill both have is marked with both agents in each row; one only Codex has, not.
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    for marks in ["cz:marks:claude:review:1", "cz:marks:codex:review:1"] {
+        assert!(region(&frame, marks).is_some(), "{marks}");
+    }
+    assert!(region(&frame, "cz:marks:codex:imagegen:0").is_none());
     // Codex keeps a skill's state for the person: no project folder is asked for.
     ui.cwd = std::path::PathBuf::new();
     click(&store, &mut ui, "cz:more:codex:review");
@@ -11238,4 +11237,180 @@ fn a_proposal_for_another_agent_names_it_on_its_card() {
         },
     });
     assert!(drawn_words(&store, &ui, "Runs in Codex"));
+}
+
+/// The layer chip, pressed as a person does through the tree, opens its menu with every
+/// agent; choosing one closes it and shows that agent's connectors only.
+#[test]
+fn the_layer_chip_opens_its_menu_and_an_agent_chosen_filters_the_page() {
+    let (store, mut ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let press = |tree: &mut UiTree, ui: &mut Ui, frame: &limn::Frame, id: &str| {
+        let rect = region(frame, id).unwrap_or_else(|| panic!("{id} is not on screen"));
+        let at = limn::Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let mut actions = tree.handle_event(limn::UiEvent::PointerDown(at));
+        actions.extend(tree.handle_event(limn::UiEvent::PointerUp(at)));
+        for action in actions {
+            update(&store, ui, &action);
+        }
+        tree.set_root(view(&store, ui, window));
+        tree.layout(window)
+    };
+    assert!(region(&frame, "czp:layer:=codex").is_none());
+    // Nothing else in the header: Settings is the sidebar's.
+    assert!(region(&frame, "czp:settings").is_none());
+    let frame = press(&mut tree, &mut ui, &frame, "cz:layer");
+    assert_eq!(ui.settings_menu.as_deref(), Some("cz:layer"));
+    assert!(region(&frame, "czp:layer:=").is_some(), "All agents");
+    assert!(region(&frame, "czp:layer:=claude").is_some(), "Claude Code");
+    let frame = press(&mut tree, &mut ui, &frame, "czp:layer:=codex");
+    assert_eq!(ui.settings_menu, None);
+    let page = ui.customize.as_ref().expect("the page");
+    assert_eq!(page.layer.as_deref(), Some("codex"));
+    assert_eq!(page.tab, view::SETTINGS_CONNECTORS);
+    assert!(region(&frame, "czp:open:srv:codex:linear").is_some());
+    assert!(region(&frame, "czp:open:srv:claude:github").is_none());
+    assert!(drawn(&store, &ui, "Codex") && !drawn(&store, &ui, "All agents 0"));
+    // Skills' Sort menu opens the same way.
+    click(
+        &store,
+        &mut ui,
+        &format!("czp:tab:{}", view::SETTINGS_SKILLS),
+    );
+    click(&store, &mut ui, "cz:sort");
+    assert_eq!(ui.settings_menu.as_deref(), Some("cz:sort"));
+}
+
+/// The strip of connectors that need the person is amber through and through: its words and
+/// its "Reconnect all" in the amber ink, on a translucent amber fill inside an amber edge.
+#[test]
+fn the_attention_strip_is_amber() {
+    let (store, ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let ink = |words: &str| {
+        frame.commands.iter().find_map(|c| match c {
+            limn::DrawCommand::Text { text, color, .. } if text.contains(words) => Some(*color),
+            _ => None,
+        })
+    };
+    assert_eq!(ink("need attention"), Some(look::manual()));
+    assert_eq!(ink("Reconnect all"), Some(look::manual()));
+    let amber = look::awaiting();
+    let fill = frame.commands.iter().any(|c| {
+        matches!(c, limn::DrawCommand::FillRect { color, rect, .. }
+            if (color.r, color.g, color.b) == (amber.r, amber.g, amber.b)
+                && color.a < 255 && rect.width > 600.0)
+    });
+    assert!(fill, "a translucent amber fill");
+    let edge = frame.commands.iter().any(|c| {
+        matches!(c, limn::DrawCommand::StrokeRect { color, rect, .. }
+            if *color == amber && rect.width > 600.0)
+    });
+    assert!(edge, "an amber edge");
+}
+
+/// Over Connectors' list: the title with its chip, the tabs, and one row of tools (search,
+/// the status filter as a menu, Discover, Add); no second row of tabs. Discover is the
+/// button, and a button at the row's start leads back to the list.
+#[test]
+fn connectors_have_one_row_of_tools_and_discover_leads_back() {
+    let (store, mut ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let top = |id: &str| region(&frame, id).unwrap_or_else(|| panic!("{id}")).y;
+    let row = top(view::CZ_SEARCH);
+    for id in ["cz:status", "srv:tab:discover", "cz:add:connectors"] {
+        assert!((top(id) - row).abs() < 8.0, "{id} is off the search's row");
+    }
+    for gone in ["srv:tab:yours", "czp:filter:all", "czp:filter:connected"] {
+        assert!(region(&frame, gone).is_none(), "{gone} still shows");
+    }
+    // The status filter is a menu: open, it chooses; chosen, it closes and filters.
+    click(&store, &mut ui, "cz:status");
+    assert!(drawn(&store, &ui, "Not connected"));
+    click(&store, &mut ui, "czp:filter:connected");
+    assert_eq!(ui.settings_menu, None);
+    assert_eq!(
+        ui.customize.as_ref().unwrap().filter,
+        customize::Filter::Connected
+    );
+    assert!(drawn(&store, &ui, "github") && !drawn(&store, &ui, "figma"));
+    // Discover, then back.
+    click(&store, &mut ui, "srv:tab:discover");
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert!(region(&frame, "srv:tab:yours").is_some(), "the way back");
+    click(&store, &mut ui, "srv:tab:yours");
+    assert!(!ui.connectors.discover);
+}
+
+/// Customize with 300 connectors and 300 skills for each agent: a frame builds and lays out
+/// about the rows in view, not all of them, in a bounded time.
+#[test]
+fn a_long_customize_page_lays_out_only_the_rows_in_view() {
+    use quill_model::McpStatus;
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    for agent in ["claude", "codex"] {
+        ui.applied(&Event::Servers {
+            agent: agent.into(),
+            folder: "/work".into(),
+            servers: (0..300)
+                .map(|n| {
+                    let status = if n % 7 == 0 {
+                        McpStatus::NeedsAuth
+                    } else {
+                        McpStatus::Connected
+                    };
+                    configured(&format!("conn-{agent}-{n:03}"), "npx -y x", status)
+                })
+                .collect(),
+            scopes: vec![],
+            error: None,
+        });
+        heard_extensions(
+            &mut ui,
+            agent,
+            skills_list(
+                (0..300)
+                    .map(|n| skill(&format!("skill-{agent}-{n:03}"), "user", "on"))
+                    .collect(),
+            ),
+        );
+    }
+    let window = limn::Size::new(1408.0, 844.0);
+    // A frame as the app makes one: the view built, then laid out with real text.
+    let rows = |store: &Store, ui: &Ui| {
+        let mut tree = UiTree::new(view(store, ui, window));
+        tree.set_text_layout(true);
+        tree.layout(window);
+        let started = std::time::Instant::now();
+        customize::BUILT.with(|b| b.set(0));
+        for _ in 0..5 {
+            tree.set_root(view(store, ui, window));
+            tree.layout(window);
+        }
+        (
+            customize::BUILT.with(|b| b.get()) / 5,
+            started.elapsed() / 5,
+        )
+    };
+    let (connectors, connectors_time) = rows(&store, &ui);
+    click(
+        &store,
+        &mut ui,
+        &format!("czp:tab:{}", view::SETTINGS_SKILLS),
+    );
+    let (skills, skills_time) = rows(&store, &ui);
+    eprintln!("connectors: {connectors} blocks built a frame, in {connectors_time:?}");
+    eprintln!("skills: {skills} blocks built a frame, in {skills_time:?}");
+    // Of more than 600 rows, the 15 or so that fit in 844, with the headings among them.
+    assert!((5..=40).contains(&connectors), "{connectors} built");
+    assert!((5..=40).contains(&skills), "{skills} built");
+    // Before the page built only what shows, a frame took about 25 ms here, unoptimized.
+    let most = std::time::Duration::from_millis(if cfg!(debug_assertions) { 25 } else { 10 });
+    assert!(connectors_time < most, "{connectors_time:?} a frame");
+    assert!(skills_time < most, "{skills_time:?} a frame");
 }

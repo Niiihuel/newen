@@ -129,11 +129,6 @@ pub fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             }
             return Some(open(ui, arg));
         }
-        "settings" => {
-            ui.settings_page = Some(view::SETTINGS_FIRST.into());
-            ui.settings_query.clear();
-            return Some(vec![Intent::MeasureStorage]);
-        }
         "crumb" => {
             let page = ui.customize.as_mut()?;
             page.detail = None;
@@ -155,6 +150,7 @@ pub fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             }
         }
         "filter" => {
+            ui.settings_menu = None;
             ui.customize.as_mut()?.filter = match arg {
                 "connected" => Filter::Connected,
                 "not" => Filter::NotConnected,
@@ -504,6 +500,21 @@ pub fn file_action(verb: &str, name: &str) -> String {
 
 const SCROLL: &str = "czp:scroll";
 
+/// A part of the page's list, built only when it comes into view: a row of a long list
+/// holds what it shows, so a page of hundreds builds and lays out only the rows on screen.
+pub type Block = Box<dyn Fn() -> Element + Send + Sync>;
+
+/// A part built already (a heading, a note), as a [`Block`].
+pub fn ready(element: Element) -> Block {
+    Box::new(move || element.clone())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The blocks built on this thread, for the test that a long page builds only what shows.
+    pub static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The page in `width` × `height`: its header, tabs and crumbs, then the tab or the item, in a
 /// column of at most 1040 centered in it.
 pub fn page(store: &Store, ui: &Ui, width: f32, height: f32) -> Element {
@@ -513,14 +524,14 @@ pub fn page(store: &Store, ui: &Ui, width: f32, height: f32) -> Element {
     let inner = (width - 48.0).clamp(240.0, 1040.0);
     let side = ((width - inner) / 2.0).max(0.0);
     let mut top = vec![header(ui, inner), tab_strip(ui, page)];
-    let body = match &page.detail {
+    let blocks = match &page.detail {
         Some(detail) => {
             top.push(crumbs(ui, page, detail, inner));
-            match detail {
+            vec![ready(match detail {
                 Detail::Connector { agent, name } => connector(store, ui, agent, name, inner),
                 Detail::Skill { agent, name } => skill(ui, agent, name, inner),
                 Detail::Plugin { agent, id } => plugin(ui, agent, id, inner),
-            }
+            })]
         }
         None => {
             top.push(toolbar(ui, page, inner));
@@ -531,15 +542,34 @@ pub fn page(store: &Store, ui: &Ui, width: f32, height: f32) -> Element {
             }
         }
     };
+    // shortcut: a row is known by its place in what the page shows, so a filter or search
+    // moves heights measured for one row to another until they are seen again; give blocks
+    // keys of their own if that makes the scrollbar jump.
+    let what = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (&page.tab, page.detail.is_some(), ui.connectors.discover).hash(&mut hasher);
+        hasher.finish()
+    };
+    let blocks = std::sync::Arc::new(blocks);
+    let list = Element::measured_list(
+        SCROLL,
+        blocks.len() + 1,
+        48.0,
+        move |at| what.wrapping_add(at as u64),
+        move |at| {
+            #[cfg(test)]
+            BUILT.with(|built| built.set(built.get() + 1));
+            // Room under the last.
+            blocks
+                .get(at)
+                .map_or_else(|| Element::spacer().size(None, Some(32.0)), |block| block())
+        },
+    );
     let column = Element::column(vec![
         Element::column(top).gap(14.0).size(Some(inner), None),
         Element::spacer().size(None, Some(8.0)),
-        Element::scroll(
-            SCROLL,
-            Element::column(vec![body, Element::spacer().size(None, Some(32.0))])
-                .size(Some(inner), None),
-        )
-        .flex(1.0),
+        list.flex(1.0),
     ])
     .size(Some(inner), Some(height - 20.0));
     Element::column(vec![
@@ -549,7 +579,8 @@ pub fn page(store: &Store, ui: &Ui, width: f32, height: f32) -> Element {
     .size(Some(width), Some(height))
 }
 
-/// "Customize" in 22 bold, the layer it shows as a chip with its menu, and Settings' gear.
+/// "Customize" in 22 bold and the layer it shows as a chip with its menu; Settings is in the
+/// sidebar, not here.
 fn header(ui: &Ui, width: f32) -> Element {
     let layer = ui.customize.as_ref().and_then(|p| p.layer.clone());
     let chosen = layer
@@ -572,18 +603,14 @@ fn header(ui: &Ui, width: f32) -> Element {
             .radio(layer.as_deref() == Some(a.id.as_str()))
             .into()
     }));
-    let chip = customize::menu_button(
+    // Under the title's end, it opens toward the page.
+    let chip = quill_components::pieces::menu(
         customize::button(&menu, &label, Some(icon), true, false),
-        &menu,
         entries,
         ui.settings_menu.as_deref() == Some(menu.as_str()),
-    );
-    let gear = icon_tool(
-        "czp:settings",
-        icons::of(icons::SETTINGS),
-        "Settings",
-        28.0,
-        look::palette(),
+        &menu,
+        280.0,
+        limn::PopoverPlacement::BottomStart,
     );
     Element::row(vec![
         text("Customize")
@@ -591,8 +618,6 @@ fn header(ui: &Ui, width: f32) -> Element {
             .font_size(22.0)
             .centered_y(),
         chip.centered_y(),
-        Element::spacer().flex(1.0),
-        gear,
     ])
     .gap(12.0)
     .size(Some(width), Some(32.0))
@@ -628,7 +653,7 @@ fn tab_label(tab: &str) -> &'static str {
     }
 }
 
-/// Customize › {tab} [› Your connectors] › {item}.
+/// Customize › {tab} › {item}.
 fn crumbs(ui: &Ui, page: &Page, detail: &Detail, width: f32) -> Element {
     let name = match detail {
         Detail::Connector { name, .. } | Detail::Skill { name, .. } => name.clone(),
@@ -640,17 +665,16 @@ fn crumbs(ui: &Ui, page: &Page, detail: &Detail, width: f32) -> Element {
         limn::BreadcrumbItem::new("Customize").action("czp:crumb:root"),
         limn::BreadcrumbItem::new(tab_label(&page.tab)).action("czp:crumb:tab"),
     ];
-    if matches!(detail, Detail::Connector { .. }) {
-        items.push(limn::BreadcrumbItem::new("Your connectors").action("czp:crumb:tab"));
-    }
     items.push(limn::BreadcrumbItem::new(name));
     limn::Breadcrumb::new("czp:crumbs", items, look::palette())
         .width(width)
         .render()
 }
 
-/// A tab's search, the folder its lists are read for, Discover and "+ Add ▾": the action
-/// most useful now is filled, Discover while there is nothing yet and Add after.
+/// A tab's one row of tools: its search, Connectors' status filter, the folder its lists are
+/// read for, Discover and "+ Add ▾"; the action most useful now is filled, Discover while
+/// there is nothing yet and Add after. In Connectors' Discover, a way back to the list
+/// leads the row.
 fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
     let search_width = (width - 330.0).clamp(140.0, 256.0);
     let (placeholder, search_id, value) = match page.tab.as_str() {
@@ -714,13 +738,49 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
             let first = agents(ui)
                 .first()
                 .map_or(ui.agent.clone(), |a| a.id.clone());
-            tools.push(customize::button(
-                "srv:tab:discover",
-                "Discover",
-                Some(icons::DISCOVER),
-                false,
-                none,
-            ));
+            if ui.connectors.discover {
+                // Back to the list, before the registry's search.
+                let back = customize::button(
+                    "srv:tab:yours",
+                    "Your connectors",
+                    Some(icons::ARROW_LEFT),
+                    false,
+                    false,
+                );
+                tools.insert(0, back);
+            } else {
+                let words = |f: Filter| match f {
+                    Filter::All => "All",
+                    Filter::Connected => "Connected",
+                    Filter::NotConnected => "Not connected",
+                };
+                let entries = [
+                    (Filter::All, "all"),
+                    (Filter::Connected, "connected"),
+                    (Filter::NotConnected, "not"),
+                ]
+                .into_iter()
+                .map(|(f, key)| {
+                    limn::DropdownMenuItem::new(format!("czp:filter:{key}"), words(f))
+                        .radio(page.filter == f)
+                        .into()
+                })
+                .collect();
+                tools.push(menu(
+                    "cz:status",
+                    words(page.filter),
+                    Some(icons::FILTER),
+                    false,
+                    entries,
+                ));
+                tools.push(customize::button(
+                    "srv:tab:discover",
+                    "Discover",
+                    Some(icons::DISCOVER),
+                    false,
+                    none,
+                ));
+            }
             tools.push(menu(
                 "cz:add:connectors",
                 "Add",
@@ -845,31 +905,13 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
 
 /// Your connectors (the "All agents" ones, then each agent's, as a list with their type and
 /// status, filtered and searched) or Discover (the MCP registry's, as cards).
-fn connectors(ui: &Ui, page: &Page, width: f32) -> Element {
+fn connectors(ui: &Ui, page: &Page, width: f32) -> Vec<Block> {
     let c = &ui.connectors;
-    let mut column = vec![customize::tabs(&[
-        ("srv:tab:yours", "Your connectors", !c.discover, None),
-        ("srv:tab:discover", "Discover", c.discover, None),
-    ])];
     if c.discover {
-        column.push(discover(ui, width));
-        return Element::column(column).gap(12.0);
+        return vec![ready(discover(ui, width))];
     }
-    column.push(customize::tabs(&[
-        ("czp:filter:all", "All", page.filter == Filter::All, None),
-        (
-            "czp:filter:connected",
-            "Connected",
-            page.filter == Filter::Connected,
-            None,
-        ),
-        (
-            "czp:filter:not",
-            "Not connected",
-            page.filter == Filter::NotConnected,
-            None,
-        ),
-    ]));
+    let mut column: Vec<Block> = vec![];
+    let push = |column: &mut Vec<Block>, element: Element| column.push(ready(element));
     let wrong: usize = attention(ui).iter().map(|(_, n)| n.len()).sum();
     if wrong > 0 {
         let words = if wrong == 1 {
@@ -877,74 +919,80 @@ fn connectors(ui: &Ui, page: &Page, width: f32) -> Element {
         } else {
             format!("{wrong} of your connectors need attention")
         };
-        column.push(customize::attention(
-            &words,
-            customize::button(
-                "czp:reconnect-all",
-                "Reconnect all",
-                Some(icons::RELOAD),
-                false,
-                false,
-            ),
-            width,
-        ));
+        push(
+            &mut column,
+            customize::attention(&words, ("czp:reconnect-all", "Reconnect all"), width),
+        );
     }
     if page.layer.is_none() {
-        column.extend(view::global_section(ui, false, width));
+        column.extend(view::global_section(ui, false, width).map(ready));
     }
     let query = ui.customize_query.trim().to_lowercase();
     for agent in agents(ui) {
-        column.push(Element::spacer().size(None, Some(8.0)));
+        push(&mut column, Element::spacer().size(None, Some(8.0)));
         let listed = c.listed.get(&agent.id);
         let servers = listed.and_then(|l| l.servers.as_ref());
-        column.push(customize::agent_heading(
-            icons::agent(agent.icon.as_deref()),
-            &agent.name,
-            servers.map(Vec::len),
-            width,
-        ));
-        if !agent.customize.connectors {
-            column.push(customize::empty(
-                icons::CONNECTORS,
-                &format!("{} has no connectors quill can manage.", agent.name),
+        push(
+            &mut column,
+            customize::agent_heading(
+                icons::agent(agent.icon.as_deref()),
+                &agent.name,
+                servers.map(Vec::len),
                 width,
-            ));
+            ),
+        );
+        if !agent.customize.connectors {
+            push(
+                &mut column,
+                customize::empty(
+                    icons::CONNECTORS,
+                    &format!("{} has no connectors quill can manage.", agent.name),
+                    width,
+                ),
+            );
             continue;
         }
         let Some(servers) = servers else {
-            column.push(customize::loading(
-                "srv:loading",
-                "Checking connectors\u{2026}",
-            ));
+            push(
+                &mut column,
+                customize::loading("srv:loading", "Checking connectors\u{2026}"),
+            );
             continue;
         };
         let listed = listed.expect("listed");
         if listed.working {
-            column.push(customize::loading("srv:loading", "Reading again\u{2026}"));
+            push(
+                &mut column,
+                customize::loading("srv:loading", "Reading again\u{2026}"),
+            );
         }
         if let Some(e) = &listed.error {
-            column.push(
+            push(
+                &mut column,
                 text(format!("Couldn\u{2019}t do that. {e}"))
                     .font_size(BODY)
                     .foreground(look::failed()),
             );
         }
         if servers.is_empty() {
-            column.push(customize::hero(
-                "Add your first connectors",
-                &format!(
-                    "Connectors give {} tools and data from other apps and services.",
-                    agent.name
+            push(
+                &mut column,
+                customize::hero(
+                    "Add your first connectors",
+                    &format!(
+                        "Connectors give {} tools and data from other apps and services.",
+                        agent.name
+                    ),
+                    Some(customize::button(
+                        "srv:tab:discover",
+                        "Discover connectors",
+                        Some(icons::DISCOVER),
+                        false,
+                        true,
+                    )),
+                    width,
                 ),
-                Some(customize::button(
-                    "srv:tab:discover",
-                    "Discover connectors",
-                    Some(icons::DISCOVER),
-                    false,
-                    true,
-                )),
-                width,
-            ));
+            );
             continue;
         }
         let shown: Vec<&quill_model::ConfiguredServer> = (servers.iter())
@@ -956,15 +1004,31 @@ fn connectors(ui: &Ui, page: &Page, width: f32) -> Element {
             .filter(|s| query.is_empty() || s.name.to_lowercase().contains(&query))
             .collect();
         if shown.is_empty() {
-            column.push(no_results(width));
+            push(&mut column, no_results(width));
             continue;
         }
-        column.push(customize::table_head("Connector", "Type", "Status", width));
+        push(
+            &mut column,
+            customize::table_head("Connector", "Type", "Status", width),
+        );
         for server in shown {
-            column.push(connector_row(ui, &agent.id, server, width));
+            let logo = view::logo_picture(ui, &logo_key(&server.name, &server.label)).cloned();
+            let menu = format!("cz:more:srv:{}:{}", agent.id, server.name);
+            let open = ui.settings_menu.as_deref() == Some(menu.as_str());
+            let (agent, server) = (agent.id.clone(), server.clone());
+            column.push(Box::new(move || {
+                connector_row(&agent, &server, logo.as_ref(), open, width)
+            }));
         }
     }
-    Element::column(column).gap(8.0)
+    // 8 between the parts, as the column's gap was.
+    (column.into_iter())
+        .map(|block| -> Block {
+            Box::new(move || {
+                Element::column(vec![block(), Element::spacer().size(None, Some(8.0))])
+            })
+        })
+        .collect()
 }
 
 /// Connected, or set up and on where the agent's list does not check.
@@ -1002,8 +1066,8 @@ fn status_of(status: McpStatus, checked: bool) -> (&'static str, &'static str, l
     }
 }
 
-fn picture(ui: &Ui, key: &str, fallback: &'static str, side: f32) -> Element {
-    match view::logo_picture(ui, key) {
+fn picture(logo: Option<&limn::RasterImage>, fallback: &'static str, side: f32) -> Element {
+    match logo {
         Some(logo) => Element::raster_image(logo.clone()).size(Some(side), Some(side)),
         None => Element::icon(icons::of(fallback))
             .foreground(look::palette().text)
@@ -1015,10 +1079,17 @@ fn server_logo(ui: &Ui, name: &str, label: &str) -> String {
     format!("mcp:{}", crate::server_logo_name(ui, name, label))
 }
 
+/// A listed connector's logo, by its own label (else its name): what [`Ui::logos_due`] asks
+/// for each listed one, without looking through every agent's list for each row.
+pub(crate) fn logo_key(name: &str, label: &str) -> String {
+    format!("mcp:{}", if label.is_empty() { name } else { label })
+}
+
 fn connector_row(
-    ui: &Ui,
     agent: &str,
     server: &quill_model::ConfiguredServer,
+    logo: Option<&limn::RasterImage>,
+    open: bool,
     width: f32,
 ) -> Element {
     let (words, icon, ink) = status_of(server.status, server.checked);
@@ -1036,20 +1107,11 @@ fn connector_row(
         .icon(icons::of(icons::TRASH))
         .destructive(look::failed())
         .into()];
-        customize::more(
-            &menu,
-            entries,
-            ui.settings_menu.as_deref() == Some(menu.as_str()),
-        )
+        customize::more(&menu, entries, open)
     });
     customize::table_row(
         &format!("czp:open:srv:{agent}:{}", server.name),
-        picture(
-            ui,
-            &server_logo(ui, &server.name, &server.label),
-            icons::PLUG,
-            16.0,
-        ),
+        picture(logo, icons::PLUG, 16.0),
         &server.name,
         kind,
         customize::status(icon, words, ink),
@@ -1273,7 +1335,11 @@ fn connector(store: &Store, ui: &Ui, agent: &str, name: &str, width: f32) -> Ele
         ui.settings_menu.as_deref() == Some(menu.as_str()),
     ));
     let mut column = vec![detail_head(
-        picture(ui, &server_logo(ui, name, &label), icons::PLUG, 24.0),
+        picture(
+            view::logo_picture(ui, &server_logo(ui, name, &label)),
+            icons::PLUG,
+            24.0,
+        ),
         name,
         customize::status(icon, status, ink),
         end,
@@ -1629,7 +1695,11 @@ fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
             .into(),
     );
     let mut column = vec![detail_head(
-        picture(ui, &format!("plugin:{}", plugin.name), icons::PLUGIN, 24.0),
+        picture(
+            view::logo_picture(ui, &format!("plugin:{}", plugin.name)),
+            icons::PLUGIN,
+            24.0,
+        ),
         &plugin.name,
         muted(under.join(" \u{b7} ")).font_size(SMALL),
         vec![customize::more(
@@ -1684,7 +1754,14 @@ fn plugin(ui: &Ui, agent: &str, id: &str, width: f32) -> Element {
         column.push(muted("None that quill can see.").font_size(SMALL));
     }
     for server in servers {
-        column.push(connector_row(ui, agent, server, width));
+        let menu = format!("cz:more:srv:{agent}:{}", server.name);
+        column.push(connector_row(
+            agent,
+            server,
+            view::logo_picture(ui, &logo_key(&server.name, &server.label)),
+            ui.settings_menu.as_deref() == Some(menu.as_str()),
+            width,
+        ));
     }
     for skill in skills {
         column.push(customize::fact(
