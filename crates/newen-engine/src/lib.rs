@@ -142,7 +142,10 @@ impl Config {
     /// `config`: Newen's own folder in each ([`newen_files::own_dir`]), and in it `newen.db`;
     /// `quill.db`, the name it had, while that is there and `newen.db` is not (not renamed yet).
     pub fn under(data: &Path, config: &Path) -> Self {
-        let (data, config) = (newen_files::own_dir(data), newen_files::own_dir(config));
+        let (data, config) = (
+            newen_files::own_dir(data, data),
+            newen_files::own_dir(config, data),
+        );
         let database = Some(data.join("quill.db"))
             .filter(|quill| quill.is_file() && !data.join("newen.db").exists())
             .unwrap_or_else(|| data.join("newen.db"));

@@ -482,6 +482,11 @@ intenta en el próximo arranque. Corre dentro de `catch_unwind`: un pánico
 corta la migración, que se retoma en el próximo arranque, y la ventana abre
 igual.
 
+Sólo corre si quill estuvo ahí: su base, `quill.db`, está en `<datos>/quill` (o
+ya en `<datos>/newen`, hasta que se renombra). Una carpeta que sólo se llama
+quill (la `Quill` de otra app, que Windows y macOS encuentran con ese nombre,
+porque no distinguen mayúsculas) no es de quill: no se mueve ni se lee.
+
 Los pasos, cada uno se puede repetir sin daño:
 
 1. **Carpetas.** `<datos>/quill` pasa a `<datos>/newen` y `<config>/quill` a
@@ -489,21 +494,24 @@ Los pasos, cada uno se puede repetir sin daño:
    `newen/` que ya exista). En Linux y macOS queda un enlace `quill -> newen`
    en su lugar, para quill 0.1.9 después de una vuelta atrás y para lanzadores
    viejos; en Windows no.
-2. **La base.** Un checkpoint `TRUNCATE` vuelca el WAL en el archivo; si un
-   lector no lo deja, `quill.db` sigue en uso en este arranque. Después se
-   renombran `-wal` y `-shm`, y al final `quill.db` a `newen.db`.
-3. **Rutas guardadas.** Las rutas absolutas bajo la carpeta vieja que guarda la
+2. **Rutas guardadas.** Las rutas absolutas bajo la carpeta vieja que guarda la
    base (imágenes pegadas en `attachments/`, imágenes de las herramientas en
    `pictures/`) se escriben bajo la nueva, tal como las guarda el JSON (en
    Windows, con las barras invertidas dobles), en una sola transacción. Lo mismo
    las rutas de los medios en `whats-new/*/notes.json`.
-4. **Lanzador** (Linux). Un `applications/quill.desktop` cuyo `Exec` arranca la
+3. **Lanzador** (Linux). Un `applications/quill.desktop` cuyo `Exec` arranca la
    instalación de quill (`<datos>/quill/app/…`) se reemplaza por
    `newen.desktop` (`Exec` `<datos>/newen/app/current/newen`, `Icon=newen`,
    `StartupWMClass=newen`). Uno que arranca otra cosa (un wrapper hecho a mano)
    es de la persona y queda.
-5. **`injected/`.** Se borra `<config>/newen/injected/`: se arma de nuevo en cada
+4. **`injected/`.** Se borra `<config>/newen/injected/`: se arma de nuevo en cada
    sesión y sus enlaces apuntaban a la carpeta vieja.
+5. **La base**, la última y sólo con todo lo anterior hecho. Un checkpoint
+   `TRUNCATE` vuelca el WAL en el archivo; si un lector no lo deja, `quill.db`
+   sigue en uso en este arranque. Después se renombran `-wal` y `-shm`, y al
+   final `quill.db` a `newen.db`. Hasta entonces `<datos>/newen/quill.db` dice
+   que falta algo: el próximo arranque lo retoma, también en Windows, donde no
+   queda un enlace `quill` que lo diga.
 6. **Marca.** Al final, `<datos>/newen/.migrated-from-quill` (con la versión):
    desde ahí los arranques no hacen nada.
 
@@ -519,7 +527,7 @@ misma forma al arrancar.
 
 | Qué | Dónde | Cómo |
 | --- | --- | --- |
-| Carpetas `<base>/quill` y `quill-ide` | `newen_files::own_dir` y `named_dir` | `newen/` si existe; `quill/` mientras exista y `newen/` no: Newen nunca crea una carpeta vacía al lado de los datos de quill |
+| Carpetas `<base>/quill` y `quill-ide` | `newen_files::own_dir`, `quill_was_here` y `named_dir` | `newen/` si existe; `quill/` mientras exista, `newen/` no y la base de quill esté en `<datos>` (`quill/quill.db`, o `newen/quill.db` hasta renombrarla): Newen nunca crea una carpeta vacía al lado de los datos de quill, ni toma la carpeta `Quill` de otra app por la de quill |
 | `quill.db` | `Config::under` (newen-engine) | mientras `newen.db` no existe |
 | Variables `QUILL_*` | `newen_files::env`; `NEWEN_CHROME`, `NEWEN_CEF_DIR` y `NEWEN_NO_SANDBOX` en newen-browser | `RESTART_AFTER`, `UPDATE_FEED`, `UPDATE_KEY`, `UPDATE_ROOT`, `NO_UPDATE`, `THEME`, `BROWSER`, `CHROME`, `CEF_DIR` y `NO_SANDBOX` se leen como `NEWEN_*` y, si no están, como `QUILL_*`: las que la persona pudo poner en un lanzador y la que pone quill 0.1.9 al arrancar Newen. Newen pone sólo las suyas |
 | Llavero, servicio `quill` | `newen-engine/src/global.rs` (`Carried`) | se lee `newen` y, si no tiene el secreto, `quill`, y se copia a `newen`; escribir borra la copia de `quill` (quill 0.1.9 lee primero la suya); borrar borra las dos |
@@ -663,8 +671,8 @@ Cada punto, con lo que lo cumple en Newen:
   `<config>/newen`** en una máquina cuyos datos de quill no se migraron: 0.1.9
   tomaría esa carpeta vacía por los datos movidos y la persona vería quill sin
   sesiones (siguen en `quill/`, pero 0.1.9 no las mira). `own_dir` usa
-  `quill/` mientras exista y `newen/` no, y la migración no corre en una
-  compilación de depuración sin `NEWEN_MIGRATE=1`.
+  `quill/` mientras exista, tenga `quill.db` y `newen/` no, y la migración no
+  corre en una compilación de depuración sin `NEWEN_MIGRATE=1`.
 
 ### Los pasos del dueño
 

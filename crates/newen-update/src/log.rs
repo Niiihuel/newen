@@ -15,7 +15,8 @@ static TURN: Mutex<()> = Mutex::new(());
 
 /// This person's update log.
 pub fn path() -> Option<PathBuf> {
-    Some(newen_files::own_dir(&newen_files::data_dir()?).join("updates.log"))
+    let data = newen_files::data_dir()?;
+    Some(newen_files::own_dir(&data, &data).join("updates.log"))
 }
 
 /// Add `line` to the log at `path`, stamped with the time in UTC. A log that cannot be written

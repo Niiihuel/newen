@@ -55,7 +55,7 @@ const BUNDLE: &str = "Newen.app";
 /// ([`newen_files::own_dir`]): `newen/app`, or quill's `quill/app` while its data was not moved.
 #[cfg(any(test, not(any(windows, target_os = "macos"))))]
 pub(crate) fn app_root(data: &Path) -> PathBuf {
-    newen_files::own_dir(data).join("app")
+    newen_files::own_dir(data, data).join("app")
 }
 
 /// Windows: the installation in `programs` (`%LOCALAPPDATA%\Programs`): `newen\`, or quill's

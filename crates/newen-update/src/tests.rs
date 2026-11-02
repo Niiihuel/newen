@@ -888,6 +888,12 @@ fn the_installation_is_newen_s_or_quill_s_until_moved() {
     let data = folder.path();
     assert_eq!(app_root(data), data.join("newen/app"), "a first install");
     std::fs::create_dir_all(data.join("quill/app/versions")).unwrap();
+    assert_eq!(
+        app_root(data),
+        data.join("newen/app"),
+        "no database: not quill's"
+    );
+    std::fs::write(data.join("quill/quill.db"), "").unwrap();
     assert_eq!(app_root(data), data.join("quill/app"));
     std::fs::rename(data.join("quill"), data.join("newen")).unwrap();
     assert_eq!(app_root(data), data.join("newen/app"));

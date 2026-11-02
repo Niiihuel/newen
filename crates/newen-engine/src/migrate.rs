@@ -2,8 +2,9 @@
 //! folders and database take Newen's names, the paths its record keeps follow them, and what is
 //! derived from the old place goes. Each step is done once and can be done again; one that
 //! fails leaves quill's names in use for this start ([`newen_files::own_dir`]) and is tried
-//! again at the next. Legacy names are read only here and in the resolvers that fall back to
-//! them.
+//! again at the next. The database is renamed last: until then it says quill's data is here
+//! ([`newen_files::quill_was_here`]), on Windows too, where no link is left in quill's place.
+//! Legacy names are read only here and in the resolvers that fall back to them.
 
 use std::path::{Path, PathBuf};
 
@@ -18,14 +19,12 @@ pub fn allowed(debug: bool, asked: Option<&std::ffi::OsStr>) -> bool {
 
 /// Move what quill kept under the data folder `data` and the settings folder `config` (the
 /// bases, [`newen_files::data_dir`] and [`newen_files::config_dir`]) to Newen's names: what
-/// happened, a line a step, for the update log. Nothing when there is nothing of quill's, or
-/// when it was all done before.
+/// happened, a line a step, for the update log. Nothing when there is nothing of quill's (a
+/// folder only named quill is another app's), or when it was all done before.
 pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
     let newen = data.join("newen");
     let quill = data.join("quill");
-    if newen.join(MARKER).exists()
-        || !(quill.is_dir() || config.join("quill").is_dir() || newen.join("quill.db").is_file())
-    {
+    if newen.join(MARKER).exists() || !newen_files::quill_was_here(data) {
         return vec![];
     }
     let moved = |base: &Path| newen_files::move_legacy(base, "newen", "quill");
@@ -34,9 +33,8 @@ pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
         ("settings folder", moved(config).map_err(|e| e.to_string())),
     ];
     // The rest is in Newen's folders: while one is quill's, its steps wait for the next start.
-    let data_moved = newen_files::own_dir(data) == newen;
+    let data_moved = newen_files::own_dir(data, data) == newen;
     if data_moved {
-        steps.push(("database", rename_database(&newen)));
         steps.push(("pictures in the record", rewrite_record(&newen, &quill)));
         steps.push((
             "what's new",
@@ -51,7 +49,7 @@ pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
             ),
         ));
     }
-    let config_moved = newen_files::own_dir(config) == config.join("newen");
+    let config_moved = newen_files::own_dir(config, data) == config.join("newen");
     if config_moved {
         // Derived, made again for each session: its links point into quill's folder.
         let removed = match std::fs::remove_dir_all(config.join("newen/injected")) {
@@ -61,18 +59,20 @@ pub fn from_quill(data: &Path, config: &Path) -> Vec<String> {
         };
         steps.push(("injected skills", removed));
     }
-    let mut said = vec![];
-    let mut done = data_moved && config_moved;
-    for (what, result) in steps {
-        match result {
-            Ok(true) => said.push(format!("{what}: done")),
-            Ok(false) => {}
-            Err(error) => {
-                done = false;
-                said.push(format!("{what}: not done, quill's stays in use: {error}"));
-            }
-        }
+    let mut done = data_moved && config_moved && steps.iter().all(|(_, result)| result.is_ok());
+    // Last, once the rest is done: until it is renamed, the next start takes up what is left.
+    if done {
+        let renamed = rename_database(&newen);
+        done = renamed.is_ok();
+        steps.push(("database", renamed));
     }
+    let mut said: Vec<String> = (steps.into_iter())
+        .filter_map(|(what, result)| match result {
+            Ok(true) => Some(format!("{what}: done")),
+            Ok(false) => None,
+            Err(error) => Some(format!("{what}: not done, quill's stays in use: {error}")),
+        })
+        .collect();
     if done {
         match std::fs::write(newen.join(MARKER), newen_update::VERSION) {
             Ok(()) => said.push("done".into()),
@@ -328,26 +328,77 @@ mod tests {
         assert!(data.join("newen/newen.db").is_file());
     }
 
-    /// A database that cannot be renamed (here, not one at all) stays `quill.db` in Newen's
-    /// folder, read there; nothing is marked done, so the next start tries again.
+    /// A database that cannot be read (here, not one at all) is not renamed: it stays
+    /// `quill.db` in Newen's folder, read there; nothing is marked done, so the next start
+    /// tries again.
     #[test]
     fn a_database_not_renamed_is_read_where_it_is() {
         let base = tempfile::tempdir().unwrap();
         let (data, config) = (base.path().join("data"), base.path().join("config"));
         quill_s(&data, &config);
         std::fs::write(data.join("quill/quill.db"), "not a database").unwrap();
-        let said = from_quill(&data, &config);
-        assert!(
+        let undone = |said: &[String]| {
             said.iter()
-                .any(|line| line.starts_with("database: not done")),
-            "{said:?}"
-        );
+                .any(|line| line.starts_with("pictures in the record: not done"))
+        };
+        let said = from_quill(&data, &config);
+        assert!(undone(&said), "{said:?}");
         assert!(!data.join("newen").join(MARKER).exists());
         let paths = crate::Config::under(&data, &config);
         assert_eq!(paths.database, Some(data.join("newen/quill.db")));
-        assert!(from_quill(&data, &config)
-            .iter()
-            .any(|line| line.starts_with("database: not done")));
+        assert!(undone(&from_quill(&data, &config)));
+    }
+
+    /// A step left undone after the folders moved is taken up at the next start even where no
+    /// link is left in quill's place (Windows): the database, renamed last, still says quill's
+    /// data is here.
+    #[test]
+    fn a_step_left_undone_is_taken_up_without_quill_s_links() {
+        let base = tempfile::tempdir().unwrap();
+        let (data, config) = (base.path().join("data"), base.path().join("config"));
+        quill_s(&data, &config);
+        // A file where `injected/` was cannot be removed as a folder.
+        std::fs::remove_dir_all(config.join("quill/injected")).unwrap();
+        std::fs::write(config.join("quill/injected"), "").unwrap();
+        let said = from_quill(&data, &config);
+        assert!(
+            said.iter()
+                .any(|line| line.starts_with("injected skills: not done")),
+            "{said:?}"
+        );
+        assert!(data.join("newen/quill.db").is_file(), "not renamed yet");
+        #[cfg(unix)]
+        for base in [&data, &config] {
+            std::fs::remove_file(base.join("quill")).unwrap();
+        }
+        std::fs::remove_file(config.join("newen/injected")).unwrap();
+        let said = from_quill(&data, &config);
+        assert_eq!(said.last().map(String::as_str), Some("done"), "{said:?}");
+        let newen = data.join("newen");
+        let store = newen_store::Store::open(&newen.join("newen.db")).unwrap();
+        assert_eq!(
+            store.load_session(1).unwrap(),
+            [queued(vec![newen.join("attachments/pasted.png")])]
+        );
+    }
+
+    /// Another app's folders named quill (Windows and macOS find a `Quill` by that name), with
+    /// no database of quill's, are not quill's: nothing moves, and Newen's own folders are its
+    /// own.
+    #[test]
+    fn another_app_s_quill_folder_is_left_alone() {
+        let base = tempfile::tempdir().unwrap();
+        let (data, config) = (base.path().join("data"), base.path().join("config"));
+        for base in [&data, &config] {
+            std::fs::create_dir_all(base.join("quill")).unwrap();
+            std::fs::write(base.join("quill/settings.json"), "{}").unwrap();
+        }
+        assert!(from_quill(&data, &config).is_empty());
+        assert!(!data.join("newen").exists() && !config.join("newen").exists());
+        assert!(config.join("quill/settings.json").is_file());
+        let paths = crate::Config::under(&data, &config);
+        assert_eq!(paths.database, Some(data.join("newen/newen.db")));
+        assert_eq!(paths.settings, Some(config.join("newen/settings.json")));
     }
 
     /// A launcher that starts something else than quill's installation (a wrapper) stays.

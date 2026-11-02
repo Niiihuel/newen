@@ -377,10 +377,22 @@ pub fn env(name: &str) -> Option<std::ffi::OsString> {
     std::env::var_os(format!("NEWEN_{name}")).or_else(|| std::env::var_os(format!("QUILL_{name}")))
 }
 
-/// Newen's own folder in `base`, its [`data_dir`] or [`config_dir`]: `newen/`, or `quill/`,
-/// the name it had, while that is there and `newen/` is not ([`named_dir`]).
-pub fn own_dir(base: &Path) -> PathBuf {
-    named_dir(base, "newen", "quill")
+/// Whether quill, Newen's name before, kept its data in the data folder `data`: its database is
+/// in `quill/`, or in `newen/` until Newen's first start renames it, last. Another app's folder
+/// of that name (Windows and macOS find a `Quill` as `quill`) has none.
+pub fn quill_was_here(data: &Path) -> bool {
+    data.join("quill/quill.db").is_file() || data.join("newen/quill.db").is_file()
+}
+
+/// Newen's own folder in `base`, the data folder `data` or the settings folder beside it
+/// ([`data_dir`], [`config_dir`]): `newen/`; `quill/`, the name it had, while that is there,
+/// `newen/` is not, and quill's data is in `data` ([`quill_was_here`], [`named_dir`]).
+pub fn own_dir(base: &Path, data: &Path) -> PathBuf {
+    if quill_was_here(data) {
+        named_dir(base, "newen", "quill")
+    } else {
+        base.join("newen")
+    }
 }
 
 /// `base/name`; `base/legacy`, the folder's name before Newen, while that is a folder and
@@ -508,26 +520,39 @@ mod tests {
         assert_eq!(env(&name).as_deref(), Some("newen's".as_ref()));
     }
 
-    /// A folder is Newen's own once it is there; before, quill's while quill's is there: never
-    /// an empty one beside the person's data. A link left in quill's place changes nothing.
+    /// A folder is Newen's own once it is there; before, quill's while quill's data is there:
+    /// never an empty one beside the person's data, nor another app's folder named quill. A
+    /// link left in quill's place changes nothing. The settings folder follows the data's.
     #[test]
     fn newen_s_folder_is_used_and_quill_s_only_while_it_was_not_moved() {
         let base = std::env::temp_dir().join(format!("newen-own-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        assert_eq!(own_dir(&base), base.join("newen"), "a first install");
+        let config = base.join("config");
+        fs::create_dir_all(config.join("quill")).unwrap();
+        let own = || (own_dir(&base, &base), own_dir(&config, &base));
+        let newen = (base.join("newen"), config.join("newen"));
+        assert_eq!(own(), newen, "a first install");
         fs::write(base.join("quill"), "a file, not a folder").unwrap();
-        assert_eq!(own_dir(&base), base.join("newen"));
+        assert_eq!(own(), newen);
         fs::remove_file(base.join("quill")).unwrap();
         fs::create_dir(base.join("quill")).unwrap();
-        assert_eq!(own_dir(&base), base.join("quill"), "not moved yet");
+        assert_eq!(own(), newen, "another app's: no database of quill's");
+        fs::write(base.join("quill/quill.db"), "").unwrap();
+        let quill = (base.join("quill"), config.join("quill"));
+        assert_eq!(own(), quill, "not moved yet");
         fs::create_dir(base.join("newen")).unwrap();
-        assert_eq!(own_dir(&base), base.join("newen"), "both: Newen's");
+        assert_eq!(own_dir(&base, &base), base.join("newen"), "both: Newen's");
         fs::remove_dir(base.join("newen")).unwrap();
         fs::rename(base.join("quill"), base.join("newen")).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink("newen", base.join("quill")).unwrap();
-        assert_eq!(own_dir(&base), base.join("newen"), "moved");
+        assert_eq!(
+            own(),
+            (base.join("newen"), config.join("quill")),
+            "the data moved, its database not renamed yet: the settings are still quill's"
+        );
+        fs::rename(base.join("newen/quill.db"), base.join("newen/newen.db")).unwrap();
+        assert_eq!(own_dir(&base, &base), base.join("newen"), "moved");
         assert_eq!(
             named_dir(&base, "newen-ide", "quill-ide"),
             base.join("newen-ide")
