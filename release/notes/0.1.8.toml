@@ -1,0 +1,21 @@
+# The notes of 0.1.8 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "A new conversation opens on a centered greeting over a larger composer; it glides down once the session starts.",
+    "Text in a conversation selects across paragraphs, headings, lists and code; Ctrl+A takes the whole conversation.",
+    "An agent can start a session in another agent: ask Claude to hand a task to Codex, or the other way round.",
+]
+fixed = [
+    "Pasting from other apps works again in the composer and every field (broken since 0.1.5); a copied image attaches.",
+    "The terminal takes what you paste.",
+    "Copying from quill reaches other apps again.",
+]
+
+[announcement]
+title = "Paste is back, and selection spans paragraphs"
+body = "Paste from any app again, select a whole answer at once, and start new conversations from a centered composer. Agents can now hand work to another agent."
+bullets = [
+    "Copy and paste between quill and other apps, images included.",
+    "Drag across paragraphs, lists and code; copying keeps the breaks.",
+    "Ask Claude to start a session in Codex, or Codex in Claude.",
+]
