@@ -295,6 +295,8 @@ pub const BROWSER_TOGGLE: &str = "browser:toggle";
 pub const TASKS_OPEN: &str = "tasks:open";
 pub const TASKS_TOGGLE: &str = "tasks:toggle";
 pub const TASKS_CLEAR: &str = "tasks:clear";
+/// Before a group's key: the chevron at the end of an open group, which folds it.
+pub const GROUP_FOLD: &str = "fold:";
 /// The Files pane: the session's folder as a tree, and the tree's filter.
 pub const FILES_TOGGLE: &str = "files:toggle";
 pub use crate::files::{FILTER_CLEAR, FILTER_FIELD};
@@ -5610,7 +5612,7 @@ fn step_group(
     let body_id = format!("{key}:body");
     let head = fold(
         view,
-        key,
+        key.clone(),
         Element::row(head).gap(8.0).size(None, Some(24.0)),
     )
     .shrink_to_fit();
@@ -5636,11 +5638,28 @@ fn step_group(
             }
             rows.push(step_row(step, &run, ui, view, column, palette));
         }
+        // A long group folds from its end too, by a chevron that shows while the pointer is
+        // on the box; Verbose holds it open, so there is none.
+        if view != TranscriptView::Verbose {
+            let fold = icon_tool(
+                &format!("{GROUP_FOLD}{key}"),
+                icons::of(icons::CARET_UP),
+                "Collapse",
+                24.0,
+                palette,
+            )
+            .reveal_on_hover(format!("{key}:fold"));
+            rows.push(
+                Element::row(vec![Element::spacer().flex(1.0), fold, hgap(4.0)])
+                    .size(Some(column), Some(28.0)),
+            );
+        }
         let card = Element::panel(Element::column(rows))
             .background(palette.surface)
             .border(look::card_border(), 1.0)
             .radius(8.0)
-            .size(Some(column), None);
+            .size(Some(column), None)
+            .hover_region();
         Element::column(vec![Element::spacer().size(None, Some(8.0)), card])
     });
     Element::column(vec![

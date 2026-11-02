@@ -8996,3 +8996,50 @@ fn cards_that_grow_keep_their_rows_apart_open_and_folded() {
         }
     }
 }
+
+/// An open group of steps folds from its end as from its header: a chevron at the box's
+/// bottom right, painted while the pointer is on the box, named "Collapse" and in the Tab
+/// order. Verbose holds the group open and has none.
+#[test]
+fn an_open_group_folds_from_a_chevron_at_its_end() {
+    let (mut store, mut ui) = store_with_session();
+    for call in ["b1", "b2"] {
+        let input = serde_json::json!({ "command": "ls", "description": "List the icons" });
+        tool(&mut store, call, "Bash", input, None);
+        result(&mut store, call, "ok");
+    }
+    click(&store, &mut ui, "steps:b1");
+    settle(&store, &mut ui);
+    let fold = format!("{}steps:b1", view::GROUP_FOLD);
+    let window = limn::Size::new(1408.0, 900.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let button = region(&frame, &fold).expect("the chevron");
+    let last = drawn_spans(&frame)
+        .into_iter()
+        .filter(|s| s.0.contains("List the icons") || s.0 == "ls")
+        .map(|s| s.2)
+        .fold(0.0, f32::max);
+    assert!(button.y > last, "under the last row: {button:?}");
+    let shows = |frame: &limn::Frame| {
+        frame.commands.iter().any(|c| {
+            matches!(c, limn::DrawCommand::Icon { rect, tint, .. }
+                if tint.a > 0 && rect.x >= button.x && rect.x < button.x + button.width
+                    && rect.y >= button.y && rect.y < button.y + button.height)
+        })
+    };
+    assert!(!shows(&frame), "hidden at rest");
+    let center = limn::Point::new(button.x + button.width / 2.0, button.y - 20.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(shows(&tree.layout(window)), "shown on the box");
+    let frame = tree.layout(window);
+    assert!(
+        frame.access.iter().any(|node| node.name == "Collapse"),
+        "named for the keys"
+    );
+    assert!(click(&store, &mut ui, &fold).is_empty());
+    assert!(!ui.expanded.iter().any(|k| k == "steps:b1"), "folded");
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert!(region(&frame, &fold).is_none());
+}

@@ -4183,6 +4183,10 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         ui.open_pane(Pane::Plan);
         return vec![];
     }
+    if let Some(key) = id.strip_prefix(view::GROUP_FOLD) {
+        ui.expanded.retain(|k| k != key);
+        return vec![];
+    }
     if id.starts_with("steps:") || id.starts_with("panel:") {
         if let Some(at) = ui.expanded.iter().position(|c| c == id) {
             ui.expanded.remove(at);
