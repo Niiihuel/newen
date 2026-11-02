@@ -761,8 +761,9 @@ fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
 /// program `newen`. The version staged gets a `quill` link to it, so launchers of
 /// `current/quill` start Newen; the next start activates it on trial and starts
 /// `current/newen`. When Newen's starts never run a minute (counted by this same code, which
-/// Newen keeps), its third goes back to 0.1.9, started as `current/quill` again. File by file,
-/// the same layout.
+/// Newen keeps), its third goes back to 0.1.9, which the activation gave a `newen` link to its
+/// `quill`: launchers Newen wrote (`current/newen`) and quill's start 0.1.9. File by file, the
+/// same layout.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
@@ -833,11 +834,16 @@ fn a_release_of_newen_is_staged_started_on_trial_and_rolled_back_to_quill() {
         Launch::RolledBack {
             version: version("0.2.0"),
             previous: version("0.1.9"),
-            program: quill.clone()
+            program: started.clone()
         }
     );
     assert_eq!(install.current().as_deref(), Some("0.1.9"));
-    assert_eq!(install.program(), quill);
+    assert_eq!(install.program(), started);
+    assert_eq!(
+        std::fs::read(&started).unwrap(),
+        elf("0.1.9"),
+        "Newen's launchers'"
+    );
     assert_eq!(std::fs::read(&quill).unwrap(), elf("0.1.9"));
     assert_eq!(install.bad(), Some(version("0.2.0")));
 

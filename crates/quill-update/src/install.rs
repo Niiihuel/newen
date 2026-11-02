@@ -331,20 +331,32 @@ impl Install {
 
     /// Make the staged `version` the one that starts, by renaming a new link over `current`: a
     /// start finds the old version or the new one, never neither. Every version but the new
-    /// one and the one before goes. Returns [`Self::program`].
+    /// one and the one before goes. When the new one is Newen's, the one before, quill's, gets
+    /// a `newen` link to its `quill`: launchers Newen writes start `current/newen`, and Newen's
+    /// rollback returns to that folder. Returns [`Self::program`].
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn activate(&self, version: &Version) -> io::Result<PathBuf> {
         let name = version.to_string();
         if self.current().as_deref() == Some(name.as_str()) {
             return Ok(self.program());
         }
-        if !program_in(&self.root.join("versions").join(&name)).is_file() {
+        let versions = self.root.join("versions");
+        if !program_in(&versions.join(&name)).is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("{name} is not staged"),
             ));
         }
         let previous = self.current();
+        if let Some(before) = previous.as_deref().map(|before| versions.join(before)) {
+            if versions.join(&name).join(NEWEN_PROGRAM).is_file()
+                && before.join(PROGRAM).is_file()
+                && fs::symlink_metadata(before.join(NEWEN_PROGRAM)).is_err()
+            {
+                // Best effort: without it, only Newen's launchers miss after a rollback.
+                let _ = std::os::unix::fs::symlink(PROGRAM, before.join(NEWEN_PROGRAM));
+            }
+        }
         self.switch(&name)?;
         self.prune(&name, previous.as_deref());
         Ok(self.program())

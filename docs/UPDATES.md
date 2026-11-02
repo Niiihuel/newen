@@ -489,7 +489,11 @@ sigue este orden:
   - Linux: `versions/<v>/newen`; si la versión no trae `quill`, se le agrega un
     enlace `quill -> newen`, así un lanzador que arranca `current/quill`
     arranca Newen. El reinicio arranca `current/newen`, y la
-    activación y la vuelta atrás aceptan cualquiera de los dos programas.
+    activación y la vuelta atrás aceptan cualquiera de los dos programas. Al
+    activar Newen, la versión de quill que corría recibe el enlace inverso,
+    `versions/<0.1.9>/newen -> quill`: los lanzadores que escribe Newen
+    (`current/newen`) siguen arrancando algo después de que su prueba falle y
+    `current` vuelva a 0.1.9.
   - Windows: `newen.exe` queda como `quill.exe` en `Programs\quill`, el nombre
     que arrancan los accesos directos y la clave Run.
   - macOS: `Newen.app` queda como `quill.app`.
@@ -527,6 +531,12 @@ Lo que 0.1.8 lee de la release 0.1.9 no cambia: `quill-update.json`, su
 - Su propia vuelta atrás a 0.1.9 tiene que aceptar `versions/0.1.9/quill` y, en
   Windows, una instalación vieja cuyo programa es `quill.exe`; y tiene que poner
   `NEWEN_RESTART_AFTER` al reiniciar.
+- Sus lanzadores (menú, inicio de sesión) tienen que apuntar a un programa que
+  exista también en la versión a la que vuelve: en Linux `current/newen` sirve
+  (0.1.9 deja ese enlace al activarla); en macOS, la vuelta atrás devuelve un
+  `quill.app` con `Contents/MacOS/quill`, y no se le puede agregar un `newen`
+  sin romper su firma, así que su LaunchAgent no puede arrancar
+  `quill.app/Contents/MacOS/newen`.
 - Su migración deja los datos donde 0.1.9 los busca (`<base>/newen`,
   `newen.db`) y sus secretos en el servicio `newen`.
 - **Una compilación de desarrollo de Newen nunca crea `<datos>/newen` ni
