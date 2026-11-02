@@ -331,8 +331,7 @@ pub fn empty(icon: &'static str, words: &str, width: f32) -> Element {
         .size(Some(width), Some(48.0))
 }
 
-/// The page's tabs (Skills, Connectors, Plugins) or a list's own (Your connectors, Discover):
-/// each its label on the tab's fill when shown, under the pointer's when not; one that cannot
+/// The page's tabs (Skills, Connectors, Plugins): each its label on the tab's fill when shown, under the pointer's when not; one that cannot
 /// be used is muted and says why in its tooltip, and reports nothing.
 pub fn tabs(tabs: &[(&str, &str, bool, Option<String>)]) -> Element {
     let tab = |id: &str, label: &str, on: bool, off: &Option<String>| {

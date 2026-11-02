@@ -11313,3 +11313,37 @@ fn the_attention_strip_is_amber() {
     });
     assert!(edge, "an amber edge");
 }
+
+/// Over Connectors' list: the title with its chip, the tabs, and one row of tools (search,
+/// the status filter as a menu, Discover, Add); no second row of tabs. Discover is the
+/// button, and a button at the row's start leads back to the list.
+#[test]
+fn connectors_have_one_row_of_tools_and_discover_leads_back() {
+    let (store, mut ui) = customize_connectors();
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let top = |id: &str| region(&frame, id).unwrap_or_else(|| panic!("{id}")).y;
+    let row = top(view::CZ_SEARCH);
+    for id in ["cz:status", "srv:tab:discover", "cz:add:connectors"] {
+        assert!((top(id) - row).abs() < 8.0, "{id} is off the search's row");
+    }
+    for gone in ["srv:tab:yours", "czp:filter:all", "czp:filter:connected"] {
+        assert!(region(&frame, gone).is_none(), "{gone} still shows");
+    }
+    // The status filter is a menu: open, it chooses; chosen, it closes and filters.
+    click(&store, &mut ui, "cz:status");
+    assert!(drawn(&store, &ui, "Not connected"));
+    click(&store, &mut ui, "czp:filter:connected");
+    assert_eq!(ui.settings_menu, None);
+    assert_eq!(
+        ui.customize.as_ref().unwrap().filter,
+        customize::Filter::Connected
+    );
+    assert!(drawn(&store, &ui, "github") && !drawn(&store, &ui, "figma"));
+    // Discover, then back.
+    click(&store, &mut ui, "srv:tab:discover");
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert!(region(&frame, "srv:tab:yours").is_some(), "the way back");
+    click(&store, &mut ui, "srv:tab:yours");
+    assert!(!ui.connectors.discover);
+}

@@ -150,6 +150,7 @@ pub fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             }
         }
         "filter" => {
+            ui.settings_menu = None;
             ui.customize.as_mut()?.filter = match arg {
                 "connected" => Filter::Connected,
                 "not" => Filter::NotConnected,
@@ -618,7 +619,7 @@ fn tab_label(tab: &str) -> &'static str {
     }
 }
 
-/// Customize › {tab} [› Your connectors] › {item}.
+/// Customize › {tab} › {item}.
 fn crumbs(ui: &Ui, page: &Page, detail: &Detail, width: f32) -> Element {
     let name = match detail {
         Detail::Connector { name, .. } | Detail::Skill { name, .. } => name.clone(),
@@ -630,17 +631,16 @@ fn crumbs(ui: &Ui, page: &Page, detail: &Detail, width: f32) -> Element {
         limn::BreadcrumbItem::new("Customize").action("czp:crumb:root"),
         limn::BreadcrumbItem::new(tab_label(&page.tab)).action("czp:crumb:tab"),
     ];
-    if matches!(detail, Detail::Connector { .. }) {
-        items.push(limn::BreadcrumbItem::new("Your connectors").action("czp:crumb:tab"));
-    }
     items.push(limn::BreadcrumbItem::new(name));
     limn::Breadcrumb::new("czp:crumbs", items, look::palette())
         .width(width)
         .render()
 }
 
-/// A tab's search, the folder its lists are read for, Discover and "+ Add ▾": the action
-/// most useful now is filled, Discover while there is nothing yet and Add after.
+/// A tab's one row of tools: its search, Connectors' status filter, the folder its lists are
+/// read for, Discover and "+ Add ▾"; the action most useful now is filled, Discover while
+/// there is nothing yet and Add after. In Connectors' Discover, a way back to the list
+/// leads the row.
 fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
     let search_width = (width - 330.0).clamp(140.0, 256.0);
     let (placeholder, search_id, value) = match page.tab.as_str() {
@@ -704,13 +704,49 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
             let first = agents(ui)
                 .first()
                 .map_or(ui.agent.clone(), |a| a.id.clone());
-            tools.push(customize::button(
-                "srv:tab:discover",
-                "Discover",
-                Some(icons::DISCOVER),
-                false,
-                none,
-            ));
+            if ui.connectors.discover {
+                // Back to the list, before the registry's search.
+                let back = customize::button(
+                    "srv:tab:yours",
+                    "Your connectors",
+                    Some(icons::ARROW_LEFT),
+                    false,
+                    false,
+                );
+                tools.insert(0, back);
+            } else {
+                let words = |f: Filter| match f {
+                    Filter::All => "All",
+                    Filter::Connected => "Connected",
+                    Filter::NotConnected => "Not connected",
+                };
+                let entries = [
+                    (Filter::All, "all"),
+                    (Filter::Connected, "connected"),
+                    (Filter::NotConnected, "not"),
+                ]
+                .into_iter()
+                .map(|(f, key)| {
+                    limn::DropdownMenuItem::new(format!("czp:filter:{key}"), words(f))
+                        .radio(page.filter == f)
+                        .into()
+                })
+                .collect();
+                tools.push(menu(
+                    "cz:status",
+                    words(page.filter),
+                    Some(icons::FILTER),
+                    false,
+                    entries,
+                ));
+                tools.push(customize::button(
+                    "srv:tab:discover",
+                    "Discover",
+                    Some(icons::DISCOVER),
+                    false,
+                    none,
+                ));
+            }
             tools.push(menu(
                 "cz:add:connectors",
                 "Add",
@@ -837,29 +873,10 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
 /// status, filtered and searched) or Discover (the MCP registry's, as cards).
 fn connectors(ui: &Ui, page: &Page, width: f32) -> Element {
     let c = &ui.connectors;
-    let mut column = vec![customize::tabs(&[
-        ("srv:tab:yours", "Your connectors", !c.discover, None),
-        ("srv:tab:discover", "Discover", c.discover, None),
-    ])];
     if c.discover {
-        column.push(discover(ui, width));
-        return Element::column(column).gap(12.0);
+        return discover(ui, width);
     }
-    column.push(customize::tabs(&[
-        ("czp:filter:all", "All", page.filter == Filter::All, None),
-        (
-            "czp:filter:connected",
-            "Connected",
-            page.filter == Filter::Connected,
-            None,
-        ),
-        (
-            "czp:filter:not",
-            "Not connected",
-            page.filter == Filter::NotConnected,
-            None,
-        ),
-    ]));
+    let mut column = vec![];
     let wrong: usize = attention(ui).iter().map(|(_, n)| n.len()).sum();
     if wrong > 0 {
         let words = if wrong == 1 {
