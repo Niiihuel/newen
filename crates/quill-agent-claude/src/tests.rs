@@ -953,7 +953,13 @@ fn quills_own_tools_are_served_in_process_and_never_ask() {
             let result = &reply["response"]["response"]["mcp_response"]["result"];
             match method {
                 "initialize" => result["serverInfo"]["name"] == "sessions",
-                _ => result["tools"][0]["name"] == "start_session",
+                // Every one of quill's tools, start_session first, with its `agent`.
+                _ => {
+                    result["tools"].as_array().map(Vec::len) == Some(quill_agent::HOST_TOOLS.len())
+                        && result["tools"][0]["name"] == "start_session"
+                        && result["tools"][0]["inputSchema"]["properties"]["agent"]["type"]
+                            == "string"
+                }
             }
         })
     };

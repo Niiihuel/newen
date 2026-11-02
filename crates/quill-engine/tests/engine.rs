@@ -680,6 +680,10 @@ fn a_proposed_task_starts_a_linked_session_that_reports_back() {
         answer: quill_model::ProposalAnswer::Start,
     });
     let events = until(&rx, |e| matches!(e, Event::ProposalAnswered { .. }));
+    // Naming no agent, it runs the proposing session's own.
+    assert!(events.iter().any(
+        |e| matches!(e, Event::SessionCreated { session: 2, agent, .. } if agent == "claude")
+    ));
     assert!(events.iter().any(|e| matches!(
         e,
         Event::Linked {
@@ -704,6 +708,81 @@ fn a_proposed_task_starts_a_linked_session_that_reports_back() {
     assert_eq!(reports[0].from, 2);
     assert_eq!(reports[0].title, "Add a README");
     assert_eq!(reports[0].text, "done");
+}
+
+/// A Claude Code session whose start_session call names Codex: the session it starts is
+/// Codex's own, from Codex's defaults in Settings, in the same folder, linked to it, and it
+/// reports back.
+#[test]
+fn a_session_started_with_another_agent_runs_that_agent() {
+    let dir = workdir("sessions");
+    let proposed = r#"{"initiation": "own_initiative", "title": "Add a README", "prompt": "Write a short README.md"}"#;
+    let started = r#"{"initiation": "user_asked", "title": "Add a README", "prompt": "Write a short README.md", "background": "No docs yet.", "agent": "codex"}"#;
+    let capture = std::fs::read_to_string(fixture("sessions"))
+        .unwrap()
+        .replace(proposed, started);
+    std::fs::write(dir.join("other.jsonl"), capture).unwrap();
+    std::fs::write(
+        dir.join(".fake-agent"),
+        dir.join("other.jsonl").to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    // Codex's defaults, and the fake answering as Codex's app-server.
+    let settings = dir.join("settings.json");
+    let chosen = serde_json::json!({ "agents": { "codex": {
+        "model": "gpt-6-luna", "effort": "low", "env": ["QUILL_FAKE_APP_SERVER=1"] } } });
+    std::fs::write(&settings, chosen.to_string()).unwrap();
+    let fake = env!("CARGO_BIN_EXE_fake-agent").to_string();
+    let programs = HashMap::from([
+        ("claude".to_string(), fake.clone()),
+        ("codex".to_string(), fake),
+    ]);
+    let (tx, rx) = channel();
+    let config = quill_engine::Config {
+        programs,
+        database: None,
+        snapshots: None,
+        settings: Some(settings),
+        ..Default::default()
+    };
+    let engine = Engine::start_with(move |event| drop(tx.send(event)), config);
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir.clone(),
+        model: Some("claude-haiku-5-5".into()),
+        effort: Some("high".into()),
+        mode: None,
+    }));
+    send(&engine, 1, "Start a README task in Codex");
+    let events = until(&rx, |e| matches!(e, Event::Reported { session: 1, .. }));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::SessionCreated { session: 2, agent, cwd } if agent == "codex" && *cwd == dir
+    )));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::ModelChosen { session: 2, model } if model == "gpt-6-luna")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::EffortChosen { session: 2, effort } if effort == "low")));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Linked {
+            session: 2,
+            parent: 1,
+            side: false
+        }
+    )));
+    // Codex's app-server got the brief, with its background.
+    let said = "echo: Write a short README.md\n\nBackground:\nNo docs yet.";
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Agent { session: 2, event: AgentEvent::Text { text, .. }, .. } if text == said
+    )));
+    let Some(Event::Reported { reports, .. }) = events.last() else {
+        unreachable!()
+    };
+    assert_eq!((reports[0].from, reports[0].text.as_str()), (2, said));
 }
 
 #[test]

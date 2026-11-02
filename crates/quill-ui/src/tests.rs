@@ -2414,6 +2414,7 @@ fn proposals_share_a_card_that_starts_them_and_reports_read_back() {
         prompt: "Do it".into(),
         background: None,
         fork: false,
+        agent: None,
     };
     for id in ["a", "b"] {
         store.apply(Event::Proposed {
@@ -11218,4 +11219,23 @@ fn a_link_in_a_selectable_answer_still_opens() {
         update(&store, &mut ui, action);
     }
     assert_eq!(tree.selected_text(), None);
+}
+
+#[test]
+fn a_proposal_for_another_agent_names_it_on_its_card() {
+    let (_, mut ui) = two_agents();
+    let (mut store, _) = store_with_session();
+    ui.selected = Some(1);
+    store.apply(Event::Proposed {
+        session: 1,
+        proposal: quill_model::Proposal {
+            id: "a".into(),
+            title: "Port it".into(),
+            prompt: "Do it".into(),
+            background: None,
+            fork: false,
+            agent: Some("codex".into()),
+        },
+    });
+    assert!(drawn_words(&store, &ui, "Runs in Codex"));
 }

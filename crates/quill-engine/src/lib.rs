@@ -1253,7 +1253,7 @@ impl Router {
         parent: SessionId,
         proposal: &quill_model::Proposal,
     ) -> Option<SessionId> {
-        let new = self.started.get(&parent)?.clone();
+        let new = self.child_new(parent, proposal).ok()?;
         let title = proposal.title.clone();
         let child = self
             .spawn(
@@ -1284,6 +1284,31 @@ impl Router {
         };
         self.tell(child, Input::Send(brief, vec![], vec![], Lane::default()));
         Some(child)
+    }
+
+    /// What a session `parent` starts for `proposal` runs as: the parent's own agent, model,
+    /// effort, mode and folder, or, when it names another agent, that agent's defaults in the
+    /// parent's folder. Refused (the words for the tool's error) for an agent quill cannot run,
+    /// or a fork into another agent.
+    fn child_new(
+        &self,
+        parent: SessionId,
+        proposal: &quill_model::Proposal,
+    ) -> Result<NewSession, String> {
+        let own = (self.started.get(&parent)).ok_or("The session could not be started.")?;
+        let Some(agent) = (proposal.agent.as_deref()).filter(|agent| *agent != own.agent) else {
+            return Ok(own.clone());
+        };
+        if adapter(agent).is_none() {
+            return Err(format!(
+                "There is no agent \u{201c}{agent}\u{201d} to start. {}",
+                startable(Some(&own.agent))
+            ));
+        }
+        if proposal.fork {
+            return Err("A fork continues this conversation, which only the same agent can read; use context \"fresh\" with a background.".into());
+        }
+        Ok(defaults_of(&self.settings, agent, own.cwd.clone()))
     }
 
     /// Keep `settings` and act on them; the UI hears what is in force either way.
@@ -2165,6 +2190,7 @@ impl Router {
                 session, id, name, ..
             } if name == "list_sessions" => {
                 let here = self.folders.get(&session).cloned();
+                let agents = startable(self.started.get(&session).map(|n| n.agent.as_str()));
                 let mut rows: Vec<(SessionId, PathBuf, String)> = (self.folders.iter())
                     .filter(|(other, _)| **other != session && !self.archived.contains(other))
                     .map(|(&other, cwd)| (other, cwd.clone(), self.session_line(other, cwd)))
@@ -2177,7 +2203,7 @@ impl Router {
                     let _ = internal.send(Internal::HostAnswered {
                         session,
                         id,
-                        content: quill_agent::ToolContent::text(text),
+                        content: quill_agent::ToolContent::text(format!("{text}\n\n{agents}")),
                         is_error: false,
                     });
                 });
@@ -2421,6 +2447,9 @@ impl Router {
                             true,
                         );
                     };
+                    if let Err(refused) = self.child_new(session, &proposal) {
+                        return (refused, true);
+                    }
                     self.answer(session, task, ProposalAnswer::Start).await;
                     return (
                         format!(
@@ -2439,7 +2468,11 @@ impl Router {
                     prompt,
                     background: field("background"),
                     fork: field("context").as_deref() == Some("fork"),
+                    agent: field("agent"),
                 };
+                if let Err(refused) = self.child_new(session, &proposal) {
+                    return (refused, true);
+                }
                 match field("initiation").as_deref() {
                     Some("own_initiative") => {
                         let id = proposal.id.clone();
@@ -4568,6 +4601,39 @@ fn last_report(text: &str, from: SessionId) -> String {
     format!("{kept}\n[\u{2026} cut here; read_session (session_id {from}) has all of it]")
 }
 
+/// The agents a session can be started with (`start_session`'s `agent`), for the session that
+/// runs `own`: each one's id and name, its own marked.
+fn startable(own: Option<&str>) -> String {
+    let agents: Vec<String> = (AGENTS.iter().filter_map(|id| adapter(id)))
+        .map(|a| {
+            let yours = if own == Some(a.id()) { ", yours" } else { "" };
+            format!("{} ({}{yours})", a.id(), a.name())
+        })
+        .collect();
+    format!(
+        "Agents a session can be started with (start_session's agent): {}.",
+        agents.join(", ")
+    )
+}
+
+/// A new session of `agent` in `cwd`, as a new conversation of it starts: its model, effort
+/// and mode from Settings, else its own; a mode that skips every approval only while Settings
+/// allows it.
+fn defaults_of(settings: &quill_model::Settings, agent: &str, cwd: PathBuf) -> NewSession {
+    let chosen = settings.agent(agent);
+    let own = adapter(agent).map(|a| a.default_mode().to_owned());
+    let mode = (chosen.mode)
+        .filter(|mode| chosen.allow_unsafe || !skips_every_approval(agent, mode))
+        .or(own.filter(|mode| !mode.is_empty()));
+    NewSession {
+        agent: agent.to_owned(),
+        cwd,
+        model: chosen.model,
+        effort: chosen.effort,
+        mode,
+    }
+}
+
 /// Whether `mode` is one of the agent's modes that skip every approval (its adapter's words).
 fn skips_every_approval(agent: &str, mode: &str) -> bool {
     adapter(agent).is_some_and(|a| {
@@ -4598,6 +4664,107 @@ mod tests {
             router.busy.insert(session);
         }
         (router, heard)
+    }
+
+    /// Session 1 of `router` runs `agent` in a folder of its own.
+    fn running(router: &mut Router, agent: &str) {
+        router.started.insert(
+            1,
+            NewSession {
+                agent: agent.into(),
+                cwd: std::env::temp_dir(),
+                model: Some("its-model".into()),
+                effort: None,
+                mode: None,
+            },
+        );
+    }
+
+    fn start(agent: &str, initiation: &str, context: &str) -> serde_json::Value {
+        serde_json::json!({ "initiation": initiation, "title": "Port it", "prompt": "Port the parser",
+            "context": context, "background": "Why", "agent": agent })
+    }
+
+    #[tokio::test]
+    async fn another_agent_is_refused_when_unknown_or_forked_and_proposed_by_its_id() {
+        let (mut router, heard) = router();
+        running(&mut router, AGENTS[0]);
+        let other = AGENTS[1];
+        let (said, refused) = router
+            .host_tool(1, "start_session", &start("nope", "user_asked", "fresh"))
+            .await;
+        assert!(refused && said.contains("\u{201c}nope\u{201d}"), "{said}");
+        assert!(said.contains(&startable(Some(AGENTS[0]))), "{said}");
+        let (said, refused) = router
+            .host_tool(1, "start_session", &start(other, "user_asked", "fork"))
+            .await;
+        assert!(refused && said.starts_with("A fork continues"), "{said}");
+        assert!(router.sessions.is_empty(), "nothing was started");
+        // Proposed, the card's task names the agent that runs it.
+        let (_, refused) = router
+            .host_tool(1, "start_session", &start(other, "own_initiative", "fresh"))
+            .await;
+        assert!(!refused);
+        assert!(heard.lock().unwrap().iter().any(|e| matches!(
+            e,
+            Event::Proposed { proposal, .. } if proposal.agent.as_deref() == Some(other)
+        )));
+        // Its own agent named is the default: the parent's session as it runs.
+        let proposal: quill_model::Proposal = serde_json::from_value(serde_json::json!({
+            "id": "t", "title": "T", "prompt": "P", "background": null, "fork": true,
+            "agent": AGENTS[0] }))
+        .unwrap();
+        assert_eq!(
+            router.child_new(1, &proposal),
+            Ok(router.started[&1].clone())
+        );
+    }
+
+    #[test]
+    fn a_proposal_stored_before_it_named_an_agent_still_loads() {
+        let stored = r#"{"id":"task-1","title":"T","prompt":"P","background":null,"fork":false}"#;
+        let proposal: quill_model::Proposal = serde_json::from_str(stored).unwrap();
+        assert_eq!(proposal.agent, None);
+    }
+
+    #[test]
+    fn another_agent_starts_from_its_own_defaults_and_unsafe_only_when_allowed() {
+        for agent in AGENTS {
+            let a = adapter(agent).unwrap();
+            let Some(unsafe_mode) = (a.modes().into_iter())
+                .find(|m| matches!(m.tone, quill_agent::ModeTone::Unsafe))
+                .map(|m| m.id)
+            else {
+                continue;
+            };
+            let mut settings = quill_model::Settings::default();
+            let chosen = settings.agents.entry(agent.into()).or_default();
+            chosen.model = Some("m".into());
+            chosen.effort = Some("low".into());
+            chosen.mode = Some(unsafe_mode.clone());
+            let new = defaults_of(&settings, agent, "/w".into());
+            assert_eq!(
+                (
+                    new.agent.as_str(),
+                    new.model.as_deref(),
+                    new.effort.as_deref()
+                ),
+                (agent, Some("m"), Some("low"))
+            );
+            assert_eq!(new.mode.as_deref(), Some(a.default_mode()), "{agent}");
+            settings.agents.get_mut(agent).unwrap().allow_unsafe = true;
+            let new = defaults_of(&settings, agent, "/w".into());
+            assert_eq!(new.mode, Some(unsafe_mode));
+        }
+        let listed = startable(Some(AGENTS[1]));
+        for agent in AGENTS {
+            assert!(listed.contains(agent));
+        }
+        assert!(listed.contains(&format!(
+            "{} ({}, yours)",
+            AGENTS[1],
+            adapter(AGENTS[1]).unwrap().name()
+        )));
     }
 
     fn wait(on: SessionId) -> serde_json::Value {
