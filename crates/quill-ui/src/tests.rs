@@ -7950,6 +7950,89 @@ fn deleting_the_shown_session_shows_the_new_conversations_own_panes() {
     assert!(!ui.kept_panes.contains_key(&Some(1)));
 }
 
+/// Two sessions working at once keep their places while they stream; a turn ending, a
+/// question or a message sent moves that one up.
+#[test]
+fn streaming_sessions_keep_their_order_until_something_happens() {
+    let mut store = Store::default();
+    for session in [1, 2] {
+        store.apply(Event::SessionCreated {
+            session,
+            agent: "claude".into(),
+            cwd: "/work".into(),
+        });
+        store.apply(Event::Queued {
+            session,
+            request: format!("r{session}"),
+            text: "Go".into(),
+            at: None,
+            images: vec![],
+        });
+    }
+    let ui = Ui::new("/work".into());
+    let say = |store: &mut Store, session, event| {
+        store.apply(Event::Agent {
+            session,
+            request: Some(format!("r{session}")),
+            event,
+        })
+    };
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    for round in 0..3 {
+        for session in [1, 2] {
+            say(
+                &mut store,
+                session,
+                AgentEvent::TextDelta {
+                    text: "word ".into(),
+                    parent: None,
+                },
+            );
+            say(
+                &mut store,
+                session,
+                AgentEvent::ToolUse {
+                    call: format!("c{round}"),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                    parent: None,
+                },
+            );
+            assert_eq!(view::order(&store, &ui), [2, 1]);
+        }
+    }
+    let finished = AgentEvent::TurnFinished {
+        ok: true,
+        interrupted: false,
+        usage: Usage::default(),
+        error: None,
+    };
+    say(&mut store, 1, finished.clone());
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+    say(
+        &mut store,
+        2,
+        AgentEvent::PermissionRequest {
+            id: "p1".into(),
+            call: None,
+            tool: "Bash".into(),
+            input: serde_json::json!({}),
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    );
+    assert_eq!(view::order(&store, &ui), [2, 1]);
+    store.apply(Event::Queued {
+        session: 1,
+        request: "r3".into(),
+        text: "And this".into(),
+        at: None,
+        images: vec![],
+    });
+    assert_eq!(view::order(&store, &ui), [1, 2]);
+}
+
 #[test]
 fn the_sidebar_keeps_its_order_while_the_pointer_is_over_it() {
     let mut store = Store::default();
@@ -8130,6 +8213,30 @@ fn crowded_turn() -> (Store, Ui) {
             },
         );
     }
+    // A page the agent opened: its card, with "Open" at its end.
+    use quill_model::{BrowserTab, BrowserUpdate};
+    let url = "https://code.claude.com/docs/en/overview";
+    store.apply(Event::Browser {
+        session: 1,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 7,
+                url: url.into(),
+                title: "Overview - Claude Code Docs".into(),
+                ..Default::default()
+            }],
+            active: Some(7),
+        },
+    });
+    tool(
+        &mut store,
+        "n1",
+        "mcp__browser__navigate",
+        serde_json::json!({ "url": url }),
+        None,
+    );
+    let card = serde_json::json!({ "type": "browser", "tabId": 7, "url": url });
+    result(&mut store, "n1", &card.to_string());
     // Two helpers at once: the first in a group, the last on the running line.
     for call in ["a8", "a9"] {
         let description = "REA: voice preview + timer, and a long account of what it does";
@@ -8201,7 +8308,7 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
     ui.expanded.push("steps:a8".into());
     ui.expanded.push("steps:r1".into());
     settle(&store, &mut ui);
-    for width in [648.0, 1000.0, 1600.0, 2400.0] {
+    for width in [648.0, 800.0, 1000.0, 1600.0, 2400.0] {
         let window = limn::Size::new(width, 2000.0);
         let frame = UiTree::new(view(&store, &ui, window)).layout(window);
         let dock = frame
@@ -8230,7 +8337,14 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
                 eprintln!("{s:?}");
             }
         }
-        for drawn in ["New", "Running agent", "Failed", "Find usages", "Searching"] {
+        for drawn in [
+            "New",
+            "Running agent",
+            "Failed",
+            "Find usages",
+            "Searching",
+            "Open",
+        ] {
             assert!(
                 spans.iter().any(|s| s.0.starts_with(drawn)),
                 "{width}: no {drawn}"
@@ -8239,6 +8353,12 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
         for s in &spans {
             assert!(s.3 <= right + 0.5, "{width}: {s:?} runs past {right}");
         }
+        // The browser card's "Open" keeps inside the card, and the card to the column.
+        let open = region(&frame, "browser:card:7").expect("the card's Open");
+        assert!(
+            open.x + open.width <= right - 12.0 + 0.5,
+            "{width}: {open:?}"
+        );
         for (i, a) in spans.iter().enumerate() {
             for b in &spans[i + 1..] {
                 // A fading or shimmering line is drawn as bands of the same words.
@@ -8267,6 +8387,178 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
             }
         }
     }
+}
+
+/// The composer's ring fills as the Context card says the context is, for a 200k window and
+/// a 1M one, and its hint gives the same share and figures.
+#[test]
+fn the_composer_s_ring_fills_as_the_context_card_says() {
+    for (used, window, card) in [
+        (512_900, 1_000_000, "51% used"),
+        (51_000, 200_000, "26% used"),
+    ] {
+        let (mut store, mut ui) = store_with_session();
+        store.sessions[0].context_tokens = used;
+        store.sessions[0].context_window = window;
+        settle(&store, &mut ui);
+        let window_size = limn::Size::new(2000.0, 900.0);
+        let mut tree = UiTree::new(view(&store, &ui, window_size));
+        let frame = tree.layout(window_size);
+        assert!(painted(&frame, card).is_some(), "the card says {card}");
+        let anchor = region(&frame, view::USAGE_MENU).expect("the ring");
+        let ring = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::ProgressRing { rect, fraction, .. }
+                if anchor.contains(limn::Point::new(rect.x + 1.0, rect.y + 1.0)) =>
+            {
+                Some(*fraction)
+            }
+            _ => None,
+        });
+        let fraction = ring.flatten().expect("the ring's arc");
+        assert!(
+            (fraction - used as f32 / window as f32).abs() < 1e-4,
+            "{window}: {fraction}"
+        );
+        assert_eq!(format!("{}% used", (fraction * 100.0).round() as u32), card);
+        // Its hint, once the pointer rests on it.
+        let at = limn::Point::new(
+            anchor.x + anchor.width / 2.0,
+            anchor.y + anchor.height / 2.0,
+        );
+        tree.handle_event(limn::UiEvent::PointerMove(at));
+        let start = std::time::Instant::now();
+        tree.layout_at(window_size, start);
+        let frame = tree.layout_at(window_size, start + std::time::Duration::from_millis(900));
+        let share = card.trim_end_matches(" used");
+        let hint = format!(
+            "Context {share} \u{b7} {} / {}",
+            view::compact(used),
+            view::compact(window)
+        );
+        assert!(painted(&frame, &hint).is_some(), "{hint}");
+    }
+}
+
+/// A background task's title, in the card and in its pane, is drawn in the face and size of
+/// the right panel's other rows, not the monospace an element has of its own.
+#[test]
+fn a_background_task_s_title_is_in_the_panel_s_face() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "t1".into(),
+            call: None,
+            description: "REA Discord stream".into(),
+            kind: "command".into(),
+        },
+    );
+    settle(&store, &mut ui);
+    let window = limn::Size::new(2000.0, 900.0);
+    let face = |frame: &limn::Frame, words: &str| {
+        frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::Text {
+                text,
+                font_family,
+                font_size,
+                ..
+            } if text == words => Some((*font_family, *font_size)),
+            _ => None,
+        })
+    };
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let row = face(&frame, "This computer").expect("the Environment row");
+    assert_eq!(row, (limn::FontFamily::Sans, look::BODY));
+    assert_eq!(face(&frame, "REA Discord stream"), Some(row), "the card's");
+    click(&store, &mut ui, view::TASKS_OPEN);
+    settle(&store, &mut ui);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert_eq!(face(&frame, "REA Discord stream"), Some(row), "the pane's");
+}
+
+/// A running task's Stop, in the Background tasks card and in its pane, is the composer's:
+/// the same 28 px button with the same square, and the card's row lights as a sidebar row
+/// does, as tall and as round.
+#[test]
+fn a_task_s_stop_is_the_composer_s_and_its_row_lights_as_the_sidebar_s() {
+    let (mut store, mut ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "t1".into(),
+            call: None,
+            description: "REA Discord stream".into(),
+            kind: "command".into(),
+        },
+    );
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Running,
+    });
+    settle(&store, &mut ui);
+    let window = limn::Size::new(2000.0, 900.0);
+    // Each Stop's size and the icon drawn in it.
+    let stop = |frame: &limn::Frame, id: &str| {
+        let rect = region(frame, id).unwrap_or_else(|| panic!("no {id}"));
+        let inside = |at: &limn::Rect| {
+            rect.contains(limn::Point::new(
+                at.x + at.width / 2.0,
+                at.y + at.height / 2.0,
+            ))
+        };
+        let icon = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::Icon {
+                rect: at,
+                icon,
+                tint,
+            } if inside(at) => Some((at.width, at.height, *icon, *tint)),
+            _ => None,
+        });
+        ((rect.width, rect.height), icon.expect("its square"))
+    };
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let composer = stop(&frame, view::STOP);
+    assert_eq!(composer.0, (28.0, 28.0));
+    assert_eq!(stop(&frame, "terminals:stop:t1"), composer, "the card's");
+    // Under the pointer, the card's row and the sidebar's session row light the same.
+    let mut lit = |id: &str| {
+        let frame = tree.layout(window);
+        let row = region(&frame, id).unwrap_or_else(|| panic!("no {id}"));
+        let at = limn::Point::new(row.x + 4.0, row.y + row.height / 2.0);
+        tree.handle_event(limn::UiEvent::PointerMove(at));
+        let frame = tree.layout(window);
+        let fill = frame.commands.iter().find_map(|command| match command {
+            limn::DrawCommand::FillRect {
+                rect,
+                color,
+                radius,
+            } if [look::row_hover(), look::selected_hover()].contains(color)
+                && rect.contains(at) =>
+            {
+                Some((rect.height, *radius, rect.x - row.x))
+            }
+            _ => None,
+        });
+        fill.unwrap_or_else(|| {
+            let fills: Vec<_> = frame
+                .commands
+                .iter()
+                .filter(
+                    |c| matches!(c, limn::DrawCommand::FillRect { rect, .. } if rect.contains(at)),
+                )
+                .collect();
+            panic!("{id} at {row:?} is not lit: {fills:?}")
+        })
+    };
+    let sidebar = lit("session:1");
+    assert_eq!(sidebar.0, 32.0);
+    assert_eq!(lit("terminals:open:t1"), sidebar);
+    click(&store, &mut ui, view::TASKS_OPEN);
+    settle(&store, &mut ui);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    assert_eq!(stop(&frame, "task:stop:t1"), composer, "the pane's");
 }
 
 /// A background task's row keeps its description on one line that fades out inside the
@@ -8945,7 +9237,7 @@ fn cards_that_grow_keep_their_rows_apart_open_and_folded() {
     let (store, mut ui) = crowded_turn();
     ui.expanded.extend(["steps:a8".into(), "steps:r1".into()]);
     settle(&store, &mut ui);
-    for width in [648.0, 1600.0] {
+    for width in [648.0, 800.0, 1600.0] {
         let window = limn::Size::new(width, 900.0);
         assert_rows_apart(
             &store,
@@ -9042,4 +9334,121 @@ fn an_open_group_folds_from_a_chevron_at_its_end() {
     assert!(!ui.expanded.iter().any(|k| k == "steps:b1"), "folded");
     let frame = UiTree::new(view(&store, &ui, window)).layout(window);
     assert!(region(&frame, &fold).is_none());
+}
+
+/// The browser's address shows its whole line, in the middle of its field, in the stand-in
+/// measure and in the fonts the app lays text out in.
+#[test]
+fn the_browser_address_shows_its_whole_line() {
+    use quill_model::{BrowserTab, BrowserUpdate};
+    let (mut store, mut ui) = store_with_session();
+    let tabs = Event::Browser {
+        session: 1,
+        update: BrowserUpdate::Tabs {
+            tabs: vec![BrowserTab {
+                id: 3,
+                url: "https://code.claude.com/docs/en/overview".into(),
+                title: "Overview".into(),
+                ..Default::default()
+            }],
+            active: Some(3),
+        },
+    };
+    ui.applied(&tabs);
+    store.apply(tabs);
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    for laid_out in [false, true] {
+        let mut tree = UiTree::new(view(&store, &ui, window));
+        tree.set_text_layout(laid_out);
+        let frame = tree.layout(window);
+        let field = region(&frame, view::BROWSER_URL).expect("the address");
+        let mut clips = vec![];
+        let mut drawn = vec![];
+        for command in &frame.commands {
+            match command {
+                limn::DrawCommand::PushClip(rect) => clips.push(*rect),
+                limn::DrawCommand::PopClip => {
+                    clips.pop();
+                }
+                limn::DrawCommand::Text {
+                    text,
+                    position,
+                    font_size,
+                    ..
+                } if text.contains("claude.com") => {
+                    drawn.push((position.y, *font_size, clips.last().copied()))
+                }
+                limn::DrawCommand::Glyphs(run) if run.text.contains("claude.com") => {
+                    drawn.push((run.origin.y, run.size, clips.last().copied()))
+                }
+                _ => {}
+            }
+        }
+        assert!(!drawn.is_empty(), "{laid_out}: the address is drawn");
+        for (top, size, clip) in drawn {
+            let line = 18.0 * size / 14.0;
+            let clip = clip.expect("clipped to its field");
+            assert!(clip.height >= line - 0.5, "{laid_out}: {clip:?}");
+            assert!(clip.y >= field.y && clip.y + clip.height <= field.y + field.height);
+            let middle = top + line / 2.0 - field.y;
+            assert!(
+                (middle - field.height / 2.0).abs() < 1.0,
+                "{laid_out}: {middle}"
+            );
+        }
+    }
+}
+
+/// A thumbnail's card goes with the viewer it opens: closed by the click, not there while the
+/// viewer is, and after it only on a fresh rest of the pointer on the thumbnail.
+#[test]
+fn a_thumbnail_s_card_does_not_outlive_the_viewer() {
+    let (mut store, mut ui) = store_with_session();
+    screenshot(&mut store, "c1", &["/work/a.png"]);
+    screenshot(&mut store, "c2", &["/work/b.png"]);
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    tree.set_reduced_motion(true);
+    let frame = tree.layout(window);
+    let thumb = region(&frame, "image:step:c2:0").expect("the thumbnail");
+    let center = limn::Point::new(thumb.x + thumb.width / 2.0, thumb.y + thumb.height / 2.0);
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_some(),
+        "the card"
+    );
+    // As the app runs: what the tree reports goes to `update`, and the view is built again.
+    let press = |tree: &mut UiTree, ui: &mut Ui, at: limn::Point| {
+        let mut actions = tree.handle_event(limn::UiEvent::PointerDown(at));
+        actions.extend(tree.handle_event(limn::UiEvent::PointerUp(at)));
+        for action in actions {
+            update(&store, ui, &action);
+        }
+        tree.set_root(view(&store, ui, window));
+        tree.layout(window)
+    };
+    let frame = press(&mut tree, &mut ui, center);
+    assert!(ui.viewer.is_some(), "the viewer opened");
+    let close = region(&frame, view::IMAGE_CLOSE).expect("its close");
+    let frame = press(
+        &mut tree,
+        &mut ui,
+        limn::Point::new(close.x + close.width / 2.0, close.y + close.height / 2.0),
+    );
+    assert!(ui.viewer.is_none(), "the viewer closed");
+    assert!(
+        painted(&frame, "2 of 2").is_none(),
+        "no card once it closed"
+    );
+    tree.handle_event(limn::UiEvent::PointerMove(limn::Point::new(700.0, 400.0)));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_none(),
+        "nor elsewhere"
+    );
+    tree.handle_event(limn::UiEvent::PointerMove(center));
+    assert!(
+        painted(&tree.layout(window), "2 of 2").is_some(),
+        "a fresh rest shows it"
+    );
 }

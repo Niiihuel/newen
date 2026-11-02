@@ -1106,13 +1106,7 @@ fn tasks_pane(
         // The row's flexible child is what it holds, so Stop keeps to the right edge.
         let mut items = vec![lines.flex(1.0)];
         if task.running {
-            items.push(icon_tool(
-                &format!("task:stop:{}", task.id),
-                icons::of(icons::STOP),
-                "Stop",
-                28.0,
-                palette,
-            ));
+            items.push(stop_button(&format!("task:stop:{}", task.id)));
         }
         // Flush with the group's name, 10 above and below, over a hairline, as Desktop's.
         let gap = || Element::spacer().size(None, Some(10.0));
@@ -2586,8 +2580,9 @@ fn search_dialog(store: &Store, ui: &Ui, base: Element, _palette: ComponentPalet
     )
 }
 
-/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected.
-fn side_row(
+/// A sidebar row: 32 px tall, 10 px in, rounded, filled while selected. The rows of the
+/// right panel's cards that open something are these too.
+pub(crate) fn side_row(
     id: String,
     content: Vec<Element>,
     selected: bool,
@@ -5167,17 +5162,20 @@ fn browser_card(
         .radius(8.0)
         .size(Some(40.0), Some(40.0))
         .centered_y(),
+        // The words take what the globe and "Open" leave, fading out before the button.
         Element::column(vec![
             Element::faded_text(title, FADE)
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
-                .foreground(look::palette().text)
-                .max_width(width - 160.0),
-            muted(line).font_size(SMALL),
+                .foreground(look::palette().text),
+            Element::faded_text(line, FADE)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::muted()),
         ])
         .gap(2.0)
+        .flex(1.0)
         .centered_y(),
-        Element::spacer().flex(1.0),
     ];
     if tab.is_some() {
         row.push(
@@ -6573,7 +6571,7 @@ fn composer(
         )
     });
     let trailing = if running && ui.prompt.trim().is_empty() {
-        composer_button(STOP, icons::of(icons::STOP), "Stop", false, 28.0)
+        stop_button(STOP)
     } else {
         send_button(!ui.prompt.trim().is_empty())
     };
@@ -7146,6 +7144,11 @@ fn composer_button(id: &str, icon: limn::Icon, label: &str, open: bool, side: f3
     limn::Tooltip::new(button, id, label, look::palette()).render()
 }
 
+/// The composer's Stop: its white rounded square. Every Stop of a running thing is this one.
+pub(crate) fn stop_button(id: &str) -> Element {
+    composer_button(id, icons::of(icons::STOP), "Stop", false, 28.0)
+}
+
 /// Send, drawn as Desktop's return arrow; limn has no such icon, so it is the character.
 fn send_button(ready: bool) -> Element {
     let palette = ComponentPalette {
@@ -7464,15 +7467,15 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let session_spent = limits.session.map_or(0.0, |w| spent(&w, now));
-    // A 14 px ring, blue over gray, as Desktop's.
+    // A 14 px ring, blue over gray, as Desktop's, filled as the Context card is.
+    let share = session.and_then(context_share).unwrap_or(0.0);
     let ring_palette = ComponentPalette {
         text: look::handle(),
         // Seen on the hover's #E5E5E5 too; Desktop darkens it there.
         selected: look::ring_track(),
         ..look::palette()
     };
-    let ring = limn::Progress::new(session_spent, ring_palette)
+    let ring = limn::Progress::new(share, ring_palette)
         .ring(14.0)
         .render()
         .centered();
@@ -7490,14 +7493,7 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
         anchor
     };
     let width = 328.0;
-    let (tokens, share) = session.map_or((0, 0.0), |s| {
-        let share = if s.context_window > 0 {
-            s.context_tokens as f32 / s.context_window as f32
-        } else {
-            0.0
-        };
-        (s.context_tokens, share)
-    });
+    let tokens = session.map_or(0, |s| s.context_tokens);
     let tokens = if tokens >= 1000 {
         format!("{:.1}k", tokens as f64 / 1000.0)
     } else {
@@ -7537,15 +7533,20 @@ fn usage_menu(store: &Store, session: Option<&Session>, ui: &Ui) -> Element {
         }
     }
     let card = Element::column(rows).gap(14.0).padding(8.0);
-    // Its hint sums it up, as Desktop's: "Context 30.0k", the week's share and reset.
-    let mut tip = limn::Tooltip::new(
-        anchor,
-        USAGE_MENU,
-        format!("Context {tokens}"),
-        look::palette(),
-    )
-    // At the window's right edge it opens to the left, to stay whole.
-    .placement(limn::TooltipPlacement::Left);
+    // Its hint sums it up, as Desktop's: "Context 30.0k", the week's share and reset; with
+    // the window known, as the Context card says it: "51% · 512.9K / 1M".
+    let title = match session.map(context_fill) {
+        Some((used, max)) if max > 0 => format!(
+            "Context {}% \u{b7} {} / {}",
+            (share * 100.0).round().min(100.0) as u32,
+            compact(used),
+            compact(max)
+        ),
+        _ => format!("Context {tokens}"),
+    };
+    let mut tip = limn::Tooltip::new(anchor, USAGE_MENU, title, look::palette())
+        // At the window's right edge it opens to the left, to stay whole.
+        .placement(limn::TooltipPlacement::Left);
     if let Some(w) = limits.weekly {
         tip = tip.description(format!(
             "Weekly · all models: {}% · {}",
@@ -8937,8 +8938,7 @@ fn right_panel(
     environment.extend(crate::remote::row(session, ui, inner - 36.0));
     // How full the context is, as Desktop's percentage and bar while the card is folded: the
     // window comes from the agent's own report of its model.
-    let share = (session.context_window > 0)
-        .then(|| session.context_tokens as f32 / session.context_window as f32);
+    let share = context_share(session);
     let mut context_head = vec![];
     if let Some(share) = share.filter(|_| !open(CONTEXT_CARD, true)) {
         context_head.push(
@@ -9019,7 +9019,8 @@ fn right_panel(
             "panel:terminals",
             open("panel:terminals", true),
             vec![],
-            rows,
+            // Packed as the sidebar's rows are, 2 px apart.
+            vec![Element::column(rows).gap(2.0)],
             inner,
         ));
     }
@@ -9173,6 +9174,21 @@ pub(crate) fn compact(n: u64) -> String {
     }
 }
 
+/// How full the context is, used of the window: the agent's own breakdown when it gave one,
+/// else what its turns reported. The Context card and the composer's ring both show this.
+fn context_fill(session: &Session) -> (u64, u64) {
+    match session.context_usage.as_ref().filter(|u| u.max > 0) {
+        Some(u) => (u.used, u.max),
+        None => (session.context_tokens, session.context_window),
+    }
+}
+
+/// [`context_fill`] as a share, `None` while the window is not known.
+fn context_share(session: &Session) -> Option<f32> {
+    let (used, max) = context_fill(session);
+    (max > 0).then(|| used as f32 / max as f32)
+}
+
 /// The Context card open, as Desktop's rail draws it: "N% used" and
 /// "used / max", a meter of what fills the context, a row per category with its swatch,
 /// tokens and share (the deferred last, with "—"), and the lists under some categories,
@@ -9180,9 +9196,7 @@ pub(crate) fn compact(n: u64) -> String {
 fn context_breakdown(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
     use quill_model::ContextKind::*;
     let usage = session.context_usage.as_ref().filter(|u| u.max > 0);
-    let (used, max) = usage.map_or((session.context_tokens, session.context_window), |u| {
-        (u.used, u.max)
-    });
+    let (used, max) = context_fill(session);
     if used == 0 || max == 0 {
         return vec![muted("Send a message to see context usage.").font_size(SMALL)];
     }
