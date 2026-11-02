@@ -9,6 +9,9 @@ description = "quill: a native desktop app for coding-agent CLIs, drawn with lim
 [dependencies]
 limn.workspace = true
 limn-egui.workspace = true
+# Loads Cisco's codec and parses the announcement's clip off the window's thread, and presents
+# the player's frames.
+limn-video.workspace = true
 eframe.workspace = true
 quill-ui = { path = "../../crates/quill-ui" }
 quill-components = { path = "../../crates/quill-components" }

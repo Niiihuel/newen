@@ -16,6 +16,9 @@ limn = { path = "../limn-quill-integration/crates/limn", default-features = fals
 limn-egui = { path = "../limn-quill-integration/crates/limn-egui", default-features = false }
 # The text buffer limn's code editor edits, for the document pane.
 limn-editor = { path = "../limn-quill-integration/crates/limn-editor" }
+# Plays the clips of What's new with Cisco's OpenH264 library, which quill downloads from Cisco
+# once the person allows it and limn-video loads at run time (docs/UPDATES.md).
+limn-video = { path = "../limn-quill-integration/crates/limn-video" }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 serde_json = "1"
 # Events are kept as JSON in quill-store and replayed at start.

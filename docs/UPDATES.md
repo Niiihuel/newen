@@ -23,6 +23,8 @@ Cada release publica, además de sus artefactos:
   `minimum_version` y, por plataforma (`linux-x86_64`, `windows-x86_64`,
   `macos-aarch64`), la URL, el tamaño y el SHA-256 del artefacto.
 - `quill-update.json.sig`: la firma Ed25519 de esos bytes exactos, en base64.
+- `whats-new.json` y sus medios, si la release trae novedades (ver
+  [Novedades](#novedades-whats-new)); el manifiesto los nombra y la misma firma los cubre.
 
 `minimum_version` es la versión obligatoria más nueva que sea menor o igual a
 la publicada: el CI la calcula leyendo los mensajes de **todos** los tags
@@ -90,6 +92,180 @@ descargada que nunca pasó por `quill --install` tampoco se toca.
 - Los datos de la persona (sesiones, ajustes, `~/.config/quill`) no los toca la
   actualización.
 
+## Novedades («What's new»)
+
+Lo que la persona ve, como lo muestra Claude Desktop y con las palabras de quill; lo marcado
+«(inferido)» no se midió en pantalla.
+
+### Lo que se ve
+
+- **Antes de reiniciar.** Con una versión lista, pulsar la tira «Relaunch to update» abre la
+  tarjeta de esa versión, si trae anuncio y Ajustes lo permite: el medio arriba, a todo el
+  ancho, en 16:9 y recortado por las esquinas; el título (24, negrita); el texto y, si hay,
+  una lista de puntos; abajo a la derecha **Later** y **Restart and update** (el principal,
+  con el foco). La ✕ va sobre el medio, arriba a la derecha, en un círculo translúcido.
+  *Later*, la ✕ o Escape cierran la tarjeta y la tira queda. *Restart and update* hace lo
+  mismo que la tira: reinicia si ninguna sesión trabaja y, si alguna trabaja o espera a la
+  persona, pregunta «Agents are still working» (Cancel / Update anyway / Wait for agents).
+  Sin anuncio, la tira reinicia como antes.
+- **Después de actualizar.** La primera vez que arranca una versión que llegó por una
+  actualización y trae anuncio, la misma tarjeta sale sola, una vez, con **Got it** y, si el
+  anuncio nombra adónde ir, **Try it** (el principal), que lleva ahí. Lo «visto» se guarda en
+  `quill-store` antes de mostrarla: un cierre a la fuerza no la repite.
+- **El botón «What's new».** En el lugar de la tira (cuando no hay una versión lista), con un
+  punto de acento y la versión, hasta que la persona abre las notas de esa versión una vez.
+  También se llega a las notas siempre desde el menú de la cuenta, «What's new».
+- **Las notas.** Un diálogo de 480 de ancho y `min(720, 85 %)` de alto: una sección por
+  versión, de la más nueva a la más vieja, con la fecha en negrita y la versión en una
+  pastilla; los grupos NEW, IMPROVED y FIXED, en mayúsculas chicas y atenuadas, con sus
+  viñetas en texto secundario; un filo entre versiones. Sin ninguna: «No release notes yet.».
+  Muestra lo que quill guardó: las últimas 10 versiones instaladas que trajeron notas.
+- **Ajustes › Sistema › Updates › «Show what's new»**, encendido de fábrica. Apagado, no
+  hay tarjeta antes ni después; el botón y las notas siguen.
+- **Una instalación nueva no muestra nada** hasta su primera actualización: sólo cuenta como
+  «actualizado» una versión cuyas notas bajó la versión anterior. Por eso la primera versión
+  con novedades (la que sigue a 0.1.6) tampoco las muestra: 0.1.6 no sabe bajarlas.
+- **Ventanas chicas.** Si el medio no deja lugar para el texto y los botones (unos 300 px),
+  el medio no se muestra; el texto se desplaza dentro de la tarjeta y los botones quedan
+  siempre visibles.
+
+### Videos y el códec de Cisco
+
+Un anuncio puede traer un clip MP4 (H.264 Constrained Baseline, 1280 × 720 y 30 fps como
+mucho; ver la guía de `limn-video`, «Clips») con su `poster`. Se reproduce con `limn::Video`,
+sin sonido y en bucle, con el botón ▶/❚❚ de limn; con «reducir movimiento» queda en pausa
+sobre el `poster`. Sin códec, o si el clip no se puede leer, se ve el `poster` solo, sin
+botón.
+
+El códec es **OpenH264 de Cisco**, el binario que Cisco compila y distribuye: su licencia de
+patentes H.264 lo cubre sólo si quill cumple sus condiciones, que están completas en
+`licenses/openh264/BINARY_LICENSE.txt`:
+
+- **quill nunca lo trae ni lo baja solo.** La primera vez que una tarjeta tiene un clip, abajo
+  del medio pregunta «Play videos in What's new — downloads the OpenH264 video codec from
+  Cisco.», con el aviso de Cisco y **Download** / **Not now**. *Not now* no vuelve a
+  preguntar en la tarjeta. La respuesta se guarda en `settings.json` (`video_codec`) antes de
+  que el motor baje nada (test `the_video_codec_is_fetched_only_after_a_yes_that_is_kept_first`).
+- **La persona lo prende, apaga y vuelve a prender** en Ajustes › Sistema › Updates › «Play
+  videos in What's new», con el aviso «OpenH264 Video Codec provided by Cisco Systems, Inc.»
+  al lado y el estado (bajando, o por qué falló). **Apagado, el archivo se borra**; prenderlo
+  de nuevo lo vuelve a bajar.
+- **La licencia de Cisco** está en Ajustes › Sistema › quill › Licenses, entera (bajada de
+  https://www.openh264.org/BINARY_LICENSE.txt, ver `licenses/openh264/SOURCE.txt`).
+
+Con el sí, el motor (`crates/quill-engine/src/codec.rs`, fuera del hilo de la interfaz) baja
+el `.bz2` de esta plataforma directo de `ciscobinary.openh264.org` por HTTPS (la versión, la
+dirección, el nombre y el SHA-256 los da `limn_video::cisco::current()`, que el programa le
+pasa al motor), lo descomprime (`bzip2`, en Rust puro), compara el SHA-256 con el de la release
+y lo guarda, escrito al lado y renombrado, en
+`~/.local/share/quill/codecs/openh264/2.6.0/<archivo>`. Lo que no coincide no se escribe. Al
+arrancar con el sí ya dado, sólo comprueba el archivo que está. El programa lo carga con
+`Codec::load` en otro hilo, que vuelve a comprobar el SHA-256; si no carga, lo dice en el log y
+el clip queda en su `poster`. El reproductor se crea al abrir la tarjeta y se suelta al
+cerrarla; sólo pide repintar mientras el clip se reproduce a la vista.
+
+**libstdc++.** En Linux, la biblioteca de Cisco necesita `libstdc++.so.6` al cargarse; las
+distribuciones de escritorio la traen. En NixOS no está en una ruta estándar: `shell.nix` la
+suma a `LD_LIBRARY_PATH` (`stdenv.cc.cc.lib`), y quien arranque quill de otra forma tiene que
+darla (por ejemplo con `nix-ld`). Sin ella, los clips muestran el `poster`.
+
+### El formato
+
+`quill-update.json` suma un campo opcional (las copias viejas lo ignoran: serde salta los
+campos que no conoce, y `Manifest` no los rechaza):
+
+```json
+"whats_new": { "url": ".../whats-new.json", "size": 1234, "sha256": "…" }
+```
+
+`whats-new.json`, subido con la release:
+
+```json
+{
+  "version": "0.2.0",
+  "date": "2026-11-10",
+  "notes": { "new": ["…"], "improved": ["…"], "fixed": ["…"] },
+  "announcement": {
+    "title": "A browser beside the chat",
+    "body": "Open any page next to the session.",
+    "bullets": ["…"],
+    "media": [
+      { "kind": "video", "url": ".../whats-new-browser.mp4", "size": 812345, "sha256": "…",
+        "poster": { "url": ".../whats-new-browser.png", "size": 183402, "sha256": "…" } },
+      { "kind": "image", "url": ".../whats-new-browser.png", "size": 183402, "sha256": "…" }
+    ],
+    "try_it": "browser"
+  }
+}
+```
+
+- `notes` y `announcement` pueden faltar. `media` va en orden de preferencia: quill muestra
+  el primero que baja y coincide. Un `kind` desconocido se salta.
+- `try_it` es una lista cerrada que la interfaz conoce: `browser`, `terminal`, `files`,
+  `diff` (un panel de la sesión a la vista), `tour`, y `settings:<página>` (`general`,
+  `system`, `accounts`, `skills`, `plugins`, `connectors`). Otro valor no muestra *Try it*.
+- Los textos son texto plano o un Markdown chico (negrita, código, links), que dibuja
+  `limn::Markdown`. Límites: título 60 caracteres, cuerpo 280, cada línea 160, cinco puntos;
+  `quill-release` rechaza lo que se pasa y quill lo recorta con «…» (y lo dice en el log).
+
+### Descarga y verificación
+
+Con la actualización, después de verificar el artefacto y antes de mostrar la tira, el motor
+(`crates/quill-engine/src/update.rs`, fuera del hilo de la interfaz) baja `whats-new.json`
+(como mucho 256 KiB), comprueba su tamaño y SHA-256 contra el manifiesto firmado y que nombre
+la misma versión, y después cada medio en orden hasta el primero que coincide (como mucho
+16 MiB, sólo HTTPS como los artefactos; un video necesita su `poster`). Lo que no coincide se
+borra y no se muestra nunca; si ningún medio coincide, el anuncio sale sin medio. Todo queda
+en `~/.local/share/quill/whats-new/<versión>/` (`notes.json`, ya en los términos de la
+interfaz, y los medios por su digest). Un fallo de las novedades no frena la actualización.
+
+Al arrancar, el motor lee esas carpetas, borra las que pasan de las 10 instaladas más nuevas,
+y le cuenta a la interfaz (`Event::WhatsNew`) las notas, la de la versión lista si hay, si
+anuncia esta versión (marcada antes en `quill-store`, `whats_new_seen`) y si el botón sigue
+(`whats_new_opened`, que se guarda cuando la persona abre las notas y recién entonces el botón
+se va).
+
+### Escribir las notas de una release
+
+Junto al cambio de versión, en el repositorio:
+
+```text
+release/notes/0.2.0.toml
+release/media/0.2.0/browser.png
+release/media/0.2.0/browser.mp4
+```
+
+```toml
+# date = "2026-11-10"            # si falta, el día del tag
+new = ["A browser beside the chat"]
+improved = ["Faster `git` status in large folders"]
+fixed = ["The update strip no longer flickers"]
+
+[announcement]                   # opcional
+title = "A browser beside the chat"
+body = "Open any page next to the session and point the agent at it."
+bullets = ["Pages keep their sign-ins"]
+try_it = "browser"
+
+[[announcement.media]]           # un video: file y su poster
+file = "browser.mp4"
+poster = "browser.png"
+
+[[announcement.media]]           # una imagen: file solo
+file = "browser.png"
+```
+
+El workflow **Release**, si existe `release/notes/<versión>.toml`, corre
+`quill-release whats-new <tag> <base> dist`: arma `dist/whats-new.json`, copia cada medio como
+`dist/whats-new-<archivo>` (los assets de una release no tienen carpetas) con su digest, y
+rechaza textos o medios que se pasan de los límites. `quill-release manifest … --whats-new
+dist/whats-new.json` nombra ese archivo en el manifiesto antes de firmarlo, y `quill-release
+verify` comprueba, además de la firma, que `whats-new.json` y cada medio en `dist/` sean lo que
+el manifiesto nombra. Después se suben con el resto. Sin el archivo de notas, la release sale
+como antes, sin novedades. Para probarlo a mano:
+`cargo run -p quill-release -- whats-new v0.2.0 https://example.org /tmp/wn` (con el tag
+anotado creado).
+
 ## Token y el repositorio privado
 
 Una búsqueda usa la API de GitHub (`releases/latest`) y baja los archivos por
@@ -137,7 +313,10 @@ obligatoria se descubre al volver la red).
      (`quill-aarch64-macos.zip`, firmado, notarizado y con el ticket
      engrapado), cada uno con CEF adentro (`scripts/package.sh`; ver cada
      sistema abajo);
-   - arma el manifiesto (`quill-release manifest`, con `minimum_version`), lo
+   - arma las novedades si hay `release/notes/<versión>.toml` (`quill-release
+     whats-new`, ver [Novedades](#novedades-whats-new));
+   - arma el manifiesto (`quill-release manifest`, con `minimum_version` y las
+     novedades), lo
      firma con el secreto (`quill-release sign`, con el programa ya compilado
      para que ningún build script vea el secreto), lo **verifica con la clave
      compilada en quill** (`quill-release verify`: un secreto que no coincide
@@ -329,7 +508,9 @@ deja la lista exacta en el log de cada release.
 **inferido** de cómo rune lo documenta, no probado con quill: la salida es
 compilar desde el código en `nix-shell` (y entonces esa copia no se actualiza
 sola) o usar [`nix-ld`](https://github.com/nix-community/nix-ld) con las mismas
-bibliotecas.
+bibliotecas. Para los videos de las novedades hace falta además `libstdc++.so.6`
+(`stdenv.cc.cc.lib`), que `shell.nix` ya suma (ver [Videos y el códec de
+Cisco](#videos-y-el-códec-de-cisco)).
 
 ## Portabilidad y CI
 

@@ -91,6 +91,8 @@ fn main() {
             },
         )]
         .into(),
+        whats_new: None,
+        assets: Default::default(),
     };
     let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
     let signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
