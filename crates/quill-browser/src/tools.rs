@@ -4,7 +4,7 @@
 //! pixels the clicks are given in, and a "Tab Context" footer naming the tabs.
 
 use crate::{Browser, Owner, Run};
-use quill_model::{BrowserUpdate, ToolContent};
+use quill_model::ToolContent;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -449,25 +449,16 @@ impl Browser {
             input["height"].as_u64().unwrap_or(0) as u32,
         );
         let size = (width > 0 && height > 0).then_some((width, height));
-        let shown = self.emulate(run, owner, tab, size).await?;
+        let shown = self.emulate(run, owner, tab, size, true).await?;
+        // The tab's state says it (`emulated_by_agent`): the pane's bar shows it, no notice.
         self.publish(run, owner);
-        if size.is_none() {
-            self.tell(
-                owner,
-                BrowserUpdate::Notice("The page has the pane's size again.".into()),
-            );
-            return Ok(ToolContent::text(format!(
+        Ok(ToolContent::text(match size {
+            Some((width, height)) => format!("The viewport is {width}x{height} now."),
+            None => format!(
                 "The viewport follows the pane again: {}x{}.",
                 shown.0, shown.1
-            )));
-        }
-        self.tell(
-            owner,
-            BrowserUpdate::Notice(format!("The agent set the page to {width} x {height}.")),
-        );
-        Ok(ToolContent::text(format!(
-            "The viewport is {width}x{height} now."
-        )))
+            ),
+        }))
     }
 
     async fn batch(&self, owner: Owner, input: &Value) -> Answer {

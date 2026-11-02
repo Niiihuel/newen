@@ -1463,31 +1463,9 @@ fn browser_pane(
         .size(Some(width), Some(40.0)),
         hline(width, look::pane_border()),
     ]);
-    let notice = ui.browser_notice.get(&session.id).map(|words| {
-        Element::column(vec![
-            hline(width, look::pane_border()),
-            Element::row(vec![
-                hgap(12.0),
-                Element::truncated_text(words.clone())
-                    .font_family(FontFamily::Sans)
-                    .font_size(SMALL)
-                    .foreground(look::muted())
-                    .max_width(width - 60.0)
-                    .centered_y(),
-                Element::spacer().flex(1.0),
-                icon_tool(
-                    BROWSER_NOTICE_CLOSE,
-                    icons::of(icons::CLOSE),
-                    "Dismiss",
-                    24.0,
-                    palette,
-                ),
-                hgap(4.0),
-            ])
-            .size(Some(width), Some(32.0)),
-        ])
-    });
-    let below = height - look::PANE_HEADER - 1.0 - 41.0 - if notice.is_some() { 33.0 } else { 0.0 };
+    let bar = browser_notice(session.id, ui, width, palette);
+    let below =
+        height - look::PANE_HEADER - 1.0 - 41.0 - if bar.is_some() { BAR + 1.0 } else { 0.0 };
     // A blank tab shows Desktop's empty state instead of its page, less the agent's name and the dev server it offers to find.
     let blank = |failed: Option<&String>| {
         let fill = || Element::spacer().flex(1.0);
@@ -1533,8 +1511,54 @@ fn browser_pane(
         None => blank(browser.failed.as_ref()),
     };
     let mut column = vec![header, toolbar, body];
-    column.extend(notice);
+    column.extend(bar);
     Element::column(column).size(Some(width), Some(height))
+}
+
+/// The height of the browser's notice strip, under its page.
+const BAR: f32 = 32.0;
+
+/// The strip under the page while the page or the browser has said something the person should
+/// know (a dialog's words, a download saved, a failure with a warning): its icon, its words,
+/// which fade when the pane is narrow, and its close. The page's size is the Viewport button's.
+fn browser_notice(
+    session: quill_model::SessionId,
+    ui: &Ui,
+    width: f32,
+    palette: ComponentPalette,
+) -> Option<Element> {
+    let (words, failed) = ui.browser_notice.get(&session)?;
+    let (icon, ink) = if *failed {
+        (icons::WARNING, look::failed())
+    } else {
+        (icons::GLOBE, look::muted())
+    };
+    Some(Element::column(vec![
+        hline(width, look::pane_border()),
+        Element::row(vec![
+            hgap(4.0),
+            Element::icon(icons::of(icon))
+                .foreground(ink)
+                .size(Some(16.0), Some(16.0))
+                .centered_y(),
+            Element::faded_text(words.clone(), FADE)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(look::palette().text)
+                .flex(1.0)
+                .centered_y(),
+            icon_tool(
+                BROWSER_NOTICE_CLOSE,
+                icons::of(icons::CLOSE),
+                "Dismiss",
+                24.0,
+                palette,
+            ),
+            hgap(0.0),
+        ])
+        .gap(8.0)
+        .size(Some(width), Some(BAR)),
+    ]))
 }
 
 /// A tab's right-click menu, Desktop's four actions: rename, clear, close, and
@@ -5069,15 +5093,33 @@ fn browser_step(tool: &str, input: &Value, done: bool) -> (String, String) {
     }
 }
 
+/// The Viewport button's tooltip: the size set, and who set it when it was the agent.
+pub(crate) fn viewport_label(tab: Option<&quill_model::BrowserTab>) -> String {
+    match tab.and_then(|t| Some((t.emulated?, t.emulated_by_agent))) {
+        Some(((w, h), true)) => format!("Viewport: {w} \u{d7} {h} \u{b7} set by the agent"),
+        Some(((w, h), false)) => format!("Viewport: {w} \u{d7} {h}"),
+        None => "Viewport".into(),
+    }
+}
+
+/// The Viewport button's icon: a phone for a phone's width, else a monitor.
+pub(crate) fn viewport_icon(emulated: Option<(u32, u32)>) -> &'static str {
+    match emulated {
+        Some((w, _)) if w <= 480 => icons::PHONE,
+        _ => icons::MONITOR,
+    }
+}
+
 /// Desktop's Viewport menu: the page at the pane's size, or as a phone or a
-/// tablet draws it; "Set by the agent" when resize_window chose a size of its own.
+/// tablet draws it; "Set by the agent" under the size resize_window chose. Its button is
+/// on while a size is set.
 fn viewport_menu(tab: Option<&quill_model::BrowserTab>, ui: &Ui) -> Element {
     let emulated = tab.and_then(|t| t.emulated);
     let open = ui.open_menu == Some(BROWSER_VIEWPORT);
     let anchor = toggle(
         BROWSER_VIEWPORT,
-        icons::of(icons::MONITOR),
-        "Viewport",
+        icons::of(viewport_icon(emulated)),
+        &viewport_label(tab),
         open || emulated.is_some(),
         None,
     );
@@ -5092,9 +5134,11 @@ fn viewport_menu(tab: Option<&quill_model::BrowserTab>, ui: &Ui) -> Element {
                 Some((w, h)) => format!("{BROWSER_VIEWPORT}:{w}x{h}"),
                 None => format!("{BROWSER_VIEWPORT}:responsive"),
             };
-            limn::DropdownMenuItem::new(id, label)
-                .selected(emulated == *size)
-                .into()
+            let item = limn::DropdownMenuItem::new(id, label).selected(emulated == *size);
+            match tab.filter(|t| t.emulated_by_agent && emulated == *size) {
+                Some(_) => item.description("Set by the agent").into(),
+                None => item.into(),
+            }
         })
         .collect();
     if let Some((w, h)) = emulated.filter(|e| !VIEWPORTS.iter().any(|(_, s)| *s == Some(*e))) {
