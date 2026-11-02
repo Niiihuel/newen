@@ -1094,15 +1094,15 @@ fn tasks_pane(
                 .max_width(wide),
             meta,
         ])
-        .gap(4.0)
-        .flex(1.0);
+        .gap(4.0);
         // A helper agent's row opens its transcript.
         let lines = match (&task.call, task.kind.as_str()) {
             (Some(call), "agent") => Element::clickable(format!("agent:{call}"), lines)
                 .accessibility_label(format!("View transcript of {}", task.description)),
             _ => lines,
         };
-        let mut items = vec![lines];
+        // The row's flexible child is what it holds, so Stop keeps to the right edge.
+        let mut items = vec![lines.flex(1.0)];
         if task.running {
             items.push(icon_tool(
                 &format!("task:stop:{}", task.id),
@@ -1145,12 +1145,14 @@ fn tasks_pane(
             column.extend(group.into_iter().map(|t| row(t)));
         }
     }
+    // Its bar over the padding, so a long list keeps Stop at the right edge.
     let body = Element::scroll(
         "tasks:scroll",
         Element::column(column)
             .padding(16.0)
             .size(Some(width), None),
     )
+    .scrollbar_appearance(limn::ScrollbarAppearance::overlay())
     .size(Some(width), Some(below));
     Element::column(vec![header, body]).size(Some(width), Some(height))
 }
@@ -9498,7 +9500,10 @@ fn agent_pane(
         body.push(working_words("agent:working", "Working".into()));
     }
     let content = Element::column(body).gap(12.0).padding(24.0);
-    let scroll = Element::scroll(format!("agent:{call}:scroll"), content);
+    // Its bar over the padding: a rail taken from the width would put the rows, laid out
+    // `inner` wide, in less room than they were measured in, and their lines over the next.
+    let scroll = Element::scroll(format!("agent:{call}:scroll"), content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     Element::column(vec![header, scroll.flex(1.0)]).size(Some(width), Some(height))
 }
 
@@ -9522,7 +9527,9 @@ fn plan_pane(session: Option<&Session>, ui: &Ui, width: f32, height: f32) -> Ele
         .render()
         .element
         .padding(24.0);
-    let scroll = Element::scroll("plan:scroll", content);
+    // Its bar over the padding, as the agent pane's.
+    let scroll = Element::scroll("plan:scroll", content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     Element::column(vec![header, scroll.flex(1.0)]).size(Some(width), Some(height))
 }
 
@@ -9850,7 +9857,9 @@ fn side_pane(
         body.push(line);
     }
     let content = Element::column(body).gap(12.0).padding(16.0);
-    let scroll = Element::scroll(format!("side:{}:scroll", side.id), content);
+    // Its bar over the padding, as the agent pane's.
+    let scroll = Element::scroll(format!("side:{}:scroll", side.id), content)
+        .scrollbar_appearance(limn::ScrollbarAppearance::overlay());
     let reply = limn::TextField::new(
         SIDE_FIELD,
         ui.side_reply.as_str(),
