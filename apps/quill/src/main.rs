@@ -861,8 +861,13 @@ impl eframe::App for App {
             self.qr_for = link;
         }
         self.ui.pixels_per_point = ctx.pixels_per_point();
-        // The image the viewer shows, at full size, read once off the window's thread.
-        if let Some(path) = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone()) {
+        // The image the viewer shows and the picture of a release's announcement, at full
+        // size, read once off the window's thread.
+        let viewed = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
+        for path in viewed
+            .into_iter()
+            .chain(quill_ui::whats_new::media(&self.ui))
+        {
             if !self.ui.full.contains_key(&path) && self.full_asked.insert(path.clone()) {
                 let (done, ctx) = (self.full_done.clone(), ctx.clone());
                 std::thread::spawn(move || {
@@ -879,7 +884,10 @@ impl eframe::App for App {
         // A whole picture weighs megabytes: past a few, only the one shown is kept.
         if self.ui.full.len() > 8 {
             let shown = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
-            self.ui.full.retain(|path, _| Some(path) == shown.as_ref());
+            let media = quill_ui::whats_new::media(&self.ui);
+            self.ui
+                .full
+                .retain(|path, _| Some(path) == shown.as_ref() || media.contains(path));
             let full = &self.ui.full;
             self.full_asked.retain(|path| full.contains_key(path));
         }

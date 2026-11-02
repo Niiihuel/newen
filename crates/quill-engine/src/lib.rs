@@ -108,6 +108,9 @@ pub struct Config {
     pub secrets: Option<Arc<dyn global::Secrets>>,
     /// Whether quill looks for its own updates (update.rs): the app does, the tests do not.
     pub updates: bool,
+    /// Where each release's notes and media are kept once downloaded with its update; `None`
+    /// keeps none.
+    pub whats_new: Option<PathBuf>,
     /// Whether a sign-in page opens in the person's browser: the app does, the tests do not.
     pub open_pages: bool,
     /// Where the browser leaves its pages' frames for the window to present.
@@ -131,6 +134,7 @@ impl Config {
             browser: Some(data.join("quill/browser")),
             extensions: Some(config.join("quill/extensions.json")),
             updates: true,
+            whats_new: Some(data.join("quill/whats-new")),
             open_pages: true,
             ..Self::default()
         }
@@ -309,6 +313,7 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
         .await
         .unwrap_or_default();
     router.updates.auto(router.settings.auto_update);
+    router.updates.whats_new(router.settings.whats_new);
     router.restore();
     (router.ui)(Event::Restored);
     router.announce_settings();
@@ -535,7 +540,13 @@ impl Router {
             )
         };
         // Settings are read after this, and say whether a found version downloads at once.
-        let updates = update::Updates::start(ui.clone(), config.updates, true);
+        let updates = update::Updates::start(
+            ui.clone(),
+            config.updates,
+            true,
+            store.clone(),
+            config.whats_new.clone(),
+        );
         let global = global::Layer::new(
             config.extensions.clone(),
             config
@@ -1782,6 +1793,10 @@ impl Router {
             }
             Intent::InstallUpdate => {
                 self.updates.install();
+                return;
+            }
+            Intent::WhatsNewOpened => {
+                self.updates.opened();
                 return;
             }
             Intent::MeasureStorage => {

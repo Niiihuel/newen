@@ -19,6 +19,7 @@ mod updates;
 pub use quill_components::{icons, look};
 pub mod view;
 pub mod welcome;
+pub mod whats_new;
 
 pub use files::key as files_key;
 pub use mention::{key as mention_key, mention_query};
@@ -655,6 +656,7 @@ impl Store {
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::WhatsNew(_)
             | Event::Extensions { .. }
             | Event::Servers { .. }
             | Event::Global(_)
@@ -1362,6 +1364,11 @@ pub struct Ui {
     /// the first time none is busy).
     pub update_asking: bool,
     pub restart_when_idle: bool,
+    /// The release notes the engine keeps (whats_new.rs), the version whose announcement card
+    /// is up, and whether the notes dialog is.
+    pub whats_new: quill_model::WhatsNew,
+    pub announcing: Option<String>,
+    pub notes_open: bool,
     /// A fork was asked for: the session the engine makes next is it, and opens.
     pub waiting_fork: bool,
     /// Words the host puts back in the message box: a message rewound or forked from, or a
@@ -2155,6 +2162,9 @@ impl Ui {
             update: quill_model::UpdateState::Idle,
             update_asking: false,
             restart_when_idle: false,
+            whats_new: Default::default(),
+            announcing: None,
+            notes_open: false,
             settings_query: String::new(),
             settings_menu: None,
             storage: None,
@@ -2662,6 +2672,7 @@ impl Ui {
     pub fn applied(&mut self, event: &Event) -> Vec<Intent> {
         mention::heard(self, event);
         updates::heard(self, event);
+        whats_new::heard(self, event);
         tour::heard(self, event);
         remote::heard(self, event);
         let mut intents = account::heard(self, event);
@@ -3778,6 +3789,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return vec![];
     }
     if let Some(intents) = updates::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = whats_new::clicked(store, ui, id) {
         return intents;
     }
     if let Some(intents) = account::clicked(ui, id) {
@@ -5473,6 +5487,7 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         "archive_on_merge" => settings.archive_on_merge = !settings.archive_on_merge,
         "logos" => settings.logos = !settings.logos,
         "auto_update" => settings.auto_update = !settings.auto_update,
+        "whats_new" => settings.whats_new = !settings.whats_new,
         other => match other
             .strip_prefix("agent:")
             .and_then(|r| r.strip_suffix(":unsafe"))

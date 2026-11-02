@@ -41,3 +41,7 @@ base64 = "0.22"
 keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
 # Stopping a dev server's whole process group (kill with a negative pid).
 libc = "0.2"
+
+[dev-dependencies]
+# A folder of kept release notes in update.rs's tests; already in the lock.
+tempfile = "3"

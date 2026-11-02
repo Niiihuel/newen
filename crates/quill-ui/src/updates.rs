@@ -60,7 +60,7 @@ fn busy(store: &Store) -> bool {
 
 /// A restart the person asked for: at once when no agent is busy, else the question first
 /// (Desktop asks the same when a session is running).
-fn restart(store: &Store, ui: &mut Ui) -> Vec<Intent> {
+pub(crate) fn restart(store: &Store, ui: &mut Ui) -> Vec<Intent> {
     if busy(store) {
         ui.update_asking = true;
         vec![]
@@ -86,7 +86,11 @@ pub(crate) fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent
         UPDATE_CHECK | UPDATE_RETRY => Some(vec![Intent::CheckUpdates]),
         UPDATE_DOWNLOAD => Some(vec![Intent::DownloadUpdate]),
         UPDATE_RESTART => Some(vec![Intent::InstallUpdate]),
-        UPDATE_STRIP | UPDATE_RESTART_ROW => Some(restart(store, ui)),
+        // The strip shows the version's announcement first, when it has one.
+        UPDATE_STRIP => {
+            Some(crate::whats_new::before_restart(ui).unwrap_or_else(|| restart(store, ui)))
+        }
+        UPDATE_RESTART_ROW => Some(restart(store, ui)),
         UPDATE_ASK_CANCEL | UPDATE_WAIT_CANCEL => {
             ui.update_asking = false;
             ui.restart_when_idle = false;
@@ -301,6 +305,11 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
         "Install updates automatically",
         "Download new versions in the background. Installing waits for you.",
         setting_switch("auto_update", auto_update, palette),
+    ));
+    out.push(setting(
+        "Show what's new",
+        "Show a release's announcement before restarting into it and once after. The release notes stay in the account menu.",
+        setting_switch("whats_new", ui.settings.whats_new, palette),
     ));
     out
 }

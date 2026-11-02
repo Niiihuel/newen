@@ -276,6 +276,9 @@ pub struct Settings {
     /// Make every new session reachable from another device as it starts, for agents that
     /// offer it (Desktop's "Connect new sessions to Remote Control").
     pub remote_new_sessions: bool,
+    /// Show a release's announcement before restarting into it and once after; off, the
+    /// release notes are still a click away.
+    pub whats_new: bool,
 }
 
 impl Default for Settings {
@@ -316,6 +319,7 @@ impl Default for Settings {
             logos: true,
             auto_update: true,
             remote_new_sessions: false,
+            whats_new: true,
         }
     }
 }
@@ -747,6 +751,9 @@ pub enum Intent {
     /// Install the downloaded quill and start it in place of this one; answered by
     /// `Event::Update` with `Installed`, then the host restarts.
     InstallUpdate,
+    /// The person opened the release notes: this version's "What's new" button goes; answered
+    /// by `Event::WhatsNew` once that is kept.
+    WhatsNewOpened,
     /// The MCP servers an agent is set up with for a folder, outside any session; answered by
     /// `Event::Servers`. Listing them can start them, to see how they stand.
     Servers {
@@ -1137,6 +1144,59 @@ pub enum UpdateState {
     NeedsAccess,
 }
 
+/// The release notes quill keeps (docs/UPDATES.md): each downloaded with its update, the
+/// media matched against their digests, kept in the data folder.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WhatsNew {
+    /// This version's and earlier ones', newest first.
+    pub releases: Vec<ReleaseNotes>,
+    /// The downloaded version's, which a restart installs.
+    pub ready: Option<ReleaseNotes>,
+    /// The first of `releases` is this version, just updated to: its announcement shows now,
+    /// once (it is already kept as seen).
+    pub announce: bool,
+    /// This version came by an update and its notes were never opened: the "What's new"
+    /// button shows.
+    pub unopened: bool,
+}
+
+/// What one release says is new in it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReleaseNotes {
+    pub version: String,
+    /// As its author wrote it (`2026-11-10`).
+    pub date: String,
+    pub new: Vec<String>,
+    pub improved: Vec<String>,
+    pub fixed: Vec<String>,
+    pub announcement: Option<Announcement>,
+}
+
+/// The one thing a release puts forward.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Announcement {
+    pub title: String,
+    pub body: String,
+    pub bullets: Vec<String>,
+    /// Its picture or clip, on this computer and matched; none when none matched.
+    pub media: Option<Media>,
+    /// Where "Try it" takes the person: one of the interface's own targets, or no button.
+    pub try_it: Option<String>,
+}
+
+/// An announcement's picture or clip.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Media {
+    Image {
+        path: PathBuf,
+    },
+    /// A clip and the picture shown while it cannot play.
+    Video {
+        poster: PathBuf,
+        clip: PathBuf,
+    },
+}
+
 /// quill's own sounds, made by the engine: one when a task completes, one when a session
 /// needs the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1350,6 +1410,8 @@ pub enum Event {
     },
     /// Where quill's own update stands; not stored.
     Update(UpdateState),
+    /// The release notes quill keeps, and whether to announce this version; not stored.
+    WhatsNew(WhatsNew),
     /// An agent's plugins, marketplaces and skills for `folder`, as its program lists them;
     /// `error` says why a change or a list failed.
     Extensions {
@@ -1520,6 +1582,7 @@ impl Event {
             | Event::Storage { .. }
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::WhatsNew(_)
             | Event::Extensions { .. }
             | Event::Global(_)
             | Event::Servers { .. }
