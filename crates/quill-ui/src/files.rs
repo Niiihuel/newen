@@ -479,6 +479,7 @@ pub fn key(ui: &mut Ui, focused: Option<&str>, event: &limn::UiEvent) -> Option<
             key: limn::Key::F,
             ctrl: true,
             shift: false,
+            ..
         } if focused.starts_with("doc:editor:") => Some(find::FIND_OPEN),
         limn::UiEvent::Key {
             key: limn::Key::Escape,

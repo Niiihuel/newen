@@ -2999,6 +2999,7 @@ pub fn suggestion_key(
         key: limn::Key::Tab | limn::Key::ArrowRight,
         ctrl: false,
         shift: false,
+        ..
     } = event
     else {
         return false;

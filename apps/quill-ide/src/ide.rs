@@ -3073,6 +3073,22 @@ fn language_name(extension: &str) -> &'static str {
         Css => "CSS",
         Html => "HTML",
         Markdown => "Markdown",
+        Go => "Go",
+        Java => "Java",
+        Kotlin => "Kotlin",
+        Swift => "Swift",
+        C => "C",
+        Cpp => "C++",
+        CSharp => "C#",
+        Php => "PHP",
+        Ruby => "Ruby",
+        Lua => "Lua",
+        Shell => "Shell",
+        Yaml => "YAML",
+        Sql => "SQL",
+        Diff => "Diff",
+        Dart => "Dart",
+        Zig => "Zig",
     }
 }
 

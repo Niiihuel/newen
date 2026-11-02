@@ -141,7 +141,9 @@ impl App {
         let bytes = match event {
             limn::UiEvent::Text(text) => text.as_bytes().to_vec(),
             limn::UiEvent::Paste(text) => text.as_bytes().to_vec(),
-            limn::UiEvent::Key { key, shift, ctrl } => {
+            limn::UiEvent::Key {
+                key, shift, ctrl, ..
+            } => {
                 match quill_pty::key_bytes(*key, *ctrl, *shift) {
                     Some(bytes) => bytes,
                     // Plain letters come again as Text.
@@ -357,6 +359,7 @@ impl eframe::App for App {
                         key: limn::Key::Enter | limn::Key::Tab,
                         ctrl: false,
                         shift: false,
+                        ..
                     } => {
                         self.ide.accept_completion(None);
                         continue;
@@ -520,6 +523,7 @@ impl eframe::App for App {
                 key,
                 ctrl: true,
                 shift,
+                ..
             } = &event
             {
                 let on_tree = focused

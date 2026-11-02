@@ -244,6 +244,7 @@ pub fn key(store: &Store, ui: &mut Ui, focused: Option<&str>, event: &UiEvent) -
         key,
         ctrl: false,
         shift,
+        ..
     } = event
     else {
         return false;

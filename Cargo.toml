@@ -10,13 +10,13 @@ rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# limn by path, as surco does: quill/integration joins limn PRs not merged yet
-# (docs/LIMN_INTEGRATION.md); back to ../lienzo once they are.
+# limn by path, as surco does: quill/integration is limn's main, plus any limn PR quill
+# waits on (docs/LIMN_INTEGRATION.md).
 limn = { path = "../limn-quill-integration/crates/limn", default-features = false }
 limn-egui = { path = "../limn-quill-integration/crates/limn-egui", default-features = false }
 # The text buffer limn's code editor edits, for the document pane.
 limn-editor = { path = "../limn-quill-integration/crates/limn-editor" }
-eframe = { version = "0.36.2", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 serde_json = "1"
 # Events are kept as JSON in quill-store and replayed at start.
 serde = { version = "1", features = ["derive"] }

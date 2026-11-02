@@ -219,7 +219,9 @@ impl App {
         }
         let bytes = match event {
             limn::UiEvent::Text(text) => text.as_bytes().to_vec(),
-            limn::UiEvent::Key { key, shift, ctrl } => {
+            limn::UiEvent::Key {
+                key, shift, ctrl, ..
+            } => {
                 match quill_pty::key_bytes(*key, *ctrl, *shift) {
                     Some(bytes) => bytes,
                     // Plain letters arrive again as Text.
@@ -317,6 +319,7 @@ impl App {
                     key: limn::Key::A,
                     ctrl: true,
                     shift: false,
+                    alt: false,
                 });
                 vec![]
             }
@@ -1030,7 +1033,8 @@ impl eframe::App for App {
                 limn::UiEvent::Key {
                     key: limn::Key::U,
                     ctrl: true,
-                    shift: false
+                    shift: false,
+                    ..
                 }
             ) {
                 actions.push(limn::UiAction::Clicked {
@@ -1044,7 +1048,8 @@ impl eframe::App for App {
                 limn::UiEvent::Key {
                     key: limn::Key::N,
                     ctrl: true,
-                    shift: false
+                    shift: false,
+                    ..
                 }
             ) {
                 actions.push(limn::UiAction::Clicked {
@@ -1058,7 +1063,8 @@ impl eframe::App for App {
                 limn::UiEvent::Key {
                     key: limn::Key::O,
                     ctrl: true,
-                    shift: false
+                    shift: false,
+                    ..
                 }
             ) {
                 actions.push(limn::UiAction::Clicked {
@@ -1073,6 +1079,7 @@ impl eframe::App for App {
                 key: key @ (limn::Key::B | limn::Key::K),
                 ctrl: true,
                 shift: false,
+                ..
             } = &event
             {
                 if dialog {
@@ -1091,6 +1098,7 @@ impl eframe::App for App {
                 key,
                 ctrl: true,
                 shift: true,
+                ..
             } = &event
             {
                 let menu = match key {
@@ -1142,7 +1150,10 @@ impl eframe::App for App {
                 self.dispatch(intents);
                 continue;
             }
-            if let limn::UiEvent::Key { key, shift, ctrl } = &event {
+            if let limn::UiEvent::Key {
+                key, shift, ctrl, ..
+            } = &event
+            {
                 let shortcut = quill_ui::shortcut(&self.store, &self.ui, *key, *ctrl, *shift)
                     .or_else(|| quill_ui::annotate::key(&self.ui, *key, *ctrl, *shift));
                 if let Some(id) = shortcut {
@@ -1443,6 +1454,7 @@ impl eframe::App for App {
                 key: limn::Key::A,
                 ctrl: true,
                 shift: false,
+                alt: false,
             });
             frame = self.tree.layout(window);
         }

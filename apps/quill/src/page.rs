@@ -334,6 +334,7 @@ mod tests {
                 delta: egui::vec2(0.0, -1.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::default(),
+                source: egui::MouseWheelSource::Wheel,
             }]
         };
         page.route(&[press(true), press(false)], over, Some(rect()), true);
@@ -372,6 +373,7 @@ mod tests {
                 delta: egui::vec2(0.0, -1.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::default(),
+                source: egui::MouseWheelSource::Wheel,
             },
             egui::Event::Text("hi".into()),
         ];
