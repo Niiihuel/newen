@@ -1,30 +1,52 @@
-//! quill's own updates, off the interface's thread (docs/UPDATES.md): a check a little after
-//! quill starts and every six hours, one on demand, a download once a newer version is found
-//! when Settings allow it (a mandatory version always), and an installation only when the
-//! person asks for it.
+//! quill's own updates, off the interface's thread (docs/UPDATES.md). Checks keep to the wall
+//! clock: about every four hours (give or take 15 %), one at the start only when the last is
+//! over an hour old, and one when the window comes back or the computer wakes and the last is
+//! that old. A newer version found downloads when Settings allow (a mandatory one always) and
+//! is staged: unpacked in its place, not the one that starts. The next start activates it
+//! (main.rs), or a restart the person asks for does it now. A newer release found meanwhile
+//! replaces it. Each step is kept in the update log.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use quill_model::{Event, ReleaseNotes, UpdateState, WhatsNew};
-use quill_update::install::Install;
+use quill_update::install::{Install, Staged};
 use quill_update::whats_new::{self as wire, Kept, Kind};
-use quill_update::{Error, Release, Source, Version};
+use quill_update::{Error, Manifest, Release, Source, VerifyingKey, Version};
 
 use crate::Sink;
 
 /// The first check waits this long, so the window is up before any request.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
-const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// Checks are this far apart, in seconds, give or take [`JITTER`] of it.
+const EVERY: u64 = 4 * 60 * 60;
+const JITTER: f64 = 0.15;
+/// A start, a window coming back or a wake checks when the last check is this old.
+const STALE: u64 = 60 * 60;
+/// How often the schedule is looked at. It is kept on the wall clock, which a sleep moves.
+const TICK: Duration = Duration::from_secs(60);
+/// The wall clock moved this much more than the process's own clock between two looks: the
+/// computer slept.
+const WAKE: u64 = 5 * 60;
+/// A version ready this long without a restart is announced, once.
+const DAY: u64 = 24 * 60 * 60;
 /// Progress is told every this many bytes, and at the end.
 const STEP: u64 = 256 * 1024;
 /// The store's marks: the version whose announcement showed, and the one whose notes were
 /// opened.
 const SEEN: &str = "whats_new_seen";
 const OPENED: &str = "whats_new_opened";
+/// The store's marks of updates: when the last check ended (seconds since 1970), the version
+/// the person skipped, and the last one the system announced.
+const LAST_CHECK: &str = "update_last_check";
+const SKIPPED: &str = "update_skipped";
+const NOTIFIED: &str = "update_notified";
 /// How many installed versions' notes are kept.
 const KEPT_NOTES: usize = 10;
+
+/// Shows a system notification (title, body); a click on it brings quill up.
+pub type Notifier = Arc<dyn Fn(String, String) + Send + Sync>;
 
 /// quill's update state, shared by the router and the tasks that move it along.
 #[derive(Clone)]
@@ -37,6 +59,14 @@ pub struct Updates {
     store: Arc<Mutex<quill_store::Store>>,
     /// Where each release's notes and media are kept, a folder per version; `None` keeps none.
     notes: Option<PathBuf>,
+    /// The installation this copy runs from; `None` for one quill does not update.
+    install: Option<Install>,
+    /// The update log (`Config::update_log`); `None` keeps none.
+    log: Option<PathBuf>,
+    notify: Notifier,
+    /// Where releases are read and the key they are checked with; `None` is this copy's own
+    /// (the tests give a loopback feed).
+    feed: Option<(Source, VerifyingKey)>,
 }
 
 struct Shared {
@@ -45,8 +75,34 @@ struct Shared {
     auto: bool,
     /// The newest release found, and where it is read from.
     found: Option<(Release, Source)>,
-    /// Its download, once one is here.
-    file: Option<PathBuf>,
+    /// Counts the releases found: a download of an older one stops when it moves on.
+    generation: u64,
+    /// A check is on its way.
+    checking: bool,
+    /// The window has the focus.
+    focused: bool,
+    /// When the last check ended, seconds since 1970.
+    last_check: Option<u64>,
+    /// When the schedule checks next; `None` until the first check's wait is over.
+    next_check: Option<u64>,
+    /// When the ready version was staged.
+    ready_since: Option<u64>,
+}
+
+impl Shared {
+    fn new(state: UpdateState, auto: bool) -> Self {
+        Self {
+            state,
+            auto,
+            found: None,
+            generation: 0,
+            checking: false,
+            focused: true,
+            last_check: None,
+            next_check: None,
+            ready_since: None,
+        }
+    }
 }
 
 impl Updates {
@@ -59,35 +115,88 @@ impl Updates {
         auto: bool,
         store: Arc<Mutex<quill_store::Store>>,
         notes: Option<PathBuf>,
+        log: Option<PathBuf>,
+        notify: Notifier,
     ) -> Self {
         let unmanaged = if enabled { unmanaged() } else { None };
-        let checks = enabled && unmanaged.is_none();
+        let install = if enabled && unmanaged.is_none() {
+            Install::locate()
+        } else {
+            None
+        };
+        let last_check = (store.lock().unwrap().marked(LAST_CHECK).ok().flatten())
+            .and_then(|at| at.parse().ok());
+        let mut shared = Shared::new(unmanaged.clone().unwrap_or(UpdateState::Idle), auto);
+        shared.last_check = last_check;
         let updates = Self {
-            shared: Arc::new(Mutex::new(Shared {
-                state: unmanaged.clone().unwrap_or(UpdateState::Idle),
-                auto,
-                found: None,
-                file: None,
-            })),
+            shared: Arc::new(Mutex::new(shared)),
             ui,
             enabled,
             store,
             notes,
+            install,
+            log,
+            notify,
+            feed: None,
         };
         if let Some(state) = unmanaged {
             (updates.ui)(Event::Update(state));
         }
-        if checks {
-            let every = updates.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(FIRST_CHECK).await;
-                loop {
-                    every.check();
-                    tokio::time::sleep(EVERY).await;
-                }
-            });
+        if updates.install.is_some() {
+            if let Some(at) = last_check {
+                (updates.ui)(Event::UpdateChecked { at, error: None });
+            }
+            updates.schedule();
         }
         updates
+    }
+
+    /// The checks of the schedule, on the wall clock: one at the start when the last is an
+    /// hour old (else when its interval ends), then every interval, and one after a sleep.
+    fn schedule(&self) {
+        let every = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(FIRST_CHECK).await;
+            {
+                let mut shared = every.shared.lock().unwrap();
+                shared.next_check = Some(first_check(now(), shared.last_check, random()));
+            }
+            let mut before = (now(), Instant::now());
+            loop {
+                let (wall, ran) = (now(), Instant::now());
+                let woke = slept(wall.saturating_sub(before.0), ran - before.1);
+                before = (wall, ran);
+                every.tick(wall, woke);
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    /// One look at the schedule at `now`; `woke` when the computer slept since the last.
+    fn tick(&self, now: u64, woke: bool) {
+        let (last, next) = {
+            let shared = self.shared.lock().unwrap();
+            (shared.last_check, shared.next_check)
+        };
+        if next.is_some_and(|next| due(now, last, next, woke)) {
+            if woke {
+                self.log("schedule: the computer woke");
+            }
+            self.check();
+        }
+        self.announce(now, false);
+    }
+
+    /// The window gained or lost the focus: coming back, a check long due is made.
+    pub fn focused(&self, focused: bool) {
+        let check = {
+            let mut shared = self.shared.lock().unwrap();
+            shared.focused = focused;
+            focused && shared.next_check.is_some() && stale(now(), shared.last_check)
+        };
+        if check {
+            self.check();
+        }
     }
 
     /// Settings' `auto_update` as it is now: when on, a found version downloads at once.
@@ -98,23 +207,29 @@ impl Updates {
         }
     }
 
-    /// Looks for a newer version now, unless one is being looked for, fetched or installed.
+    /// Looks for a newer version now, unless a check is on its way. What is downloading or
+    /// ready stays in view meanwhile; the check's end is told apart (`Event::UpdateChecked`).
     pub fn check(&self) {
         if !self.enabled {
             return;
         }
-        match self.state() {
-            UpdateState::Checking
-            | UpdateState::Downloading { .. }
-            | UpdateState::Ready { .. }
-            | UpdateState::Installed { .. } => {}
-            state @ (UpdateState::FromSource | UpdateState::NotInstalled) => self.set(state),
-            _ => {
-                self.set(UpdateState::Checking);
-                let updates = self.clone();
-                tokio::task::spawn_blocking(move || updates.run_check());
-            }
+        let mut shared = self.shared.lock().unwrap();
+        if let state @ (UpdateState::FromSource | UpdateState::NotInstalled) = &shared.state {
+            let state = state.clone();
+            drop(shared);
+            return self.set(state);
         }
+        if shared.checking {
+            return;
+        }
+        shared.checking = true;
+        if !busy(&shared.state) {
+            (self.ui)(Event::Update(UpdateState::Checking));
+            shared.state = UpdateState::Checking;
+        }
+        drop(shared);
+        let updates = self.clone();
+        tokio::task::spawn_blocking(move || updates.run_check());
     }
 
     /// Downloads the newer version found, if it is not here yet.
@@ -123,44 +238,79 @@ impl Updates {
         tokio::task::spawn_blocking(move || updates.run_download());
     }
 
-    /// Installs the downloaded version and says where it runs from; the host starts it and
+    /// The person skips the optional version offered: it is not offered again, a newer one is.
+    pub fn skip(&self) {
+        let updates = self.clone();
+        tokio::task::spawn_blocking(move || updates.run_skip());
+    }
+
+    /// Activates the staged version and says where it runs from; the host starts it and
     /// closes this one.
     pub fn install(&self) {
-        let (version, file) = {
+        let version = match self.state() {
+            UpdateState::Ready { version, .. } => Some(version),
+            // A restart that failed may be tried again.
+            UpdateState::Failed { .. } => None,
+            _ => return,
+        };
+        let updates = self.clone();
+        tokio::task::spawn_blocking(move || updates.run_install(version));
+    }
+
+    fn run_install(&self, version: Option<String>) {
+        let Some(install) = self.install.clone() else {
+            return self.set(failure(Error::NotInstalled));
+        };
+        let staged = install.staged();
+        let Some(version) = (staged.as_ref())
+            .map(|staged| staged.version.to_string())
+            .or(version)
+        else {
+            return;
+        };
+        let activated = match &staged {
+            Some(staged) => install.activate_staged(staged, &running()),
+            // Another start of quill activated it already: restart into it.
+            None => Ok(install.program()),
+        };
+        match activated {
+            Ok(program) => {
+                self.log(format!("activate: {version} starts from now on (restart)"));
+                self.set(UpdateState::Installed { version, program })
+            }
+            Err(error) => {
+                self.log(format!("activate: {version} failed: {error}"));
+                self.set(failure(Error::Disk))
+            }
+        }
+    }
+
+    fn run_skip(&self) {
+        let (version, at) = {
             let shared = self.shared.lock().unwrap();
-            match (&shared.state, &shared.file, &shared.found) {
-                (
-                    UpdateState::Ready { .. } | UpdateState::Failed { .. },
-                    Some(file),
-                    Some((release, _)),
-                ) => (release.version.to_string(), file.clone()),
+            match &shared.state {
+                UpdateState::Available {
+                    version,
+                    mandatory: false,
+                    ..
+                } => (version.clone(), shared.last_check.unwrap_or_else(now)),
                 _ => return,
             }
         };
-        let updates = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let installed = Install::locate()
-                .ok_or(Error::NotInstalled)
-                .and_then(|install| {
-                    let parsed = Version::parse(&version).map_err(|_| Error::Manifest)?;
-                    install.apply(&file, &parsed).map_err(|error| {
-                        eprintln!("quill: update: {error}");
-                        Error::Disk
-                    })
-                });
-            match installed {
-                Ok(program) => {
-                    // A whole bundle with CEF: it is not kept once installed.
-                    let _ = std::fs::remove_file(&file);
-                    updates.set(UpdateState::Installed { version, program })
-                }
-                Err(error) => updates.set(failure(error)),
-            }
-        });
+        // Kept before the interface hears it.
+        if let Err(error) = self.store.lock().unwrap().mark(SKIPPED, &version) {
+            return self.log(format!("skip: {version} not kept: {error}"));
+        }
+        self.log(format!("skip: {version}, until a newer one"));
+        self.set(UpdateState::UpToDate { checked_at: at });
     }
 
     fn state(&self) -> UpdateState {
         self.shared.lock().unwrap().state.clone()
+    }
+
+    fn generation(&self) -> u64 {
+        self.shared.lock().unwrap().generation
     }
 
     /// Sets the state and tells the interface, in that order for every caller.
@@ -170,104 +320,348 @@ impl Updates {
         shared.state = state;
     }
 
+    /// [`Self::set`], while `generation` is still the release found; else nothing.
+    fn set_current(&self, generation: u64, state: UpdateState) -> bool {
+        let mut shared = self.shared.lock().unwrap();
+        if shared.generation != generation {
+            return false;
+        }
+        (self.ui)(Event::Update(state.clone()));
+        shared.state = state;
+        true
+    }
+
+    /// [`Self::set`], unless a version is downloading or ready: a check does not hide it.
+    fn set_unless_busy(&self, state: UpdateState) {
+        let mut shared = self.shared.lock().unwrap();
+        if !busy(&shared.state) {
+            (self.ui)(Event::Update(state.clone()));
+            shared.state = state;
+        }
+    }
+
+    fn marked(&self, key: &str) -> Option<String> {
+        self.store.lock().unwrap().marked(key).ok().flatten()
+    }
+
+    /// A line in the update log (and on stderr).
+    fn log(&self, line: impl AsRef<str>) {
+        eprintln!("quill: update: {}", line.as_ref());
+        if let Some(path) = &self.log {
+            quill_update::log::write(path, line.as_ref());
+        }
+    }
+
+    fn fetch(&self) -> Result<(Manifest, Source), Error> {
+        let (source, key) = match &self.feed {
+            Some((source, key)) => (Some(source.clone()), Some(*key)),
+            None => (Source::locate(), quill_update::public_key()),
+        };
+        let source = source.ok_or(Error::Access)?;
+        quill_update::check(&quill_update::agent(), &source, key.as_ref())
+            .map(|manifest| (manifest, source))
+    }
+
     fn run_check(&self) {
-        let key = quill_update::public_key();
-        let checked = match Source::locate() {
-            None => Err(Error::Access),
-            Some(source) => {
-                let agent = quill_update::agent();
-                quill_update::check(&agent, &source, key.as_ref())
-                    .map(|manifest| (manifest, source))
-            }
-        };
-        let (manifest, source) = match checked {
-            Ok(checked) => checked,
-            Err(error) => return self.set(failure(error)),
-        };
-        let installed = Version::parse(quill_update::VERSION).expect("the workspace's version");
-        let Some(release) = quill_update::offer(manifest, &installed, &quill_update::platform())
-        else {
-            return self.set(UpdateState::UpToDate { checked_at: now() });
-        };
-        let available = UpdateState::Available {
-            version: release.version.to_string(),
-            notes: release.notes.clone(),
-            mandatory: release.mandatory,
-            size: release
-                .artifact
-                .as_ref()
-                .map_or(0, |artifact| artifact.size),
-        };
-        // A mandatory version is fetched whatever Settings say: it must be installed.
-        let fetch = release.mandatory || self.shared.lock().unwrap().auto;
+        let checked = self.fetch();
+        let at = now();
+        // Kept before the interface hears of it.
+        if let Err(error) = (self.store.lock().unwrap()).mark(LAST_CHECK, &at.to_string()) {
+            eprintln!("quill: update: {error}");
+        }
         {
             let mut shared = self.shared.lock().unwrap();
-            shared.file = None;
-            shared.found = Some((release, source));
+            shared.checking = false;
+            shared.last_check = Some(at);
+            shared.next_check = Some(at + jittered(EVERY, random()));
         }
-        self.set(available);
+        (self.ui)(Event::UpdateChecked {
+            at,
+            error: checked.as_ref().err().map(|error| error.label()),
+        });
+        match checked {
+            Ok((manifest, source)) => self.found(manifest, source, at),
+            Err(error) => {
+                self.log(format!("check failed: {error}"));
+                self.set_unless_busy(failure(error));
+            }
+        }
+    }
+
+    /// What a check found: a newer release replaces what was found before (its download
+    /// stops), unless the person skipped it or it was rolled back here.
+    fn found(&self, manifest: Manifest, source: Source, at: u64) {
+        let running = running();
+        let latest = manifest.version.clone();
+        let Some(release) = quill_update::offer(manifest, &running, &quill_update::platform())
+        else {
+            self.log(format!("check: up to date ({running}, latest {latest})"));
+            return self.set_unless_busy(UpdateState::UpToDate { checked_at: at });
+        };
+        let version = release.version.to_string();
+        let mandatory = release.mandatory;
+        let install = self.install.as_ref();
+        if install
+            .and_then(Install::bad)
+            .is_some_and(|bad| release.version <= bad)
+        {
+            self.log(format!(
+                "check: {version} offered, refused: it was rolled back"
+            ));
+            return self.set_unless_busy(UpdateState::Failed {
+                reason: format!(
+                    "Version {version} did not start on this computer and was rolled back."
+                ),
+            });
+        }
+        if !mandatory && self.marked(SKIPPED).as_deref() == Some(version.as_str()) {
+            self.log(format!("check: {version} offered, skipped"));
+            return self.set_unless_busy(UpdateState::UpToDate { checked_at: at });
+        }
+        let what = if mandatory { " (mandatory)" } else { "" };
+        self.log(format!("check: {version} offered{what} ({running} runs)"));
+        let (generation, fetch) = {
+            let mut shared = self.shared.lock().unwrap();
+            let same =
+                (shared.found.as_ref()).is_some_and(|(found, _)| found.version == release.version);
+            if same && busy(&shared.state) {
+                // On its way already, or here.
+                return;
+            }
+            shared.generation += 1;
+            shared.found = Some((release.clone(), source));
+            // A mandatory version is fetched whatever Settings say: it must be installed.
+            (shared.generation, mandatory || shared.auto)
+        };
+        // Staged by an earlier run that never started it.
+        if let Some(staged) = install
+            .and_then(Install::staged)
+            .filter(|staged| staged.version == release.version && staged.path.exists())
+        {
+            return self.ready(generation, &release, staged.since);
+        }
+        self.set_current(
+            generation,
+            UpdateState::Available {
+                version,
+                notes: release.notes.clone(),
+                mandatory,
+                size: (release.artifact.as_ref()).map_or(0, |artifact| artifact.size),
+            },
+        );
         if fetch {
             self.run_download();
         }
     }
 
     fn run_download(&self) {
-        let (release, source) = {
+        let (release, source, generation) = {
             let shared = self.shared.lock().unwrap();
+            let Some((release, source)) = shared.found.clone() else {
+                return;
+            };
+            let version = release.version.to_string();
             if matches!(
-                shared.state,
-                UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+                &shared.state,
+                UpdateState::Downloading { version: on, .. } | UpdateState::Ready { version: on, .. }
+                    if *on == version
             ) {
                 return;
             }
-            let Some(found) = shared.found.clone() else {
-                return;
-            };
-            found
+            (release, source, shared.generation)
         };
         let version = release.version.to_string();
         let mandatory = release.mandatory;
         let Some(artifact) = release.artifact.clone() else {
-            return self.set(failure(Error::NoArtifact));
+            self.log(format!("download: {version} has nothing for this system"));
+            self.set_current(generation, failure(Error::NoArtifact));
+            return;
         };
-        let Some(install) = Install::locate() else {
-            return self.set(failure(Error::NotInstalled));
+        let Some(install) = self.install.clone() else {
+            self.set_current(generation, failure(Error::NotInstalled));
+            return;
         };
-        self.set(UpdateState::Downloading {
+        let downloading = |done, total| UpdateState::Downloading {
             version: version.clone(),
-            done: 0,
-            total: artifact.size,
+            done,
+            total,
             mandatory,
-        });
-        let agent = quill_update::agent();
+        };
+        if !self.set_current(generation, downloading(0, artifact.size)) {
+            return;
+        }
+        self.log(format!(
+            "download: {version} started, {} bytes",
+            artifact.size
+        ));
+        let started = Instant::now();
         let mut told = 0;
         let downloaded = quill_update::download(
-            &agent,
+            &quill_update::agent(),
             &source,
             &artifact,
             &install.downloads(),
             |done, total| {
                 if done == total || done - told >= STEP {
                     told = done;
-                    self.set(UpdateState::Downloading {
-                        version: version.clone(),
-                        done,
-                        total,
-                        mandatory,
-                    });
+                    return self.set_current(generation, downloading(done, total));
                 }
+                self.generation() == generation
             },
         );
-        match downloaded {
-            Ok(path) => {
-                self.shared.lock().unwrap().file = Some(path);
+        if self.generation() != generation {
+            return self.log(format!(
+                "download: {version} stopped: a newer release replaces it"
+            ));
+        }
+        let file = match downloaded {
+            Ok(file) => file,
+            Err(error) => {
+                self.log(format!("download: {version} failed: {error}"));
+                self.set_current(generation, failure(error));
+                return;
+            }
+        };
+        self.log(format!(
+            "download: {version} done, {} bytes in {:.1} s; size and SHA-256 match",
+            artifact.size,
+            started.elapsed().as_secs_f32()
+        ));
+        let staged = install.stage(&file, &release.version).and_then(|path| {
+            let staged = Staged {
+                version: release.version.clone(),
+                sha256: artifact.sha256.clone(),
+                path,
+                since: now(),
+            };
+            if self.generation() != generation {
+                return Ok(None);
+            }
+            // Kept before the interface hears it is ready, so the next start activates it.
+            install.keep_staged(&staged).map(|()| Some(staged))
+        });
+        match staged {
+            Ok(Some(staged)) => {
+                // A whole bundle with CEF: it is not kept once staged.
+                let _ = std::fs::remove_file(&file);
+                self.log(format!("stage: {version} at {}", staged.path.display()));
                 // Before the strip shows: its announcement is there when it is clicked.
                 self.keep_whats_new(&release, &source);
-                self.set(UpdateState::Ready { version, mandatory });
+                self.ready(generation, &release, staged.since);
             }
-            Err(error) => self.set(failure(error)),
+            Ok(None) => {}
+            Err(error) => {
+                self.log(format!("stage: {version} failed: {error}"));
+                self.set_current(generation, failure(Error::Disk));
+            }
         }
     }
+
+    /// `release`, staged at `since`, is ready: the interface hears it, and the system too when
+    /// the window is away.
+    fn ready(&self, generation: u64, release: &Release, since: u64) {
+        let ready = UpdateState::Ready {
+            version: release.version.to_string(),
+            mandatory: release.mandatory,
+        };
+        if self.set_current(generation, ready) {
+            self.shared.lock().unwrap().ready_since = Some(since);
+            self.announce(now(), true);
+        }
+    }
+
+    /// Announces the ready version by the system, once for each version: as it becomes ready
+    /// (`arriving`) while the window is away, or once it has waited a day.
+    fn announce(&self, now: u64, arriving: bool) {
+        let (version, since, focused) = {
+            let shared = self.shared.lock().unwrap();
+            match (&shared.state, shared.ready_since) {
+                (UpdateState::Ready { version, .. }, Some(since)) => {
+                    (version.clone(), since, shared.focused)
+                }
+                _ => return,
+            }
+        };
+        let notified = self.marked(NOTIFIED);
+        if !announces(arriving, focused, since, now, notified.as_deref(), &version) {
+            return;
+        }
+        // Kept before it shows: never twice for a version, whatever happens next.
+        if let Err(error) = self.store.lock().unwrap().mark(NOTIFIED, &version) {
+            return self.log(format!("notify: {version} not kept: {error}"));
+        }
+        let why = if arriving {
+            "the window is away"
+        } else {
+            "ready for a day"
+        };
+        self.log(format!("notify: {version} is ready ({why})"));
+        (self.notify)(
+            "quill".into(),
+            format!("quill {version} is ready. Restart quill to update."),
+        );
+    }
+}
+
+/// A version is downloading, ready or being installed: a check leaves it in view.
+fn busy(state: &UpdateState) -> bool {
+    matches!(
+        state,
+        UpdateState::Downloading { .. } | UpdateState::Ready { .. } | UpdateState::Installed { .. }
+    )
+}
+
+fn running() -> Version {
+    Version::parse(quill_update::VERSION).expect("the workspace's version")
+}
+
+/// `base` seconds, moved by up to [`JITTER`] of it either way as `unit` (0 to 1) says.
+fn jittered(base: u64, unit: f64) -> u64 {
+    (base as f64 * (1.0 - JITTER + 2.0 * JITTER * unit.clamp(0.0, 1.0))) as u64
+}
+
+/// A number from 0 to 1, different each time: std's random hasher keys, no crate for it.
+fn random() -> f64 {
+    use std::hash::BuildHasher as _;
+    let bits = std::collections::hash_map::RandomState::new().hash_one(0u8);
+    bits as f64 / u64::MAX as f64
+}
+
+/// The last check ended an hour ago or more, or there was none.
+fn stale(now: u64, last: Option<u64>) -> bool {
+    last.is_none_or(|last| now.saturating_sub(last) >= STALE)
+}
+
+/// When a start checks: now when the last check is stale, else when its interval ends.
+fn first_check(now: u64, last: Option<u64>, unit: f64) -> u64 {
+    match last {
+        Some(last) if !stale(now, Some(last)) => last + jittered(EVERY, unit),
+        _ => now,
+    }
+}
+
+/// The wall clock moved `wall` seconds while the process's own clock moved `ran`: the computer
+/// slept between.
+fn slept(wall: u64, ran: Duration) -> bool {
+    wall > ran.as_secs() + WAKE
+}
+
+/// A check is due at `now`: its time came, or the computer woke and the last one is stale.
+fn due(now: u64, last: Option<u64>, next: u64, woke: bool) -> bool {
+    now >= next || (woke && stale(now, last))
+}
+
+/// Whether the system announces `version`, ready since `since`, at `now`: never twice
+/// (`notified`), and only as it arrives with the window away, or after a day.
+fn announces(
+    arriving: bool,
+    focused: bool,
+    since: u64,
+    now: u64,
+    notified: Option<&str>,
+    version: &str,
+) -> bool {
+    notified != Some(version) && ((arriving && !focused) || now >= since + DAY)
 }
 
 impl Updates {
@@ -463,7 +857,7 @@ mod tests {
             let told = told.clone();
             Arc::new(move |event| told.lock().unwrap().push(event))
         };
-        let updates = Updates::start(sink, true, true, store(), None);
+        let updates = Updates::start(sink, true, true, store(), None, None, quiet());
         updates.check();
         assert_eq!(updates.state(), UpdateState::FromSource);
         assert_eq!(
@@ -477,6 +871,406 @@ mod tests {
 
     fn store() -> Arc<Mutex<quill_store::Store>> {
         Arc::new(Mutex::new(quill_store::Store::in_memory().unwrap()))
+    }
+
+    fn quiet() -> Notifier {
+        Arc::new(|_, _| {})
+    }
+
+    /// What a test's updates told: the interface's events, and the system's notices.
+    #[derive(Clone, Default)]
+    struct Told {
+        events: Arc<Mutex<Vec<Event>>>,
+        notices: Arc<Mutex<Vec<String>>>,
+    }
+
+    /// Updates managing `install`, reading the loopback `server`'s feed with `key`, its log in
+    /// `log`. `probe` looks at each event as it is told.
+    fn managed(
+        server: &quill_update::serve::Server,
+        key: VerifyingKey,
+        install: Option<Install>,
+        auto: bool,
+        log: PathBuf,
+        probe: impl Fn(&Event) + Send + Sync + 'static,
+    ) -> (Updates, Told) {
+        let told = Told::default();
+        let ui: Sink = {
+            let events = told.events.clone();
+            Arc::new(move |event| {
+                probe(&event);
+                events.lock().unwrap().push(event)
+            })
+        };
+        let store = store();
+        let notify: Notifier = {
+            let (notices, store) = (told.notices.clone(), store.clone());
+            Arc::new(move |_, body| {
+                // The version announced is kept before the notice shows.
+                let kept = store.lock().unwrap().marked(NOTIFIED).unwrap();
+                assert!(kept.is_some_and(|version| body.contains(&version)));
+                notices.lock().unwrap().push(body)
+            })
+        };
+        let updates = Updates {
+            shared: Arc::new(Mutex::new(Shared::new(UpdateState::Idle, auto))),
+            ui,
+            enabled: true,
+            store,
+            notes: None,
+            install,
+            log: Some(log),
+            notify,
+            feed: Some((
+                Source::Files {
+                    base: server.base(),
+                },
+                key,
+            )),
+        };
+        (updates, told)
+    }
+
+    /// `running`'s next patch, `by` patches on.
+    fn next(by: u64) -> Version {
+        let running = running();
+        Version::new(running.major, running.minor, running.patch + by)
+    }
+
+    /// Publish `version` on `server`, with `artifact` (bytes) for this system when given.
+    fn release(
+        server: &quill_update::serve::Server,
+        version: &Version,
+        mandatory: bool,
+        artifact: Option<&[u8]>,
+    ) -> VerifyingKey {
+        use sha2::Digest as _;
+        let name = format!("quill-{version}.tar.gz");
+        let mut platforms = std::collections::BTreeMap::new();
+        if let Some(bytes) = artifact {
+            server.put(&format!("/{name}"), bytes.to_vec());
+            platforms.insert(
+                quill_update::platform(),
+                quill_update::Artifact {
+                    url: format!("{}/{name}", server.base()),
+                    size: bytes.len() as u64,
+                    sha256: quill_update::hex(&sha2::Sha256::digest(bytes)),
+                },
+            );
+        }
+        quill_update::serve::publish(
+            server,
+            &Manifest {
+                version: version.clone(),
+                date: "2026-11-02T12:00:00Z".into(),
+                notes: String::new(),
+                minimum_version: mandatory.then(|| version.clone()),
+                platforms,
+                whats_new: None,
+                assets: Default::default(),
+            },
+        )
+    }
+
+    /// A Linux bundle of `version` as a release's `.tar.gz`, built in `folder`.
+    #[cfg(target_os = "linux")]
+    fn bundle(folder: &std::path::Path, version: &Version) -> Vec<u8> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = folder.join(format!("bundle-{version}"));
+        std::fs::create_dir_all(dir.join("locales")).unwrap();
+        std::fs::write(
+            dir.join("quill"),
+            [b"\x7fELF".as_slice(), version.to_string().as_bytes()].concat(),
+        )
+        .unwrap();
+        std::fs::set_permissions(dir.join("quill"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(dir.join("libcef.so"), "cef").unwrap();
+        let out = folder.join(format!("{version}.tar.gz"));
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&out)
+            .arg("-C")
+            .arg(&dir)
+            .args(["quill", "libcef.so", "locales"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read(out).unwrap()
+    }
+
+    /// A release found downloads, is staged and kept before the interface hears it is ready;
+    /// a newer one found while it waits replaces it; the next start activates the newest. The
+    /// log tells each step, and no address.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_release_is_staged_before_it_is_ready_and_a_newer_one_found_replaces_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let install = Install::at(folder.path().join("app"));
+        let running = running();
+        let built = folder.path().join("built");
+        std::fs::create_dir_all(&built).unwrap();
+        std::fs::write(built.join("quill"), b"\x7fELF running").unwrap();
+        let program = install.adopt(&built.join("quill"), &running).unwrap();
+        let server = quill_update::serve::serve(0).unwrap();
+        let (one, two) = (next(1), next(2));
+        let key = release(&server, &one, false, Some(&bundle(folder.path(), &one)));
+        let staged_when_ready: Arc<Mutex<Vec<Option<Version>>>> = Arc::default();
+        let probe = {
+            let (seen, install) = (staged_when_ready.clone(), install.clone());
+            move |event: &Event| {
+                if let Event::Update(UpdateState::Ready { .. }) = event {
+                    seen.lock()
+                        .unwrap()
+                        .push(install.staged().map(|staged| staged.version));
+                }
+            }
+        };
+        let log = folder.path().join("updates.log");
+        let (updates, told) = managed(
+            &server,
+            key,
+            Some(install.clone()),
+            true,
+            log.clone(),
+            probe,
+        );
+        updates.run_check();
+        let ready = |version: &Version| UpdateState::Ready {
+            version: version.to_string(),
+            mandatory: false,
+        };
+        assert_eq!(updates.state(), ready(&one));
+        assert_eq!(*staged_when_ready.lock().unwrap(), [Some(one.clone())]);
+        // Staged, not started: this version still starts.
+        assert_eq!(install.current(), Some(running.to_string()));
+        assert!(install
+            .root()
+            .join(format!("versions/{one}/quill"))
+            .is_file());
+        // Downloading showed on its way.
+        assert!(told.events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            Event::Update(UpdateState::Downloading { done, total, .. }) if done == total
+        )));
+
+        // Checked again while it waits: the same version is nothing new.
+        let before = told.events.lock().unwrap().len();
+        updates.run_check();
+        let after: Vec<Event> = told.events.lock().unwrap()[before..].to_vec();
+        assert!(
+            matches!(&after[..], [Event::UpdateChecked { error: None, .. }]),
+            "{after:?}"
+        );
+
+        // A newer one is published: it replaces the staged one.
+        release(&server, &two, false, Some(&bundle(folder.path(), &two)));
+        updates.run_check();
+        assert_eq!(updates.state(), ready(&two));
+        assert_eq!(
+            install.staged().map(|staged| staged.version),
+            Some(two.clone())
+        );
+        assert_eq!(
+            *staged_when_ready.lock().unwrap(),
+            [Some(one.clone()), Some(two.clone())]
+        );
+        // The next start activates it.
+        assert_eq!(
+            install.launch(&running).unwrap(),
+            quill_update::install::Launch::Activated {
+                version: two.clone(),
+                program
+            }
+        );
+        let text = std::fs::read_to_string(&log).unwrap();
+        for step in [
+            format!("check: {one} offered"),
+            format!("download: {one} started"),
+            format!("download: {one} done"),
+            format!("stage: {one} at"),
+            format!("check: {two} offered"),
+            format!("stage: {two} at"),
+        ] {
+            assert!(text.contains(&step), "{step} in {text}");
+        }
+        assert!(!text.contains("http"), "{text}");
+        assert!(
+            told.notices.lock().unwrap().is_empty(),
+            "the window has the focus"
+        );
+    }
+
+    /// A version the person skipped is not offered again until a newer one comes; the skip is
+    /// kept before the interface hears it. A mandatory version cannot be skipped.
+    #[test]
+    fn a_skipped_version_is_offered_again_only_when_a_newer_one_comes() {
+        let folder = tempfile::tempdir().unwrap();
+        let server = quill_update::serve::serve(0).unwrap();
+        let (one, two) = (next(1), next(2));
+        let key = release(&server, &one, false, None);
+        let log = folder.path().join("updates.log");
+        let (updates, _told) = managed(&server, key, None, false, log, |_| {});
+        updates.run_check();
+        let available = |version: &Version| {
+            matches!(
+                updates.state(),
+                UpdateState::Available { version: found, mandatory: false, .. } if found == version.to_string()
+            )
+        };
+        assert!(available(&one));
+        updates.run_skip();
+        assert_eq!(updates.marked(SKIPPED), Some(one.to_string()));
+        assert!(matches!(updates.state(), UpdateState::UpToDate { .. }));
+        updates.run_check();
+        assert!(matches!(updates.state(), UpdateState::UpToDate { .. }));
+        release(&server, &two, false, None);
+        updates.run_check();
+        assert!(available(&two));
+        // Mandatory: nothing is skipped.
+        updates.set(UpdateState::Available {
+            version: two.to_string(),
+            notes: String::new(),
+            mandatory: true,
+            size: 0,
+        });
+        updates.run_skip();
+        assert_eq!(updates.marked(SKIPPED), Some(one.to_string()));
+    }
+
+    /// The system announces a ready version once: as it arrives while the window is away, or
+    /// after it waited a day; the version is kept before the notice shows (`managed`).
+    #[test]
+    fn a_ready_version_is_announced_once_when_the_window_is_away_or_after_a_day() {
+        assert!(announces(true, false, 0, 0, None, "1.0.0"));
+        assert!(!announces(true, true, 0, 0, None, "1.0.0"));
+        assert!(!announces(false, false, 0, DAY - 1, None, "1.0.0"));
+        assert!(announces(false, true, 0, DAY, None, "1.0.0"));
+        assert!(!announces(true, false, 0, DAY, Some("1.0.0"), "1.0.0"));
+        assert!(announces(true, false, 0, 0, Some("0.9.0"), "1.0.0"));
+
+        let folder = tempfile::tempdir().unwrap();
+        let server = quill_update::serve::serve(0).unwrap();
+        let key = release(&server, &next(1), false, None);
+        let (updates, told) = managed(&server, key, None, false, folder.path().join("log"), |_| {});
+        let make_ready = |version: &Version, since| {
+            updates.set(UpdateState::Ready {
+                version: version.to_string(),
+                mandatory: false,
+            });
+            updates.shared.lock().unwrap().ready_since = Some(since);
+        };
+        // Away as it arrives: one notice, and never another for it.
+        updates.focused(false);
+        make_ready(&next(1), 100);
+        updates.announce(100, true);
+        updates.announce(100, true);
+        updates.announce(100 + DAY, false);
+        assert_eq!(told.notices.lock().unwrap().len(), 1);
+        // In view as it arrives: none, until it waited a day.
+        updates.focused(true);
+        make_ready(&next(2), 1_000);
+        updates.announce(1_000, true);
+        updates.announce(1_000 + DAY - 1, false);
+        assert_eq!(told.notices.lock().unwrap().len(), 1);
+        updates.announce(1_000 + DAY, false);
+        updates.announce(1_000 + 2 * DAY, false);
+        let notices = told.notices.lock().unwrap().clone();
+        assert_eq!(notices.len(), 2);
+        assert!(notices[1].contains(&next(2).to_string()));
+    }
+
+    /// Checks keep to the wall clock: four hours apart give or take 15 %, one at the start only
+    /// when the last is an hour old, and one after a sleep or when the window comes back if
+    /// the last is that old.
+    #[test]
+    fn checks_are_jittered_and_caught_up_after_a_sleep_by_the_wall_clock() {
+        assert_eq!(jittered(EVERY, 0.0), (EVERY as f64 * 0.85) as u64);
+        assert_eq!(jittered(EVERY, 1.0), (EVERY as f64 * 1.15) as u64);
+        assert_eq!(jittered(EVERY, 0.5), EVERY);
+        for _ in 0..50 {
+            let at = jittered(EVERY, random());
+            assert!((EVERY * 85 / 100..=EVERY * 115 / 100).contains(&at), "{at}");
+        }
+        let now = 1_000_000;
+        // At the start: now when stale or never checked; else the interval's remainder.
+        assert_eq!(first_check(now, None, 0.5), now);
+        assert_eq!(first_check(now, Some(now - STALE), 0.5), now);
+        assert_eq!(first_check(now, Some(now - 600), 0.5), now - 600 + EVERY);
+        // The wall clock ran hours while the process's ran a minute: it slept.
+        assert!(slept(3 * 3600, Duration::from_secs(60)));
+        assert!(!slept(61, Duration::from_secs(60)));
+        let next = now + 3600;
+        assert!(!due(now, Some(now - 600), next, false));
+        assert!(due(next, Some(now - 600), next, false));
+        // Woken: when the last check is stale only.
+        assert!(!due(now, Some(now - 600), next, true));
+        assert!(due(now, Some(now - STALE - 1), next, true));
+    }
+
+    /// The window coming back checks when the last check is stale, once the start's wait is
+    /// over; a check's end is kept before it is told, and the log never holds the token or an
+    /// address.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_focus_after_a_stale_check_checks_and_the_log_holds_no_secret() {
+        let folder = tempfile::tempdir().unwrap();
+        let server = quill_update::serve::serve(0).unwrap();
+        let key = release(&server, &next(1), false, None);
+        let kept_when_told: Arc<Mutex<Vec<bool>>> = Arc::default();
+        let log = folder.path().join("updates.log");
+        let (mut updates, told) = managed(&server, key, None, false, log.clone(), |_| {});
+        // The private repository's API, which refuses the token.
+        updates.feed = Some((
+            Source::Api {
+                token: "ghp_SECRET".into(),
+                api: server.base(),
+            },
+            key,
+        ));
+        let probe = {
+            let (seen, store, events) = (
+                kept_when_told.clone(),
+                updates.store.clone(),
+                told.events.clone(),
+            );
+            Arc::new(move |event: Event| {
+                if let Event::UpdateChecked { at, .. } = &event {
+                    let kept = store.lock().unwrap().marked(LAST_CHECK).unwrap();
+                    seen.lock().unwrap().push(kept == Some(at.to_string()));
+                }
+                events.lock().unwrap().push(event)
+            })
+        };
+        updates.ui = probe;
+        // Before the start's wait is over, the focus checks nothing.
+        updates.focused(true);
+        assert_eq!(updates.state(), UpdateState::Idle);
+        updates.shared.lock().unwrap().next_check = Some(u64::MAX);
+        updates.focused(false);
+        assert_eq!(updates.state(), UpdateState::Idle);
+        updates.focused(true);
+        for _ in 0..200 {
+            if !kept_when_told.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(*kept_when_told.lock().unwrap(), [true]);
+        for _ in 0..200 {
+            if updates.state() == UpdateState::NeedsAccess {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(updates.state(), UpdateState::NeedsAccess);
+        // Just checked: coming back again checks nothing.
+        let checks = told.events.lock().unwrap().len();
+        updates.focused(false);
+        updates.focused(true);
+        assert_eq!(told.events.lock().unwrap().len(), checks);
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.contains("check failed"), "{text}");
+        assert!(!text.contains("SECRET") && !text.contains("http"), "{text}");
     }
 
     /// This version came by an update whose notes have an announcement: it is announced at
@@ -524,6 +1318,8 @@ mod tests {
             false,
             store.clone(),
             Some(folder.path().into()),
+            None,
+            quiet(),
         );
         let last = || match told.lock().unwrap().last().cloned() {
             Some(Event::WhatsNew(whats_new)) => whats_new,
@@ -563,7 +1359,15 @@ mod tests {
             Arc::new(move |event| told.lock().unwrap().push(event))
         };
         let folder = tempfile::tempdir().unwrap();
-        let updates = Updates::start(sink, false, false, store(), Some(folder.path().into()));
+        let updates = Updates::start(
+            sink,
+            false,
+            false,
+            store(),
+            Some(folder.path().into()),
+            None,
+            quiet(),
+        );
         updates.tell_whats_new(true);
         assert_eq!(
             *told.lock().unwrap(),

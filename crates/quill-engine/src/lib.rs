@@ -114,6 +114,8 @@ pub struct Config {
     /// Where each release's notes and media are kept once downloaded with its update; `None`
     /// keeps none.
     pub whats_new: Option<PathBuf>,
+    /// The update log (quill-update's `log`); `None` keeps none.
+    pub update_log: Option<PathBuf>,
     /// The video codec this platform downloads, once the person allows it, and where it is
     /// kept; `None` for either plays no clip (codec.rs).
     pub codec: Option<CodecRelease>,
@@ -142,6 +144,7 @@ impl Config {
             extensions: Some(config.join("quill/extensions.json")),
             updates: true,
             whats_new: Some(data.join("quill/whats-new")),
+            update_log: Some(data.join("quill/updates.log")),
             codecs: Some(data.join("quill/codecs")),
             open_pages: true,
             ..Self::default()
@@ -549,12 +552,26 @@ impl Router {
             )
         };
         // Settings are read after this, and say whether a found version downloads at once.
+        // A click on the system's notice of a ready update brings quill up; no session has id 0.
+        let announce: update::Notifier = {
+            let sink = sink.clone();
+            Arc::new(move |title, body| {
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    if notify(&title, &body).await {
+                        sink(Event::NotificationClicked { session: 0 });
+                    }
+                });
+            })
+        };
         let updates = update::Updates::start(
             ui.clone(),
             config.updates,
             true,
             store.clone(),
             config.whats_new.clone(),
+            config.update_log.clone(),
+            announce,
         );
         let global = global::Layer::new(
             config.extensions.clone(),
@@ -1920,6 +1937,14 @@ impl Router {
             }
             Intent::InstallUpdate => {
                 self.updates.install();
+                return;
+            }
+            Intent::SkipUpdate => {
+                self.updates.skip();
+                return;
+            }
+            Intent::WindowFocused { focused } => {
+                self.updates.focused(focused);
                 return;
             }
             Intent::WhatsNewOpened => {

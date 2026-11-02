@@ -259,7 +259,7 @@ fn a_private_release_is_read_through_the_api_and_its_artifact_is_fetched_from_th
     let artifact = &checked.platforms["linux-x86_64"];
     assert_eq!(artifact.url, format!("{}/assets/2", server.base()));
     let folder = tempfile::tempdir().unwrap();
-    let path = download(&agent, &source, artifact, folder.path(), |_, _| {}).unwrap();
+    let path = download(&agent, &source, artifact, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), built);
     // A repository that refuses the token, or has no release at all, is about access.
     let nothing = serve(0).unwrap();
@@ -300,7 +300,8 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let folder = tempfile::tempdir().unwrap();
     let mut seen = Vec::new();
     let path = download(&agent, &files(), &good, folder.path(), |have, whole| {
-        seen.push((have, whole))
+        seen.push((have, whole));
+        true
     })
     .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), body);
@@ -309,7 +310,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     // Asked again (its installation failed): there already, not fetched.
     let before = server.requests().len();
     assert_eq!(
-        download(&agent, &files(), &good, folder.path(), |_, _| {}),
+        download(&agent, &files(), &good, folder.path(), |_, _| true),
         Ok(path.clone())
     );
     assert_eq!(server.requests().len(), before);
@@ -318,7 +319,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut wrong = good.clone();
     wrong.sha256 = hex(&Sha256::digest(b"otra cosa"));
     assert_eq!(
-        download(&agent, &files(), &wrong, folder.path(), |_, _| {}),
+        download(&agent, &files(), &wrong, folder.path(), |_, _| true),
         Err(Error::Digest)
     );
     // The earlier release's bundle is not kept beside it.
@@ -335,7 +336,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut short = wrong.clone();
     short.size = 1000;
     assert_eq!(
-        download(&agent, &files(), &short, folder.path(), |_, _| {}),
+        download(&agent, &files(), &short, folder.path(), |_, _| true),
         Err(Error::Digest)
     );
     assert!(!folder
@@ -346,7 +347,7 @@ fn a_download_is_kept_only_when_its_size_and_digest_match() {
     let mut long = wrong;
     long.size = body.len() as u64 + 10;
     assert_eq!(
-        download(&agent, &files(), &long, folder.path(), |_, _| {}),
+        download(&agent, &files(), &long, folder.path(), |_, _| true),
         Err(Error::Incomplete)
     );
 }
@@ -358,7 +359,7 @@ fn a_cut_download_resumes_where_it_stopped() {
     server.configure(|files| files.cut = Some(("/quill.gz".into(), 150_000)));
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
-    let first = download(&agent, &files(), &wanted, folder.path(), |_, _| {});
+    let first = download(&agent, &files(), &wanted, folder.path(), |_, _| true);
     assert!(
         matches!(first, Err(Error::Network | Error::Incomplete)),
         "{first:?}"
@@ -367,12 +368,29 @@ fn a_cut_download_resumes_where_it_stopped() {
     // What arrived before the cut, as far as the client read it.
     let kept = std::fs::metadata(&part).unwrap().len();
     assert!(kept > 0 && kept <= 150_000, "{kept}");
-    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| {}).unwrap();
+    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
     assert_eq!(
         server.requests(),
         vec![("/quill.gz".into(), None), ("/quill.gz".into(), Some(kept))]
     );
+}
+
+/// A download its progress stops ends there, its part kept, and the next one resumes it.
+#[test]
+fn a_stopped_download_keeps_its_part() {
+    let body = program(400_000);
+    let (_server, wanted) = artifact_server(&body);
+    let agent = agent();
+    let folder = tempfile::tempdir().unwrap();
+    let stopped = download(&agent, &files(), &wanted, folder.path(), |have, _| {
+        have < 100_000
+    });
+    assert_eq!(stopped, Err(Error::Interrupted));
+    let part = folder.path().join(format!("quill-{}.part", wanted.sha256));
+    assert!(std::fs::metadata(&part).unwrap().len() >= 100_000);
+    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), body);
 }
 
 #[test]
@@ -385,8 +403,8 @@ fn a_server_without_ranges_sends_it_again_from_the_start() {
     });
     let agent = agent();
     let folder = tempfile::tempdir().unwrap();
-    assert!(download(&agent, &files(), &wanted, folder.path(), |_, _| {}).is_err());
-    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| {}).unwrap();
+    assert!(download(&agent, &files(), &wanted, folder.path(), |_, _| true).is_err());
+    let path = download(&agent, &files(), &wanted, folder.path(), |_, _| true).unwrap();
     assert_eq!(std::fs::read(path).unwrap(), body);
 }
 
@@ -558,6 +576,183 @@ fn a_program_built_alone_is_installed_alone() {
     assert_eq!(names, ["quill"]);
 }
 
+/// A staged version changes nothing that starts; the next start activates it on trial, counts
+/// its starts, and after two that never ran a minute goes back to the one before, which is
+/// refused from then on. A version that runs a minute ends its trial.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_staged_version_starts_next_on_trial_and_two_failed_starts_roll_it_back() {
+    use crate::install::{Launch, Staged, Trial};
+
+    let root = tempfile::tempdir().unwrap();
+    let install = Install::at(root.path().join("app"));
+    let built = root.path().join("built");
+    bundle(&built, &elf("1.0.0"), "1.0.0");
+    let program = install
+        .adopt(&built.join("quill"), &version("1.0.0"))
+        .unwrap();
+    let artifact = |name: &str, marker: &str| {
+        let dir = root.path().join(name);
+        bundle(&dir, &elf(marker), marker);
+        let out = root.path().join(format!("{name}.tar.gz"));
+        tar_gz(&dir, &out);
+        out
+    };
+    // Staged: in its place, and still 1.0.0 starts.
+    let staged = install
+        .stage(&artifact("next", "1.1.0"), &version("1.1.0"))
+        .unwrap();
+    assert_eq!(staged, install.root().join("versions/1.1.0"));
+    assert_eq!(std::fs::read(staged.join("quill")).unwrap(), elf("1.1.0"));
+    assert_eq!(install.current().as_deref(), Some("1.0.0"));
+    assert_eq!(std::fs::read(&program).unwrap(), elf("1.0.0"));
+    let mark = Staged {
+        version: version("1.1.0"),
+        sha256: "ab".repeat(32),
+        path: staged,
+        since: 7,
+    };
+    install.keep_staged(&mark).unwrap();
+    assert_eq!(install.staged(), Some(mark));
+    // Nothing staged is activated by 1.1.0 itself, or by a newer copy: it goes.
+    let later = Install::at(root.path().join("later"));
+    later
+        .keep_staged(&Staged {
+            version: version("1.0.0"),
+            sha256: String::new(),
+            path: "x".into(),
+            since: 0,
+        })
+        .unwrap();
+    assert_eq!(later.launch(&version("1.0.0")).unwrap(), Launch::Go);
+    assert_eq!(later.staged(), None);
+
+    // The next start of 1.0.0 activates it, on trial.
+    assert_eq!(
+        install.launch(&version("1.0.0")).unwrap(),
+        Launch::Activated {
+            version: version("1.1.0"),
+            program: program.clone()
+        }
+    );
+    assert_eq!(install.current().as_deref(), Some("1.1.0"));
+    assert_eq!(std::fs::read(&program).unwrap(), elf("1.1.0"));
+    assert_eq!(install.staged(), None);
+    let trial = |attempts| Trial {
+        version: version("1.1.0"),
+        previous: version("1.0.0"),
+        attempts,
+    };
+    assert_eq!(install.trial(), Some(trial(0)));
+    // Its starts are counted; one that ran a minute ends the trial.
+    assert_eq!(install.launch(&version("1.1.0")).unwrap(), Launch::Go);
+    assert_eq!(install.trial(), Some(trial(1)));
+    install.healthy(&version("1.0.0"));
+    assert_eq!(
+        install.trial(),
+        Some(trial(1)),
+        "another version's run counts for nothing"
+    );
+    install.healthy(&version("1.1.0"));
+    assert_eq!(install.trial(), None);
+
+    // 1.2.0 never runs a minute: two starts, and the third goes back to 1.1.0.
+    install
+        .stage(&artifact("newest", "1.2.0"), &version("1.2.0"))
+        .unwrap();
+    let staged = install.staged_mark("1.2.0");
+    install.activate_staged(&staged, &version("1.1.0")).unwrap();
+    assert_eq!(install.launch(&version("1.2.0")).unwrap(), Launch::Go);
+    assert_eq!(install.launch(&version("1.2.0")).unwrap(), Launch::Go);
+    assert_eq!(install.bad(), None);
+    assert_eq!(
+        install.launch(&version("1.2.0")).unwrap(),
+        Launch::RolledBack {
+            version: version("1.2.0"),
+            previous: version("1.1.0"),
+            program: program.clone()
+        }
+    );
+    assert_eq!(install.current().as_deref(), Some("1.1.0"));
+    assert_eq!(std::fs::read(&program).unwrap(), elf("1.1.0"));
+    assert_eq!(install.trial(), None);
+    assert_eq!(install.bad(), Some(version("1.2.0")));
+    // 1.1.0 starts as itself from then on.
+    assert_eq!(install.launch(&version("1.1.0")).unwrap(), Launch::Go);
+    // Nothing staged cannot be activated, and leaves no trial.
+    assert!(install
+        .activate_staged(&install.staged_mark("9.0.0"), &version("1.1.0"))
+        .is_err());
+    assert_eq!(install.trial(), None);
+    assert_eq!(install.current().as_deref(), Some("1.1.0"));
+}
+
+#[cfg(target_os = "linux")]
+impl Install {
+    fn staged_mark(&self, at: &str) -> crate::install::Staged {
+        crate::install::Staged {
+            version: version(at),
+            sha256: String::new(),
+            path: self.root().join("versions").join(at),
+            since: 0,
+        }
+    }
+}
+
+/// What a start decides, on every system: the trial first, then a newer staged version.
+#[test]
+fn a_start_counts_its_trial_rolls_back_after_two_and_else_activates_what_is_newer() {
+    use crate::install::{staged_path, step, Staged, Step, Trial};
+    use std::path::Path;
+
+    let trial = |attempts| Trial {
+        version: version("1.1.0"),
+        previous: version("1.0.0"),
+        attempts,
+    };
+    let staged = |at: &str| Staged {
+        version: version(at),
+        sha256: String::new(),
+        path: "x".into(),
+        since: 0,
+    };
+    let running = version("1.1.0");
+    assert_eq!(step(&running, None, None), Step::Go);
+    assert_eq!(step(&running, Some(&trial(0)), None), Step::Count(trial(1)));
+    assert_eq!(step(&running, Some(&trial(1)), None), Step::Count(trial(2)));
+    assert_eq!(
+        step(&running, Some(&trial(2)), None),
+        Step::RollBack(trial(2))
+    );
+    // The trial comes before anything staged.
+    assert_eq!(
+        step(&running, Some(&trial(0)), Some(&staged("2.0.0"))),
+        Step::Count(trial(1))
+    );
+    // Another version's trial is not this start's.
+    assert_eq!(
+        step(&version("1.0.0"), Some(&trial(2)), Some(&staged("1.1.0"))),
+        Step::Activate(staged("1.1.0"))
+    );
+    assert_eq!(step(&running, None, Some(&staged("1.1.0"))), Step::Forget);
+    assert_eq!(step(&running, None, Some(&staged("1.0.9"))), Step::Forget);
+
+    let root = Path::new("/apps");
+    let at = version("0.1.9");
+    assert_eq!(
+        staged_path("linux", root, &at),
+        Path::new("/apps/versions/0.1.9")
+    );
+    assert_eq!(
+        staged_path("windows", root, &at),
+        Path::new("/apps/quill.exe.0.1.9.new")
+    );
+    assert_eq!(
+        staged_path("macos", root, &at),
+        Path::new("/apps/.quill.app.0.1.9")
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_release_goes_from_a_loopback_feed_to_the_installation() {
@@ -594,7 +789,7 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
         &source,
         offered.artifact.as_ref().unwrap(),
         &install.downloads(),
-        |_, _| {},
+        |_, _| true,
     )
     .unwrap();
     let program = install.apply(&file, &offered.version).unwrap();

@@ -13,6 +13,7 @@
 //! interface's.
 
 pub mod install;
+pub mod log;
 #[cfg(any(test, feature = "serve"))]
 pub mod serve;
 pub mod whats_new;
@@ -25,10 +26,11 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub use ed25519_dalek::VerifyingKey;
 pub use semver::Version;
 
 /// This program's version: the workspace's, which a release's tag matches.
@@ -523,16 +525,17 @@ pub(crate) fn disk(error: io::Error) -> Error {
     Error::Disk
 }
 
-/// Download `artifact` into `folder`, telling `progress` the bytes there and the whole. A
-/// partial file left by an earlier try (named by the digest, so another release never resumes
-/// it) continues where it ended. Returns the file once its size and SHA-256 match; one that
-/// does not match is deleted.
+/// Download `artifact` into `folder`, telling `progress` the bytes there and the whole; when it
+/// answers false the download stops there ([`Error::Interrupted`]), its part kept. A partial
+/// file left by an earlier try (named by the digest, so another release never resumes it)
+/// continues where it ended. Returns the file once its size and SHA-256 match; one that does
+/// not match is deleted.
 pub fn download(
     agent: &ureq::Agent,
     source: &Source,
     artifact: &Artifact,
     folder: &Path,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(u64, u64) -> bool,
 ) -> Result<PathBuf, Error> {
     let digest = artifact.sha256.to_ascii_lowercase();
     let done = folder.join(format!("quill-{digest}"));
@@ -579,10 +582,12 @@ pub fn download(
             .truncate(!resumed)
             .open(&part)
             .map_err(disk)?;
-        progress(have, artifact.size);
         let mut body = response.into_body().into_reader();
         let mut chunk = vec![0; 64 * 1024];
         let streamed = loop {
+            if !progress(have, artifact.size) {
+                break Err(Error::Interrupted);
+            }
             match body.read(&mut chunk) {
                 Ok(0) => break Ok(()),
                 Ok(read) => {
@@ -593,7 +598,6 @@ pub fn download(
                         return Err(Error::Digest);
                     }
                     file.write_all(&chunk[..read]).map_err(disk)?;
-                    progress(have, artifact.size);
                 }
                 Err(error) => break Err(network(error)),
             }
