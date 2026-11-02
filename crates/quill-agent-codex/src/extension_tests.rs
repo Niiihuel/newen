@@ -467,3 +467,68 @@ fn global_servers_and_skills_are_set_in_the_handshake_and_the_thread_with_no_sec
     let extras = codex.session_extras();
     assert!(!extras.sse && extras.env_by_name);
 }
+
+/// The person's tool permissions ride in the thread's config: an approval mode per tool, and
+/// the blocked ones among the server's disabled tools, beside a global server's own entry.
+#[test]
+fn tool_permissions_are_the_threads_approval_modes_and_disabled_tools() {
+    use quill_agent::{InjectedServer, ToolPolicy, ToolRule};
+    let mut codex = Codex::new();
+    assert_eq!(codex.tool_policies(), ToolPolicy::ALL.to_vec());
+    let rule = |server: &str, tool: &str, policy| ToolRule {
+        server: server.into(),
+        tool: tool.into(),
+        policy,
+    };
+    codex.launch(&SessionSpec {
+        cwd: "/work".into(),
+        servers: vec![InjectedServer {
+            name: "linear".into(),
+            target: "https://mcp.linear.app/mcp".into(),
+            remote: true,
+            ..Default::default()
+        }],
+        tool_rules: vec![
+            rule("github", "list_issues", ToolPolicy::Allow),
+            rule("github", "create_issue", ToolPolicy::Ask),
+            rule("github", "delete_repo", ToolPolicy::Block),
+            rule("linear", "delete_issue", ToolPolicy::Block),
+        ],
+        ..Default::default()
+    });
+    codex.encode(AgentCommand::Start);
+    let init = codex.decode(r#"{"id":1,"result":{"userAgent":"quill/0.163.0 (Linux)"}}"#);
+    let thread: Value = (init.replies.iter())
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|m| m["method"] == "thread/start")
+        .unwrap();
+    let servers = &thread["params"]["config"]["mcp_servers"];
+    assert_eq!(
+        servers["github"],
+        json!({
+            "tools": {
+                "list_issues": { "approval_mode": "approve" },
+                "create_issue": { "approval_mode": "prompt" },
+            },
+            "disabled_tools": ["delete_repo"],
+        })
+    );
+    assert_eq!(servers["linear"]["url"], "https://mcp.linear.app/mcp");
+    assert_eq!(servers["linear"]["disabled_tools"], json!(["delete_issue"]));
+}
+
+/// Codex has no OAuth client of the person's own: such a server is not added here.
+#[test]
+fn a_server_with_an_oauth_client_is_not_added_by_codex() {
+    let codex = Codex::new();
+    assert!(!codex.server_oauth_client());
+    assert!(codex
+        .extension_op(&ExtensionOp::AddServer(NewServer {
+            name: "notion".into(),
+            target: "https://mcp.notion.com/mcp".into(),
+            remote: true,
+            client_id: Some("abc".into()),
+            ..Default::default()
+        }))
+        .is_none());
+}

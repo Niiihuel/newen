@@ -1,5 +1,5 @@
-//! quill's own icons: line drawings on a 20 × 20 grid with a 1.5 stroke, round caps and
-//! joins and no fill, in the quiet style of Claude Desktop's icon font. They are drawn for quill, not
+//! quill's own icons: line drawings on a 20 × 20 grid with a 1.25 stroke ([`STROKE`]), round
+//! caps and joins and no fill, in the quiet, thin style of Claude Desktop's icons. They are drawn for quill, not
 //! taken from that font, which is Anthropic's own. Each is an SVG in `currentColor`, which
 //! limn tints like its own icons through `Icon::Custom`.
 
@@ -10,12 +10,16 @@ macro_rules! icon {
     ($body:expr) => {
         concat!(
             "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' ",
-            "stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>",
+            "stroke='currentColor' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round'>",
             $body,
             "</svg>"
         )
     };
 }
+
+/// The width of every line, on the 20 grid: about 1/16 of the icon, so a 16 px icon draws
+/// 1 px lines.
+pub const STROKE: f32 = 1.25;
 
 /// A drawing as limn takes it.
 pub fn of(svg: &'static str) -> limn::Icon {
@@ -227,14 +231,50 @@ pub const HOURGLASS: &str = icon!(
 );
 
 /// The greeting's mark: an eight-ray spark, quill's own.
-pub const SPARK: &str = icon!(
-    "<path d='M10 2.5v15M2.5 10h15M4.7 4.7l10.6 10.6M15.3 4.7L4.7 15.3' stroke-width='1.6'/>"
-);
+pub const SPARK: &str =
+    icon!("<path d='M10 2.5v15M2.5 10h15M4.7 4.7l10.6 10.6M15.3 4.7L4.7 15.3'/>");
 
 /// A conversation: a chat bubble with its tail, for the "@" list's sessions.
 pub const CHAT: &str = icon!(
     "<path d='M4.25 4.25h11.5a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 2.75v-2.75h-1.25a1.5 1.5 0 0 1-1.5-1.5v-6.5a1.5 1.5 0 0 1 1.5-1.5z'/>"
 );
+
+// Customize.
+/// An open book, a line of words on each page: a skill, instructions the agent reads.
+pub const SKILL: &str = icon!(
+    "<path d='M10 5.5c-1.75-1.5-4.25-2-7-1.75v11.5c2.75-.25 5.25.25 7 1.75 1.75-1.5 4.25-2 7-1.75V3.75c-2.75-.25-5.25.25-7 1.75zM10 5.5v11.5M5.5 8h2.25M5.5 10.75h2.25M12.25 8h2.25M12.25 10.75h2.25'/>"
+);
+/// A puzzle piece, a knob on its top and its right side: a plugin.
+pub const PLUGIN: &str =
+    icon!("<path d='M2.5 7h4.25a1.9 1.9 0 1 1 3.5 0h3.25v3a1.9 1.9 0 1 1 0 3.5v3.5h-11z'/>");
+/// A wrench, its open jaw up and to the right: a connector's tool.
+pub const TOOL: &str = icon!(
+    "<path d='M14.25 2.9a4 4 0 0 0-4.9 4.95L3.4 13.8a1.85 1.85 0 0 0 2.6 2.6l5.95-5.95a4 4 0 0 0 4.95-4.9l-2.45 2.45-2.35-.25-.25-2.35z'/>"
+);
+/// A closed padlock: what someone else set and the person cannot change.
+pub const LOCK: &str = icon!(
+    "<rect x='4.25' y='8.75' width='11.5' height='8.5' rx='1.75'/><path d='M6.75 8.75V6.25a3.25 3.25 0 0 1 6.5 0v2.5M10 12.25v1.75'/>"
+);
+/// A ring crossed by one bar: blocked.
+pub const BLOCKED: &str = icon!("<circle cx='10' cy='10' r='7.5'/><path d='M4.7 4.7l10.6 10.6'/>");
+/// An arrow up off a line: a file sent from this computer.
+pub const UPLOAD: &str = icon!("<path d='M10 13.5V3.25M5.75 7.5L10 3.25l4.25 4.25M3.5 16.75h13'/>");
+/// An arrow down onto a line: a file saved to this computer.
+pub const DOWNLOAD: &str =
+    icon!("<path d='M10 3.25V13.5M5.75 9.25L10 13.5l4.25-4.25M3.5 16.75h13'/>");
+/// A ring with an "i": more about what a line says.
+pub const INFO: &str = icon!(
+    "<circle cx='10' cy='10' r='7.5'/><path d='M10 9.25v4.75'/><circle cx='10' cy='6.4' r='0.8' fill='currentColor' stroke='none'/>"
+);
+/// A compass, its needle a narrow diamond: what there is to find.
+pub const DISCOVER: &str =
+    icon!("<circle cx='10' cy='10' r='7.5'/><path d='M12.9 7.1l-1.6 4.2-4.2 1.6 1.6-4.2z'/>");
+/// A shop with a scalloped awning and a door: a marketplace.
+pub const STOREFRONT: &str = icon!(
+    "<path d='M3.5 9v6.75a1.25 1.25 0 0 0 1.25 1.25h10.5a1.25 1.25 0 0 0 1.25-1.25V9M2.75 7.5L4 3.25h12l1.25 4.25a2.4 2.4 0 0 1-4.8 0 2.45 2.45 0 0 1-4.9 0 2.4 2.4 0 0 1-4.8 0zM8 17v-4h4v4'/>"
+);
+/// Three lines getting shorter beside an arrow down: the order of a list.
+pub const SORT: &str = icon!("<path d='M3 5h8M3 10h6M3 15h4M15 3.75v12.5M12 13.25l3 3 3-3'/>");
 
 /// Every icon by name, for the preview sheet and its test.
 pub const ALL: &[(&str, &str)] = &[
@@ -311,6 +351,17 @@ pub const ALL: &[(&str, &str)] = &[
     ("hourglass", HOURGLASS),
     ("warning", WARNING),
     ("spark", SPARK),
+    ("skill", SKILL),
+    ("plugin", PLUGIN),
+    ("tool", TOOL),
+    ("lock", LOCK),
+    ("blocked", BLOCKED),
+    ("upload", UPLOAD),
+    ("download", DOWNLOAD),
+    ("info", INFO),
+    ("discover", DISCOVER),
+    ("storefront", STOREFRONT),
+    ("sort", SORT),
 ];
 
 #[cfg(test)]
@@ -324,5 +375,23 @@ mod tests {
         assert_eq!(first, svg);
         assert!(std::ptr::eq(first, agent(Some(svg))));
         assert_eq!(agent(None), CODE);
+    }
+
+    /// Every line drawing draws at [`STROKE`], none heavier on its own; the filled ones
+    /// (dots, the stop square) draw no line at all.
+    #[test]
+    fn every_line_icon_draws_at_the_set_stroke() {
+        let set = format!("stroke-width='{STROKE}'");
+        for (name, svg) in ALL {
+            assert_eq!(
+                svg.matches("stroke-width").count(),
+                svg.matches(&set).count(),
+                "{name}"
+            );
+            if svg.contains("stroke='currentColor'") {
+                assert!(svg.contains(&set), "{name} draws its lines at {STROKE}");
+            }
+        }
+        assert_eq!(STROKE, 1.25);
     }
 }

@@ -6,9 +6,11 @@ mod account;
 mod accounts;
 pub mod annotate;
 pub mod appearance;
+pub mod customize;
 mod files;
 mod github;
 mod greeting;
+mod licenses;
 mod mention;
 mod pixels;
 pub mod remote;
@@ -19,6 +21,7 @@ mod updates;
 pub use quill_components::{icons, look};
 pub mod view;
 pub mod welcome;
+pub mod whats_new;
 
 pub use files::key as files_key;
 pub use mention::{key as mention_key, mention_query};
@@ -655,9 +658,12 @@ impl Store {
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::Servers { .. }
             | Event::Global(_)
+            | Event::ServerTools { .. }
             | Event::ServersFound { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
@@ -1362,6 +1368,17 @@ pub struct Ui {
     /// the first time none is busy).
     pub update_asking: bool,
     pub restart_when_idle: bool,
+    /// The release notes the engine keeps (whats_new.rs), the version whose announcement card
+    /// is up, and whether the notes dialog is.
+    pub whats_new: quill_model::WhatsNew,
+    pub announcing: Option<String>,
+    pub notes_open: bool,
+    /// Cisco's codec as the engine reports it, and once the host loaded it, off the window's
+    /// thread; the player of the announcement's clip while its card is up; the licenses dialog.
+    pub codec: quill_model::CodecState,
+    pub codec_loaded: Option<limn_video::Codec>,
+    pub video: Option<limn_video::VideoPlayer>,
+    pub licenses_open: bool,
     /// A fork was asked for: the session the engine makes next is it, and opens.
     pub waiting_fork: bool,
     /// Words the host puts back in the message box: a message rewound or forked from, or a
@@ -1450,6 +1467,11 @@ pub struct Ui {
     pub directory_market: Option<String>,
     /// The marketplaces' dialog over Customize, while open, by agent.
     pub marketplaces: Option<MarketDialog>,
+    /// Customize's page, while it shows in place of the conversation (customize.rs).
+    pub customize: Option<customize::Page>,
+    /// Tool permissions changed on a connector's page, kept a moment after the last change.
+    pub tool_changes: Vec<quill_model::ToolChoice>,
+    pub tool_changed: Option<std::time::Instant>,
     /// Things quill moves itself jump to where they go, as limn's do under reduced motion.
     pub reduced_motion: bool,
     /// How many of each session's items the person has had in view.
@@ -2155,6 +2177,13 @@ impl Ui {
             update: quill_model::UpdateState::Idle,
             update_asking: false,
             restart_when_idle: false,
+            whats_new: Default::default(),
+            announcing: None,
+            notes_open: false,
+            codec: Default::default(),
+            codec_loaded: None,
+            video: None,
+            licenses_open: false,
             settings_query: String::new(),
             settings_menu: None,
             storage: None,
@@ -2171,6 +2200,9 @@ impl Ui {
             directory: None,
             directory_market: None,
             marketplaces: None,
+            customize: None,
+            tool_changes: vec![],
+            tool_changed: None,
             reduced_motion: false,
             seen: Default::default(),
             new_from: Default::default(),
@@ -2215,17 +2247,22 @@ impl Ui {
                 })
             })
             .min();
+        let tools =
+            (self.tool_changed).map(|at| customize::KEEP_AFTER.saturating_sub(at.elapsed()));
         if self.animating() {
             Some(std::time::Duration::ZERO)
         } else {
-            [check, ultra, mcp, questions].into_iter().flatten().min()
+            [check, ultra, mcp, questions, tools]
+                .into_iter()
+                .flatten()
+                .min()
         }
     }
 
     /// Ask for every agent's plugins and skills, for Customize's folder.
     /// Customize › Connectors opened: each agent's MCP servers listed again, and the registry
     /// asked once for its first page.
-    fn ask_servers(&mut self) -> Vec<Intent> {
+    pub(crate) fn ask_servers(&mut self) -> Vec<Intent> {
         let folder = customize_folder(self);
         let mut intents = vec![];
         for agent in &self.agents {
@@ -2248,7 +2285,7 @@ impl Ui {
         intents
     }
 
-    fn ask_extensions(&mut self) -> Vec<Intent> {
+    pub(crate) fn ask_extensions(&mut self) -> Vec<Intent> {
         let folder = customize_folder(self);
         for agent in &self.agents {
             let known = self.extensions.entry(agent.id.clone()).or_default();
@@ -2270,7 +2307,7 @@ impl Ui {
         if !self.settings.logos {
             return vec![];
         }
-        let page = self.settings_page.as_deref();
+        let page = self.customize.as_ref().map(|p| p.tab.as_str());
         let mut wanted = vec![];
         if page == Some(view::SETTINGS_CONNECTORS) && !self.connectors.discover {
             for server in self
@@ -2340,8 +2377,15 @@ impl Ui {
         if !gone.is_empty() {
             return gone;
         }
-        let customizing = (self.settings_page.as_deref())
-            .is_some_and(|p| [view::SETTINGS_PLUGINS, view::SETTINGS_SKILLS].contains(&p));
+        // Tool permissions are kept a moment after the last change.
+        if (self.tool_changed).is_some_and(|at| at.elapsed() >= customize::KEEP_AFTER) {
+            self.tool_changed = None;
+            let changes = std::mem::take(&mut self.tool_changes);
+            return vec![Intent::Global(quill_model::GlobalOp::Tools(changes))];
+        }
+        let customizing = (self.customize.as_ref()).is_some_and(|p| {
+            [view::SETTINGS_PLUGINS, view::SETTINGS_SKILLS].contains(&p.tab.as_str())
+        });
         let folder = customize_folder(self);
         if customizing && self.extensions.values().any(|k| k.folder != folder) {
             return self.ask_extensions();
@@ -2662,6 +2706,7 @@ impl Ui {
     pub fn applied(&mut self, event: &Event) -> Vec<Intent> {
         mention::heard(self, event);
         updates::heard(self, event);
+        whats_new::heard(self, event);
         tour::heard(self, event);
         remote::heard(self, event);
         let mut intents = account::heard(self, event);
@@ -2762,6 +2807,21 @@ impl Ui {
         }
         if let Event::Global(state) = event {
             self.global = state.clone();
+            return vec![];
+        }
+        if let Event::ServerTools {
+            agent,
+            servers,
+            error,
+        } = event
+        {
+            self.connectors.tools.insert(
+                agent.clone(),
+                ServerTools {
+                    servers: Some(servers.clone()),
+                    error: error.clone(),
+                },
+            );
             return vec![];
         }
         if let Event::Servers {
@@ -3267,6 +3327,8 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                     "env" => &mut adding.env,
                     "secret-env" => &mut adding.secret_env,
                     "secret-headers" => &mut adding.secret_headers,
+                    "client-id" => &mut adding.client_id,
+                    "client-secret" => &mut adding.client_secret,
                     _ => &mut adding.headers,
                 };
                 *field = value.clone();
@@ -3278,6 +3340,9 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                 (Some(SkillDialog::New { name, .. }), "name") => *name = value.clone(),
                 (Some(SkillDialog::New { description, .. }), "description") => {
                     *description = value.clone()
+                }
+                (Some(SkillDialog::New { instructions, .. }), "instructions") => {
+                    *instructions = value.clone()
                 }
                 (Some(SkillDialog::Import { path }), "path") => *path = value.clone(),
                 _ => {}
@@ -3771,6 +3836,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return vec![];
     }
     if id == view::NEW_SESSION {
+        ui.customize = None;
         ui.selected = None;
         ui.search = None;
         ui.title_edit = None;
@@ -3778,6 +3844,12 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return vec![];
     }
     if let Some(intents) = updates::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = whats_new::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = licenses::clicked(ui, id) {
         return intents;
     }
     if let Some(intents) = account::clicked(ui, id) {
@@ -3796,6 +3868,21 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = tour::clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = customize::clicked(store, ui, id) {
+        return intents;
+    }
+    if let Some(intents) = customize_clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = extensions_clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = global_clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = connectors_clicked(ui, id) {
         return intents;
     }
     if let Some(intents) = settings_clicked(ui, id) {
@@ -4045,6 +4132,7 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         .and_then(|s| s.parse().ok())
     {
         ui.search = None;
+        ui.customize = None;
         if ui.selected != Some(session) {
             ui.title_edit = None;
             ui.mark_new(store, session);
@@ -4559,6 +4647,16 @@ pub struct Connectors {
     pub query: String,
     pub found: Option<(String, Vec<quill_model::ServerOffer>, Option<String>)>,
     pub adding: Option<AddServer>,
+    /// The tools of each agent's servers, asked of its program outside a session, by agent;
+    /// there once asked.
+    pub tools: std::collections::HashMap<String, ServerTools>,
+}
+
+/// An agent's servers with their tools, `None` until its program answers, and why it did not.
+#[derive(Default)]
+pub struct ServerTools {
+    pub servers: Option<Vec<quill_model::McpServer>>,
+    pub error: Option<String>,
 }
 
 /// An agent's MCP servers: `None` until listed, where one can be added, why the last list or
@@ -4590,13 +4688,23 @@ pub struct AddServer {
     /// For "All agents": `KEY=value` and `Name: value` lines kept in the keychain.
     pub secret_env: String,
     pub secret_headers: String,
+    /// "Advanced settings" open, and the OAuth client of the person's own they hold.
+    pub advanced: bool,
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 /// "New skill" or "Import skill" for "All agents": what is typed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SkillDialog {
-    New { name: String, description: String },
-    Import { path: String },
+    New {
+        name: String,
+        description: String,
+        instructions: String,
+    },
+    Import {
+        path: String,
+    },
 }
 
 impl AddServer {
@@ -4624,6 +4732,11 @@ impl AddServer {
                 },
                 remote,
                 scope: None,
+                client_id: (remote && !self.client_id.trim().is_empty())
+                    .then(|| self.client_id.trim().to_owned()),
+                client_secret: (remote && !self.client_id.trim().is_empty())
+                    .then(|| self.client_secret.trim().to_owned())
+                    .filter(|s| !s.is_empty()),
                 env: lines(&self.env, '='),
                 headers: if remote {
                     lines(&self.headers, ':')
@@ -4671,12 +4784,90 @@ impl AddServer {
         })
     }
 
+    /// Why the address cannot be added as it is: plain `http` anywhere but this computer.
+    pub fn refused(&self) -> Option<&'static str> {
+        let target = self.target.trim();
+        let rest = target.strip_prefix("http://")?;
+        let host = address_host(rest);
+        let here = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+        (!here).then_some(
+            "Use an https:// address. Only a server on this computer (localhost) may be http://.",
+        )
+    }
+
     /// [`server`](Self::server) for `agent`, with the scope chosen for it.
     pub fn server_for(&self, agent: &str) -> Option<quill_model::NewServer> {
         let mut server = self.server()?;
         server.scope = self.scopes.get(agent).cloned();
         Some(server)
     }
+}
+
+/// What an address of "Add custom connector" should make the person look twice at: hidden
+/// characters, letters outside plain ASCII in its host (one can pass for another), a name or
+/// password before its host (which can hide the real one), and a host that does not hold any
+/// word of the connector's name.
+pub fn url_warnings(name: &str, target: &str) -> Vec<String> {
+    let target = target.trim();
+    let Some(rest) = target
+        .strip_prefix("https://")
+        .or_else(|| target.strip_prefix("http://"))
+    else {
+        return vec![];
+    };
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}' | '\u{00ad}')
+    };
+    let mut warnings = vec![];
+    if target.chars().any(hidden) {
+        warnings.push("The address has hidden characters in it.".to_owned());
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        warnings.push(
+            "The address has a name or password before its host, which can hide the real host."
+                .to_owned(),
+        );
+    }
+    let host = address_host(rest);
+    if !host.is_ascii() {
+        warnings.push(format!(
+            "{host} has letters outside plain ASCII, which can look like others."
+        ));
+    }
+    // Words of the name worth finding in the host: not "mcp", "server" and the like.
+    let words: Vec<String> = name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 3)
+        .filter(|w| !["mcp", "server", "api", "app", "the", "my"].contains(w))
+        .map(str::to_owned)
+        .collect();
+    let plain: String = host
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.')
+        .collect();
+    if !words.is_empty() && !host.is_empty() && !words.iter().any(|w| plain.contains(w.as_str())) {
+        warnings.push(format!(
+            "{host} doesn\u{2019}t look like {}\u{2019}s site. Make sure it\u{2019}s the one you mean.",
+            name.trim()
+        ));
+    }
+    warnings
+}
+
+/// The host of an address after its scheme, lowercased, without a name or password before it
+/// and without its port.
+fn address_host(rest: &str) -> String {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = if host.starts_with('[') {
+        host.split_inclusive(']').next().unwrap_or(host)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    host.to_lowercase()
 }
 
 /// What Customize asks before it removes: a plugin, or a marketplace with its plugins.
@@ -4970,9 +5161,7 @@ fn plus_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     }
     let page = |ui: &mut Ui, page: &str| {
         ui.open_menu = None;
-        ui.settings_page = Some(page.to_owned());
-        ui.settings_query.clear();
-        ui.ask_extensions()
+        customize::open(ui, page)
     };
     match id {
         view::CONNECTORS_MANAGE => {
@@ -4982,9 +5171,9 @@ fn plus_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             Some(vec![Intent::McpStatus { session }])
         }
         view::CONNECTORS_BROWSE => {
-            page(ui, view::SETTINGS_CONNECTORS);
+            let intents = page(ui, view::SETTINGS_CONNECTORS);
             ui.connectors.discover = true;
-            Some(ui.ask_servers())
+            Some(intents)
         }
         view::PLUGINS_MANAGE => Some(page(ui, view::SETTINGS_PLUGINS)),
         view::PLUGINS_BROWSE => {
@@ -5025,6 +5214,7 @@ fn global_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             ui.skill_dialog = Some(SkillDialog::New {
                 name: String::new(),
                 description: String::new(),
+                instructions: String::new(),
             });
             return Some(vec![]);
         }
@@ -5040,9 +5230,14 @@ fn global_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             return Some(vec![]);
         }
         ["skill-save"] => match ui.skill_dialog.take()? {
-            SkillDialog::New { name, description } => GlobalOp::NewSkill {
+            SkillDialog::New {
+                name,
+                description,
+                instructions,
+            } => GlobalOp::NewSkill {
                 name: name.trim().to_owned(),
                 description: description.trim().to_owned(),
+                instructions: instructions.trim().to_owned(),
             },
             SkillDialog::Import { path } => GlobalOp::ImportSkill(path.trim().into()),
         },
@@ -5098,6 +5293,10 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
             let adding = c.adding.as_mut()?;
             adding.sse = !adding.sse;
         }
+        ("advanced", _) => {
+            let adding = c.adding.as_mut()?;
+            adding.advanced = !adding.advanced;
+        }
         // An agent the server goes to, ticked or not; one stays.
         ("to", agent) => {
             let adding = c.adding.as_mut()?;
@@ -5118,6 +5317,9 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ("cancel", _) => c.adding = None,
         // Each agent adds it with its own program, and keeps or fails on its own.
         ("save", _) => {
+            if c.adding.as_ref()?.refused().is_some() {
+                return Some(vec![]);
+            }
             let adding = c.adding.take()?;
             adding.server()?;
             let mut intents = vec![];
@@ -5351,13 +5553,6 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ui.settings_query.clear();
         return Some(vec![Intent::MeasureStorage]);
     }
-    // The sidebar's Customize opens Settings on its first page of them, as Desktop's opens
-    // its Customize.
-    if id == view::CUSTOMIZE_OPEN {
-        ui.settings_page = Some(view::SETTINGS_SKILLS.into());
-        ui.settings_query.clear();
-        return Some(ui.ask_extensions());
-    }
     ui.settings_page.as_ref()?;
     if id == view::SETTINGS_CLOSE {
         ui.settings_page = None;
@@ -5368,30 +5563,11 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     if let Some(page) = id.strip_prefix("settings:page:") {
         ui.settings_page = Some(page.to_owned());
         ui.settings_query.clear();
-        // Customize's pages read each agent's plugins and skills, or servers, afresh.
-        if [view::SETTINGS_PLUGINS, view::SETTINGS_SKILLS].contains(&page) {
-            return Some(ui.ask_extensions());
-        }
-        if page == view::SETTINGS_CONNECTORS {
-            return Some(ui.ask_servers());
-        }
         // The Accounts page shows the contributions, read when it opens.
         if page == view::SETTINGS_ACCOUNTS {
             return Some(github::want_calendar(ui));
         }
         return Some(vec![]);
-    }
-    if let Some(intents) = customize_clicked(ui, id) {
-        return Some(intents);
-    }
-    if let Some(intents) = extensions_clicked(ui, id) {
-        return Some(intents);
-    }
-    if let Some(intents) = global_clicked(ui, id) {
-        return Some(intents);
-    }
-    if let Some(intents) = connectors_clicked(ui, id) {
-        return Some(intents);
     }
     let rest = id.strip_prefix("set:")?;
     // A new change is tried afresh: the last one's failure goes.
@@ -5473,6 +5649,9 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         "archive_on_merge" => settings.archive_on_merge = !settings.archive_on_merge,
         "logos" => settings.logos = !settings.logos,
         "auto_update" => settings.auto_update = !settings.auto_update,
+        "whats_new" => settings.whats_new = !settings.whats_new,
+        // Cisco's codec: on downloads it from Cisco, off deletes it (the engine's codec.rs).
+        "video_codec" => settings.video_codec = Some(settings.video_codec != Some(true)),
         other => match other
             .strip_prefix("agent:")
             .and_then(|r| r.strip_suffix(":unsafe"))

@@ -1,4 +1,5 @@
 use super::*;
+use crate::customize;
 use limn::{UiAction, UiTree};
 use quill_model::{AgentEvent, AuthState, Theme, TranscriptView, Usage};
 
@@ -1225,6 +1226,7 @@ fn a_plan_that_ends_the_turn_is_carried_out_by_a_turn_of_its_own() {
             word("plan", "Plan", ModeTone::Plan),
         ],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     store.apply(Event::SessionCreated {
         session: 1,
@@ -1711,6 +1713,58 @@ fn a_custom_connector_is_an_address_or_a_command_with_its_settings() {
     assert!(adding.server().is_none());
 }
 
+/// "Add custom connector" warns of an address that hides something, or whose host is not the
+/// name's site; takes plain http only on this computer; and gives an OAuth client of the
+/// person's own to the server it adds.
+#[test]
+fn a_custom_connectors_address_is_warned_about_and_https_unless_local() {
+    let warned = |name: &str, url: &str| crate::url_warnings(name, url);
+    assert!(warned("github", "https://api.githubcopilot.com/mcp/").is_empty());
+    assert!(warned("my-server", "https://example.com/mcp").is_empty());
+    assert!(warned("github", "https://git\u{200b}hub.com/mcp")[0].contains("hidden characters"));
+    assert!(warned("github", "https://github.com@evil.example/mcp")
+        .iter()
+        .any(|w| w.contains("before its host")));
+    assert!(warned("github", "https://evil.example/mcp")[0]
+        .contains("evil.example doesn\u{2019}t look like github\u{2019}s site"));
+    assert!(warned("paypal", "https://p\u{0430}ypal.com/mcp")
+        .iter()
+        .any(|w| w.contains("outside plain ASCII")));
+    // A command is not an address.
+    assert!(warned("github", "npx -y server-github").is_empty());
+    let mut adding = crate::AddServer {
+        agents: vec!["claude".into()],
+        name: "linear".into(),
+        target: "http://mcp.linear.app/mcp".into(),
+        ..Default::default()
+    };
+    assert!(adding.refused().is_some());
+    adding.target = "http://localhost:3000/mcp".into();
+    assert!(adding.refused().is_none());
+    adding.target = "https://mcp.linear.app/mcp".into();
+    adding.client_id = " abc ".into();
+    adding.client_secret = "s3cret".into();
+    let server = adding.server().unwrap();
+    assert_eq!(server.client_id.as_deref(), Some("abc"));
+    assert_eq!(server.client_secret.as_deref(), Some("s3cret"));
+    // An address refused is not added from the dialog.
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    ui.connectors.adding = Some(crate::AddServer {
+        target: "http://example.com/mcp".into(),
+        ..adding
+    });
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    for c in &frame.commands {
+        if let limn::DrawCommand::Text { text, .. } = c {
+            eprintln!("T {text}");
+        }
+    }
+    assert!(drawn(&store, &ui, "Use an https:// address"));
+    assert!(click(&store, &mut ui, "srv:save").is_empty());
+    assert!(ui.connectors.adding.is_some());
+}
+
 #[test]
 fn inactive_sessions_are_the_ones_quiet_for_the_days_chosen() {
     let (mut store, _) = store_with_session();
@@ -1761,6 +1815,7 @@ fn an_adapters_switch_flips_and_its_list_chooses() {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     }];
     click(&store, &mut ui, view::SETTINGS_OPEN);
     let saved = |intents: Vec<Intent>| match intents.as_slice() {
@@ -2481,6 +2536,7 @@ fn the_sidebars_customize_and_the_persons_menu_open_settings() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     ui.cwd = "/work".into();
@@ -2494,8 +2550,11 @@ fn the_sidebars_customize_and_the_persons_menu_open_settings() {
             Intent::Global(quill_model::GlobalOp::Load)
         ]
     );
-    assert_eq!(ui.settings_page.as_deref(), Some(view::SETTINGS_SKILLS));
-    click(&store, &mut ui, view::SETTINGS_CLOSE);
+    assert_eq!(
+        ui.customize.as_ref().map(|p| p.tab.as_str()),
+        Some(view::SETTINGS_SKILLS)
+    );
+    assert!(ui.settings_page.is_none());
     click(&store, &mut ui, view::ACCOUNT_MENU);
     assert!(ui.account_menu);
     click(&store, &mut ui, view::SETTINGS_OPEN);
@@ -2521,13 +2580,14 @@ fn customize_lists_and_changes_an_agents_plugins_marketplaces_and_skills() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     // A project folder: plugins install for it, and skills' states are kept there.
     ui.cwd = "/work".into();
     let folder = std::path::PathBuf::from("/work");
-    click(&store, &mut ui, view::SETTINGS_OPEN);
-    let page = format!("settings:page:{}", view::SETTINGS_PLUGINS);
+    click(&store, &mut ui, view::CUSTOMIZE_OPEN);
+    let page = format!("czp:tab:{}", view::SETTINGS_PLUGINS);
     assert_eq!(
         click(&store, &mut ui, &page),
         vec![
@@ -2658,7 +2718,7 @@ fn customize_lists_and_changes_an_agents_plugins_marketplaces_and_skills() {
     click(
         &store,
         &mut ui,
-        &format!("settings:page:{}", view::SETTINGS_SKILLS),
+        &format!("czp:tab:{}", view::SETTINGS_SKILLS),
     );
     heard(&mut ui, None);
     assert!(shows(&ui, "graphify") && shows(&ui, "from user"));
@@ -3244,6 +3304,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
                 sign_in_code: true,
                 modes: claude_modes(),
                 default_mode: "default".into(),
+                customize: Default::default(),
             }],
         });
     };
@@ -5647,6 +5708,7 @@ fn the_logos_of_connectors_and_plugins_are_asked_once_and_only_while_shown() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     ui.applied(&Event::Servers {
@@ -5665,8 +5727,8 @@ fn the_logos_of_connectors_and_plugins_are_asked_once_and_only_while_shown() {
     });
     // Nothing is shown yet, so nothing is asked.
     assert!(ui.logos_due(&store).is_empty());
-    let page = format!("settings:page:{}", view::SETTINGS_CONNECTORS);
-    click(&store, &mut ui, view::SETTINGS_OPEN);
+    let page = format!("czp:tab:{}", view::SETTINGS_CONNECTORS);
+    click(&store, &mut ui, view::CUSTOMIZE_OPEN);
     click(&store, &mut ui, &page);
     let wanted = LogoWanted {
         key: "mcp:figma".into(),
@@ -5797,6 +5859,7 @@ fn the_welcome_shows_once_the_settings_are_known_until_get_started() {
             sign_in_code: true,
             modes: claude_modes(),
             default_mode: "default".into(),
+            customize: Default::default(),
         }],
     });
     assert!(crate::welcoming(&ui));
@@ -5899,6 +5962,7 @@ fn an_agent_known() -> Vec<quill_model::AgentInfo> {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     }]
 }
 
@@ -6825,6 +6889,7 @@ fn a_new_codex_session_never_takes_a_claude_model() {
         sign_in_code: true,
         modes: vec![],
         default_mode: mode.into(),
+        customize: Default::default(),
     };
     ui.agents = vec![info("claude", "default"), info("codex", "auto")];
     ui.settings.agents.insert(
@@ -6874,6 +6939,7 @@ fn full_access_is_offered_once_allowed_even_before_any_codex_session() {
             word("full-access", quill_model::ModeTone::Unsafe),
         ],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     ui.agent = "codex".into();
     assert!(!view::menu_modes(&store, None, &ui).contains(&"full-access".to_owned()));
@@ -7445,14 +7511,15 @@ fn two_agents_on(page: &str) -> (Store, Ui) {
         sign_in_code: true,
         modes: claude_modes(),
         default_mode: "default".into(),
+        customize: Default::default(),
     };
     ui.applied(&Event::Settings {
         settings: Default::default(),
         agents: vec![agent("claude", "Claude Code"), agent("codex", "Codex")],
     });
     ui.cwd = "/work".into();
-    click(&store, &mut ui, view::SETTINGS_OPEN);
-    click(&store, &mut ui, &format!("settings:page:{page}"));
+    click(&store, &mut ui, view::CUSTOMIZE_OPEN);
+    click(&store, &mut ui, &format!("czp:tab:{page}"));
     (store, ui)
 }
 
@@ -7566,9 +7633,11 @@ fn connectors_list_each_agents_servers_apart_and_an_empty_one_names_its_agent() 
         scopes: vec![("user".into(), "All my projects".into())],
         error: None,
     });
-    assert!(drawn(&store, &ui, "github") && drawn(&store, &ui, "Connected \u{b7} npx"));
-    assert!(drawn(&store, &ui, "No connectors in Codex yet."));
-    assert!(!drawn(&store, &ui, "No connectors in Claude Code yet."));
+    // A list with each one's type and status; an agent without any says how to start.
+    assert!(drawn(&store, &ui, "github") && drawn(&store, &ui, "Connected"));
+    assert!(drawn(&store, &ui, "Local") && drawn(&store, &ui, "Status"));
+    assert!(drawn(&store, &ui, "Connectors give Codex tools"));
+    assert!(!drawn(&store, &ui, "Connectors give Claude Code tools"));
     // What its list did not check is not said to be connected.
     ui.applied(&Event::Servers {
         agent: "codex".into(),
@@ -7577,9 +7646,7 @@ fn connectors_list_each_agents_servers_apart_and_an_empty_one_names_its_agent() 
         scopes: vec![],
         error: Some("Codex can\u{2019}t do that.".into()),
     });
-    assert!(
-        drawn(&store, &ui, "On \u{b7} npx") && drawn(&store, &ui, "Codex can\u{2019}t do that.")
-    );
+    assert!(drawn(&store, &ui, "On") && drawn(&store, &ui, "Codex can\u{2019}t do that."));
     // The same server on both marks both agents on its row.
     ui.applied(&Event::Servers {
         agent: "claude".into(),
@@ -7752,8 +7819,12 @@ fn a_global_skill_is_made_or_imported_from_its_dialog() {
     }));
     assert!(drawn(&store, &ui, "release-notes") && drawn(&store, &ui, "All agents"));
     click(&store, &mut ui, "glob:skill-new");
-    assert!(drawn(&store, &ui, "New skill"));
-    for (key, value) in [("name", " my-skill "), ("description", "Does it")] {
+    assert!(drawn(&store, &ui, "Write a skill"));
+    for (key, value) in [
+        ("name", " my-skill "),
+        ("description", "Does it"),
+        ("instructions", "Do it well."),
+    ] {
         update(
             &store,
             &mut ui,
@@ -7767,7 +7838,8 @@ fn a_global_skill_is_made_or_imported_from_its_dialog() {
         click(&store, &mut ui, "glob:skill-save"),
         vec![Intent::Global(GlobalOp::NewSkill {
             name: "my-skill".into(),
-            description: "Does it".into()
+            description: "Does it".into(),
+            instructions: "Do it well.".into(),
         })]
     );
     click(&store, &mut ui, "glob:skill-import");
@@ -9128,6 +9200,7 @@ fn waiting_store() -> (Store, Ui) {
         sign_in_code: false,
         modes: vec![],
         default_mode: "auto".into(),
+        customize: Default::default(),
     }];
     settle(&store, &mut ui);
     (store, ui)
@@ -9882,4 +9955,871 @@ fn a_thumbnail_s_card_does_not_outlive_the_viewer() {
         painted(&tree.layout(window), "2 of 2").is_some(),
         "a fresh rest shows it"
     );
+}
+
+/// A release's notes with an announcement whose picture is at `/notes/{version}/shot.png`.
+fn release_notes(version: &str, try_it: Option<&str>) -> quill_model::ReleaseNotes {
+    quill_model::ReleaseNotes {
+        version: version.into(),
+        date: "2026-11-10".into(),
+        new: vec!["A browser beside the chat".into()],
+        improved: vec!["Faster `git` status in large folders".into()],
+        fixed: vec![],
+        announcement: Some(quill_model::Announcement {
+            title: "A browser beside the chat".into(),
+            body: "Open any page next to the session and point the agent at it.".into(),
+            bullets: vec!["Pages keep their sign-ins".into()],
+            media: Some(quill_model::Media::Image {
+                path: format!("/notes/{version}/shot.png").into(),
+            }),
+            try_it: try_it.map(Into::into),
+        }),
+    }
+}
+
+fn whats_new_event(ui: &mut Ui, whats_new: quill_model::WhatsNew) -> Vec<Intent> {
+    ui.applied(&Event::WhatsNew(whats_new))
+}
+
+/// After an update the engine says to announce this version once: the card shows with Got it
+/// and Try it, and closes; a later report that does not say so opens nothing.
+#[test]
+fn the_announcement_shows_once_after_an_update_and_try_it_goes_there() {
+    let (store, mut ui) = store_with_session();
+    let notes = release_notes("0.3.0", Some("settings:system"));
+    let mut told = quill_model::WhatsNew {
+        releases: vec![notes.clone()],
+        ready: None,
+        announce: true,
+        unopened: true,
+    };
+    whats_new_event(&mut ui, told.clone());
+    assert!(drawn_words(&store, &ui, "A browser beside the chat"));
+    assert!(drawn_words(&store, &ui, "Got it") && drawn_words(&store, &ui, "Try it"));
+    assert!(!drawn_words(&store, &ui, "Restart and update"));
+    assert!(click(&store, &mut ui, whats_new::GOT_IT).is_empty());
+    assert!(!drawn_words(&store, &ui, "Point the agent"));
+    assert_eq!(ui.announcing, None);
+    // The engine marks it seen before it says so: the next report does not announce.
+    told.announce = false;
+    whats_new_event(&mut ui, told.clone());
+    assert_eq!(ui.announcing, None);
+    // Try it opens where the announcement says.
+    told.announce = true;
+    whats_new_event(&mut ui, told.clone());
+    click(&store, &mut ui, whats_new::TRY_IT);
+    assert_eq!(
+        (ui.announcing.as_deref(), ui.settings_page.as_deref()),
+        (None, Some("system"))
+    );
+    // Somewhere the interface does not know: no Try it.
+    told.releases = vec![release_notes("0.3.0", Some("somewhere:else"))];
+    whats_new_event(&mut ui, told);
+    ui.settings_page = None;
+    assert!(drawn_words(&store, &ui, "Got it") && !drawn_words(&store, &ui, "Try it"));
+}
+
+fn ready_with_notes(ui: &mut Ui) {
+    ready_update(ui, false);
+    whats_new_event(
+        ui,
+        quill_model::WhatsNew {
+            ready: Some(release_notes("0.3.0", None)),
+            ..Default::default()
+        },
+    );
+}
+
+/// The strip opens the ready version's announcement; Later keeps the strip, and Restart and
+/// update installs at once with no agent at work.
+#[test]
+fn the_strip_opens_the_ready_versions_announcement_and_later_keeps_the_strip() {
+    let (store, mut ui) = store_with_session();
+    ready_with_notes(&mut ui);
+    assert!(click(&store, &mut ui, updates::UPDATE_STRIP).is_empty());
+    assert!(drawn_words(&store, &ui, "Restart and update") && drawn_words(&store, &ui, "Later"));
+    assert!(click(&store, &mut ui, whats_new::LATER).is_empty());
+    assert!(!drawn_words(&store, &ui, "Restart and update"));
+    assert!(drawn_words(&store, &ui, "Relaunch to update"));
+    // Escape (the card's close) does the same.
+    click(&store, &mut ui, updates::UPDATE_STRIP);
+    assert!(click(&store, &mut ui, whats_new::CARD).is_empty());
+    assert!(drawn_words(&store, &ui, "Relaunch to update"));
+    click(&store, &mut ui, updates::UPDATE_STRIP);
+    assert_eq!(
+        click(&store, &mut ui, whats_new::RESTART),
+        vec![Intent::InstallUpdate]
+    );
+}
+
+/// With an agent at work, Restart and update asks first, as the strip does.
+#[test]
+fn restart_and_update_with_agents_at_work_asks_first() {
+    let (mut store, mut ui) = store_with_session();
+    let id = ui.selected.expect("a session");
+    set_status(&mut store, id, quill_model::SessionStatus::Running);
+    ready_with_notes(&mut ui);
+    click(&store, &mut ui, updates::UPDATE_STRIP);
+    assert!(click(&store, &mut ui, whats_new::RESTART).is_empty());
+    assert!(ui.update_asking && ui.announcing.is_none());
+    assert!(drawn_words(&store, &ui, "Agents are still working"));
+    assert!(click(&store, &mut ui, updates::UPDATE_ASK_WAIT).is_empty());
+    assert!(drawn_words(&store, &ui, "Restarting when agents finish"));
+}
+
+/// Settings' switch off: the strip restarts as before, and an announcement the engine sends
+/// is not one it would (it reads the same switch); the notes still open from the account menu.
+#[test]
+fn the_switch_turns_the_announcements_off_and_the_notes_stay() {
+    let (store, mut ui) = store_with_session();
+    click(&store, &mut ui, view::SETTINGS_OPEN);
+    let saved = click(&store, &mut ui, "set:whats_new");
+    assert!(matches!(&saved[..], [Intent::SaveSettings(s)] if !s.whats_new));
+    ui.settings.whats_new = false;
+    click(&store, &mut ui, view::SETTINGS_CLOSE);
+    ready_with_notes(&mut ui);
+    assert_eq!(
+        click(&store, &mut ui, updates::UPDATE_STRIP),
+        vec![Intent::InstallUpdate]
+    );
+    assert!(!drawn_words(&store, &ui, "Restart and update"));
+    click(&store, &mut ui, view::ACCOUNT_MENU);
+    click(&store, &mut ui, whats_new::OPEN);
+    assert!(ui.notes_open && !ui.account_menu);
+}
+
+/// The sidebar's What's new shows until this version's notes are opened: the click opens the
+/// dialog, the engine keeps it, and once it says so the button goes.
+#[test]
+fn the_whats_new_button_goes_once_the_notes_are_opened() {
+    let (store, mut ui) = store_with_session();
+    let mut told = quill_model::WhatsNew {
+        releases: vec![
+            release_notes("0.3.0", None),
+            quill_model::ReleaseNotes {
+                version: "0.2.0".into(),
+                date: "2026-10-01".into(),
+                fixed: vec!["The strip no longer flickers".into()],
+                ..Default::default()
+            },
+        ],
+        ready: None,
+        announce: false,
+        unopened: true,
+    };
+    whats_new_event(&mut ui, told.clone());
+    let button = |ui: &Ui| region(&still(&store, ui), whats_new::BUTTON).is_some();
+    assert!(button(&ui));
+    assert!(drawn_words(&store, &ui, "What's new"));
+    assert_eq!(
+        click(&store, &mut ui, whats_new::BUTTON),
+        vec![Intent::WhatsNewOpened]
+    );
+    for words in [
+        "IMPROVED",
+        "FIXED",
+        "v0.2.0",
+        "The strip no longer flickers",
+    ] {
+        assert!(drawn_words(&store, &ui, words), "{words}");
+    }
+    // Until the engine has kept it, the button stays; then it goes.
+    assert!(button(&ui));
+    told.unopened = false;
+    whats_new_event(&mut ui, told);
+    assert!(!button(&ui));
+    click(&store, &mut ui, whats_new::NOTES);
+    assert!(!ui.notes_open);
+    // A version waiting takes the place: the strip, not the button.
+    let mut ui2 = Ui::new("/work".into());
+    ui2.skip_welcome = true;
+    whats_new_event(
+        &mut ui2,
+        quill_model::WhatsNew {
+            releases: vec![release_notes("0.3.0", None)],
+            unopened: true,
+            ..Default::default()
+        },
+    );
+    ready_update(&mut ui2, false);
+    assert!(region(&still(&store, &ui2), whats_new::BUTTON).is_none());
+}
+
+/// The card at a small window and a large one: the picture when it has room (dropped when
+/// not), no line over another, all of it inside the card and the card inside the window, the
+/// buttons below the words.
+#[test]
+fn the_announcement_card_keeps_its_parts_apart_at_small_and_large_windows() {
+    let (_, mut ui) = store_with_session();
+    let notes = release_notes("0.3.0", Some("settings:system"));
+    let picture = limn::RasterImage::new(
+        "a".repeat(64),
+        limn::RasterImageFormat::Png,
+        3,
+        std::sync::Arc::from("cG5n"),
+        "shot",
+    )
+    .unwrap();
+    ui.full.insert("/notes/0.3.0/shot.png".into(), picture);
+    whats_new_event(
+        &mut ui,
+        quill_model::WhatsNew {
+            releases: vec![notes],
+            announce: true,
+            unopened: true,
+            ..Default::default()
+        },
+    );
+    let long = |ui: &mut Ui| {
+        let mut notes = release_notes("0.3.0", Some("settings:system"));
+        let a = notes.announcement.as_mut().unwrap();
+        a.title =
+            "A browser beside the chat, and the agent can use it too. ".repeat(2)[..60].into();
+        a.body =
+            "Open any page next to the session and point the agent at it. ".repeat(5)[..280].into();
+        a.bullets = vec![
+            "Pages keep their sign-ins across sessions and restarts of quill. "
+                .repeat(3)[..160]
+                .into();
+            5
+        ];
+        ui.whats_new.releases = vec![notes];
+    };
+    let windows = [
+        (360.0, 520.0),
+        (648.0, 480.0),
+        (1408.0, 844.0),
+        (2400.0, 1400.0),
+    ];
+    for (width, height, longest) in windows
+        .iter()
+        .flat_map(|(w, h)| [(*w, *h, false), (*w, *h, true)])
+    {
+        if longest {
+            long(&mut ui);
+        }
+        let window = limn::Size::new(width, height);
+        for laid_out in [false, true] {
+            // Over nothing, so only the card's own lines are drawn.
+            let card = whats_new::dialogs(&ui, limn::Element::spacer(), window, look::palette());
+            let mut tree = UiTree::new(card);
+            tree.set_text_layout(laid_out);
+            tree.set_reduced_motion(true);
+            let frame = tree.layout(window);
+            let at = format!("{width}x{height} {laid_out} {longest}");
+            let card = (frame.access.iter())
+                .find(|n| n.id == format!("{}:dialog", whats_new::CARD))
+                .unwrap_or_else(|| panic!("{at}: no card"))
+                .rect;
+            assert!(
+                card.x >= 0.0
+                    && card.y >= 0.0
+                    && card.x + card.width <= width
+                    && card.y + card.height <= height,
+                "{at}: {card:?}"
+            );
+            let inside = |r: limn::Rect| {
+                r.x >= card.x - 0.5
+                    && r.y >= card.y - 0.5
+                    && r.x + r.width <= card.x + card.width + 0.5
+                    && r.y + r.height <= card.y + card.height + 0.5
+            };
+            // The words scroll in their own area, which ends over the buttons.
+            let words = region(&frame, "whats_new:words").expect("the words");
+            let got_it = region(&frame, whats_new::GOT_IT).expect("Got it");
+            let try_it = region(&frame, whats_new::TRY_IT).expect("Try it");
+            assert!(
+                inside(words) && words.y + words.height <= got_it.y + 0.5,
+                "{at}: {words:?}"
+            );
+            let spans: Vec<_> = (drawn_spans(&frame).into_iter())
+                .filter(|s| {
+                    let shown = s.2 + s.4 > words.y && s.2 < words.y + words.height;
+                    let on = |b: &limn::Rect| {
+                        s.1 >= b.x
+                            && s.3 <= b.x + b.width + 0.5
+                            && s.2 >= b.y
+                            && s.2 < b.y + b.height
+                    };
+                    shown || on(&got_it) || on(&try_it)
+                })
+                .collect();
+            if std::env::var_os("SPANS").is_some() {
+                eprintln!("{at} {card:?}");
+                for s in &spans {
+                    eprintln!("{s:?}");
+                }
+            }
+            assert_apart(&spans, &at);
+            for s in &spans {
+                assert!(
+                    s.3 <= card.x + card.width + 0.5,
+                    "{at}: {s:?} runs past {card:?}"
+                );
+            }
+            let title = spans
+                .iter()
+                .find(|s| s.0.contains("browser"))
+                .expect("the title");
+            for button in [got_it, try_it] {
+                assert!(inside(button), "{at}: {button:?}");
+                assert!(
+                    spans
+                        .iter()
+                        .all(|s| s.2 + s.4 <= button.y + 0.5 || s.2 >= button.y),
+                    "{at}"
+                );
+            }
+            assert!(got_it.x + got_it.width <= try_it.x, "{at}");
+            let close = region(&frame, "whats_new:close").expect("the close");
+            assert!(inside(close), "{at}: {close:?}");
+            let shown = frame.commands.iter().find_map(|c| match c {
+                limn::DrawCommand::RasterImage { rect, .. } => Some(*rect),
+                _ => None,
+            });
+            match shown {
+                Some(rect) => {
+                    assert!(
+                        inside(rect) && rect.y + rect.height <= title.2,
+                        "{at}: {rect:?}"
+                    );
+                    assert!((rect.width / rect.height - 16.0 / 9.0).abs() < 0.02, "{at}");
+                }
+                None => assert!(height < 600.0, "{at}: the picture had room"),
+            }
+        }
+    }
+}
+
+fn configured(
+    name: &str,
+    target: &str,
+    status: quill_model::McpStatus,
+) -> quill_model::ConfiguredServer {
+    quill_model::ConfiguredServer {
+        name: name.into(),
+        label: name.into(),
+        target: target.into(),
+        status,
+        checked: true,
+        source: quill_model::McpSource::Other,
+    }
+}
+
+/// Two agents' connectors: Claude Code's github (connected), figma (to sign in to) and one
+/// with a long name; Codex's linear (failing).
+fn customize_connectors() -> (Store, Ui) {
+    use quill_model::McpStatus;
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    for (agent, servers) in [
+        (
+            "claude",
+            vec![
+                configured("github", "npx -y server-github", McpStatus::Connected),
+                configured("figma", "https://mcp.figma.com/mcp", McpStatus::NeedsAuth),
+                configured(
+                    "a-connector-with-a-name-long-enough-to-be-cut-in-a-narrow-window",
+                    "uvx long",
+                    McpStatus::Connected,
+                ),
+            ],
+        ),
+        (
+            "codex",
+            vec![configured(
+                "linear",
+                "https://mcp.linear.app/mcp",
+                McpStatus::Failed,
+            )],
+        ),
+    ] {
+        ui.applied(&Event::Servers {
+            agent: agent.into(),
+            folder: "/work".into(),
+            servers,
+            scopes: vec![],
+            error: None,
+        });
+    }
+    (store, ui)
+}
+
+fn tool_named(name: &str, read_only: bool, destructive: bool) -> quill_model::McpTool {
+    quill_model::McpTool {
+        name: name.into(),
+        description: Some(format!(
+            "What {name} does, said at some length so it runs long"
+        )),
+        read_only,
+        destructive,
+    }
+}
+
+/// Customize's page, its list with a strip to mend, a connector open with its tools, Discover's
+/// cards and Skills: no line over another, none past the page, header and tabs included,
+/// narrow and wide.
+fn customize_crowded() -> (Store, Ui) {
+    let (store, mut ui) = customize_connectors();
+    ui.applied(&Event::ServerTools {
+        agent: "claude".into(),
+        servers: vec![quill_model::McpServer {
+            name: "github".into(),
+            label: "github".into(),
+            status: quill_model::McpStatus::Connected,
+            source: quill_model::McpSource::User,
+            plugin: None,
+            error: None,
+            tools: vec![
+                tool_named("list_issues", true, false),
+                tool_named("delete_repo", false, true),
+                tool_named("open_pull_request_with_a_long_name", false, false),
+            ],
+            sign_in: false,
+        }],
+        error: None,
+    });
+    ui.applied(&Event::ServersFound {
+        query: String::new(),
+        offers: (0..5)
+            .map(|n| quill_model::ServerOffer {
+                name: format!("io.example/server-{n}"),
+                title: Some(format!("A server with a title long enough to wrap {n}")),
+                description: "It does a great many things, and says so at length, over more than two lines of a card's words.".into(),
+                version: "1.0.0".into(),
+                remote: n % 2 == 0,
+                target: "https://example.com/mcp".into(),
+                ..Default::default()
+            })
+            .collect(),
+        error: None,
+    });
+    (store, ui)
+}
+
+#[test]
+fn the_customize_page_keeps_its_rows_apart_narrow_and_wide() {
+    type Then = fn(&Store, &mut Ui);
+    let states: [(&str, Then); 4] = [
+        ("list", |_, _| {}),
+        ("detail", |store, ui| {
+            click(store, ui, "czp:open:srv:claude:github");
+        }),
+        ("discover", |store, ui| {
+            click(store, ui, "srv:tab:discover");
+        }),
+        ("skills", |store, ui| {
+            click(store, ui, &format!("czp:tab:{}", view::SETTINGS_SKILLS));
+            heard_extensions(
+                ui,
+                "claude",
+                skills_list(vec![
+                    skill("graphify", "user", "on"),
+                    skill("a-skill-with-a-very-long-name-indeed", "plugin", "off"),
+                ]),
+            );
+        }),
+    ];
+    for (name, set) in states {
+        let (store, mut ui) = customize_crowded();
+        set(&store, &mut ui);
+        for width in [700.0, 1000.0, 1600.0, 2400.0] {
+            let window = limn::Size::new(width, 900.0);
+            let at = format!("{name} {width}");
+            assert_rows_apart(&store, &ui, window, "czp:scroll", &at);
+            // Over the list: the header, the tabs, the crumbs and the tools.
+            let mut tree = UiTree::new(view(&store, &ui, window));
+            tree.set_text_layout(true);
+            tree.set_reduced_motion(true);
+            let frame = tree.layout(window);
+            let pane = region(&frame, "czp:scroll").expect("the page scrolls");
+            let spans: Vec<_> = (drawn_spans(&frame).into_iter())
+                .filter(|s| s.1 >= pane.x - 1.0 && s.2 + s.4 <= pane.y + 0.5)
+                .collect();
+            assert!(spans.iter().any(|s| s.0 == "Customize"), "{at}");
+            for s in &spans {
+                assert!(
+                    s.3 <= window.width + 0.5,
+                    "{at}: {s:?} runs past the window"
+                );
+            }
+            assert_apart(&spans, &at);
+        }
+    }
+}
+
+/// limn-video's test pattern, 2 s at 320×180.
+const PATTERN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../limn-quill-integration/crates/limn-video/assets/pattern.mp4"
+));
+
+/// An announcement whose medium is a clip, up after an update.
+fn announcing_a_clip(ui: &mut Ui) {
+    let mut notes = release_notes("0.3.0", None);
+    notes.announcement.as_mut().unwrap().media = Some(quill_model::Media::Video {
+        poster: "/notes/0.3.0/poster.png".into(),
+        clip: "/notes/0.3.0/clip.mp4".into(),
+    });
+    whats_new_event(
+        ui,
+        quill_model::WhatsNew {
+            releases: vec![notes],
+            announce: true,
+            ..Default::default()
+        },
+    );
+}
+
+fn toggle_shown(store: &Store, ui: &Ui) -> bool {
+    let toggle = limn::Video::toggle_id(whats_new::VIDEO);
+    region(&still(store, ui), &toggle).is_some()
+}
+
+/// The card asks once whether to download Cisco's codec, and never fetches it itself: its
+/// answer goes to the engine, which keeps it first. Asked, it is not asked again.
+#[test]
+fn the_card_asks_before_the_codec_is_downloaded_and_only_once() {
+    let (store, mut ui) = store_with_session();
+    announcing_a_clip(&mut ui);
+    assert!(drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+    assert!(drawn_words(&store, &ui, limn_video::cisco::NOTICE));
+    let asked = click(&store, &mut ui, whats_new::CODEC_YES);
+    assert!(matches!(&asked[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    let declined = click(&store, &mut ui, whats_new::CODEC_NO);
+    assert!(matches!(&declined[..], [Intent::SaveSettings(s)] if s.video_codec == Some(false)));
+    // The engine's echo: answered, not asked again.
+    ui.settings.video_codec = Some(false);
+    assert!(!drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+    // An image asks nothing.
+    ui.settings.video_codec = None;
+    whats_new_event(
+        &mut ui,
+        quill_model::WhatsNew {
+            releases: vec![release_notes("0.3.0", None)],
+            announce: true,
+            ..Default::default()
+        },
+    );
+    assert!(!drawn_words(
+        &store,
+        &ui,
+        "downloads the OpenH264 video codec from Cisco"
+    ));
+}
+
+/// Without a codec the clip is its poster, with no play button; with Cisco's codec loaded it
+/// plays, with the button, and its frames decode. The second half needs Cisco's library at
+/// `LIMN_VIDEO_OPENH264` and is skipped without it.
+#[test]
+fn the_card_shows_the_poster_without_a_codec_and_plays_with_one() {
+    let (store, mut ui) = store_with_session();
+    announcing_a_clip(&mut ui);
+    assert_eq!(whats_new::clip(&ui), Some("/notes/0.3.0/clip.mp4".into()));
+    let clip = limn_video::Clip::from_mp4(PATTERN).unwrap();
+    ui.video = Some(limn_video::VideoPlayer::new(
+        whats_new::VIDEO,
+        clip.clone(),
+        true,
+        None,
+    ));
+    let frame = still(&store, &ui);
+    assert!(frame
+        .access
+        .iter()
+        .any(|n| n.name == "A browser beside the chat"));
+    assert!(!toggle_shown(&store, &ui));
+    // Closed, the clip is no more to play.
+    click(&store, &mut ui, whats_new::GOT_IT);
+    assert_eq!(whats_new::clip(&ui), None);
+    let Some(path) = std::env::var_os("LIMN_VIDEO_OPENH264") else {
+        eprintln!("skipped: set LIMN_VIDEO_OPENH264 to Cisco's OpenH264 2.6.0 library");
+        return;
+    };
+    let codec = limn_video::Codec::load(path).expect("Cisco's library loads");
+    announcing_a_clip(&mut ui);
+    let mut player = limn_video::VideoPlayer::new(whats_new::VIDEO, clip, true, Some(codec));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut now = std::time::Instant::now();
+    loop {
+        let tick = player.tick(now, true);
+        if tick.frame.is_some() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no frame decoded");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        now += tick
+            .repaint_after
+            .unwrap_or(std::time::Duration::from_millis(20));
+    }
+    ui.video = Some(player);
+    assert!(toggle_shown(&store, &ui));
+}
+
+/// Settings › System: the switch turns Cisco's codec on, off and on again, beside Cisco's
+/// notice; the licenses dialog there has Cisco's license whole.
+#[test]
+fn the_codec_switch_sits_by_ciscos_notice_and_its_license_is_reachable() {
+    let (store, mut ui) = store_with_session();
+    click(&store, &mut ui, view::SETTINGS_OPEN);
+    click(&store, &mut ui, "settings:page:system");
+    assert!(drawn_words(&store, &ui, "Play videos in What's new"));
+    assert!(drawn_words(&store, &ui, "Cisco Systems, Inc."));
+    let on = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&on[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    ui.settings.video_codec = Some(true);
+    ui.applied(&Event::Codec(quill_model::CodecState::Downloading));
+    assert!(drawn_words(&store, &ui, "Downloading"));
+    let off = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&off[..], [Intent::SaveSettings(s)] if s.video_codec == Some(false)));
+    ui.settings.video_codec = Some(false);
+    let again = click(&store, &mut ui, "set:video_codec");
+    assert!(matches!(&again[..], [Intent::SaveSettings(s)] if s.video_codec == Some(true)));
+    // Cisco's license, as Cisco publishes it, with its conditions.
+    assert!(licenses::OPENH264.contains("AVC/H.264 Patent Portfolio License Conditions"));
+    assert!(licenses::OPENH264.contains(limn_video::cisco::NOTICE));
+    click(&store, &mut ui, licenses::OPEN);
+    assert!(ui.licenses_open);
+    assert!(drawn_words(&store, &ui, "Licenses"));
+    assert!(drawn_words(
+        &store,
+        &ui,
+        "About The Cisco-Provided Binary of OpenH264"
+    ));
+    click(&store, &mut ui, "licenses");
+    assert!(!ui.licenses_open);
+}
+
+/// A tab none of the agents shown has is off, says why, and does nothing when clicked; with
+/// "All agents" it is on as long as one agent has it.
+#[test]
+fn a_tab_no_agent_shown_has_is_off_with_why() {
+    let (store, mut ui) = two_agents_on(view::SETTINGS_SKILLS);
+    ui.agents[1].customize.plugins = false;
+    assert_eq!(customize::tab_off(&ui, view::SETTINGS_PLUGINS), None);
+    click(&store, &mut ui, "czp:layer:=codex");
+    assert_eq!(
+        customize::tab_off(&ui, view::SETTINGS_PLUGINS).as_deref(),
+        Some("Codex has no plugins quill can manage.")
+    );
+    assert!(click(&store, &mut ui, "czp:tab:plugins").is_empty());
+    assert_eq!(ui.customize.as_ref().unwrap().tab, view::SETTINGS_SKILLS);
+    // The layer shows one agent's sections only.
+    assert_eq!(
+        customize::agents(&ui)
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>(),
+        ["codex"]
+    );
+    click(&store, &mut ui, "czp:layer:=");
+    assert!(!click(&store, &mut ui, "czp:tab:plugins").is_empty());
+    assert_eq!(ui.customize.as_ref().unwrap().tab, view::SETTINGS_PLUGINS);
+}
+
+/// Connectors filter to the connected ones or the others, search by name and say when nothing
+/// matches; a strip counts those that need the person, and "Reconnect all" reconnects them
+/// in the sessions that loaded them and lists each agent's again.
+#[test]
+fn connectors_filter_search_and_reconnect_all() {
+    use quill_model::{McpServer, McpSource, McpStatus};
+    let (mut store, mut ui) = customize_connectors();
+    agent(
+        &mut store,
+        AgentEvent::McpServers(vec![McpServer {
+            name: "figma".into(),
+            label: "figma".into(),
+            status: McpStatus::NeedsAuth,
+            source: McpSource::User,
+            plugin: None,
+            error: None,
+            tools: vec![],
+            sign_in: true,
+        }]),
+    );
+    assert!(drawn(&store, &ui, "2 of your connectors need attention"));
+    click(&store, &mut ui, "czp:filter:not");
+    assert!(drawn(&store, &ui, "figma") && drawn(&store, &ui, "linear"));
+    assert!(!drawn(&store, &ui, "github"));
+    click(&store, &mut ui, "czp:filter:connected");
+    assert!(drawn(&store, &ui, "github") && !drawn(&store, &ui, "figma"));
+    click(&store, &mut ui, "czp:filter:all");
+    update(
+        &store,
+        &mut ui,
+        &UiAction::InputChanged {
+            id: view::CZ_SEARCH.into(),
+            value: "zzz".into(),
+        },
+    );
+    assert!(drawn(&store, &ui, "No connectors match your search"));
+    assert_eq!(
+        click(&store, &mut ui, "czp:reconnect-all"),
+        vec![
+            Intent::McpReconnect {
+                session: 1,
+                name: "figma".into()
+            },
+            Intent::Servers {
+                agent: "claude".into(),
+                folder: "/work".into()
+            },
+            Intent::Servers {
+                agent: "codex".into(),
+                folder: "/work".into()
+            },
+        ]
+    );
+}
+
+/// A connector's page asks its agent's program for its tools when no session said them; each
+/// tool's choice, and a group's from its menu, is kept once, a moment after the last change;
+/// a choice the agent cannot say is not taken.
+#[test]
+fn a_connectors_tool_permissions_are_kept_after_the_last_change() {
+    use quill_model::{GlobalOp, ToolChoice, ToolPolicy};
+    let (store, mut ui) = customize_connectors();
+    assert_eq!(
+        click(&store, &mut ui, "czp:open:srv:claude:github"),
+        vec![Intent::ServerTools {
+            agent: "claude".into(),
+            folder: "/work".into()
+        }]
+    );
+    assert!(drawn(&store, &ui, "Looking for its tools"));
+    ui.applied(&Event::ServerTools {
+        agent: "claude".into(),
+        servers: vec![quill_model::McpServer {
+            name: "github".into(),
+            label: "github".into(),
+            status: quill_model::McpStatus::Connected,
+            source: quill_model::McpSource::User,
+            plugin: None,
+            error: None,
+            tools: vec![
+                tool_named("list_issues", true, false),
+                tool_named("delete_repo", false, true),
+                tool_named("merge", false, true),
+            ],
+            sign_in: false,
+        }],
+        error: None,
+    });
+    assert!(drawn(&store, &ui, "Read-only") && drawn(&store, &ui, "Write/delete"));
+    assert!(drawn(&store, &ui, "Can run code without asking"));
+    assert!(click(&store, &mut ui, "czp:tool:allow:list_issues").is_empty());
+    click(&store, &mut ui, "czp:group:block:write");
+    assert_eq!(
+        customize::policy(&ui, "claude", "github", "merge"),
+        Some(ToolPolicy::Block)
+    );
+    // Not yet: the last change was just now.
+    assert!(ui.due().is_empty());
+    ui.tool_changed = Some(std::time::Instant::now() - customize::KEEP_AFTER);
+    let choice = |tool: &str, policy| ToolChoice {
+        agent: "claude".into(),
+        server: "github".into(),
+        tool: tool.into(),
+        policy: Some(policy),
+    };
+    assert_eq!(
+        ui.due(),
+        vec![Intent::Global(GlobalOp::Tools(vec![
+            choice("list_issues", ToolPolicy::Allow),
+            choice("delete_repo", ToolPolicy::Block),
+            choice("merge", ToolPolicy::Block),
+        ]))]
+    );
+    assert!(ui.tool_changes.is_empty() && ui.tool_changed.is_none());
+    // An agent that cannot ask per tool: that choice is not taken.
+    ui.agents[0].customize.tool_policies = vec![ToolPolicy::Allow, ToolPolicy::Block];
+    click(&store, &mut ui, "czp:tool:ask:merge");
+    assert!(ui.tool_changes.is_empty());
+}
+
+/// Skills: on and off from its row, in the agent's first and last states; a file chosen to
+/// upload, to replace one, or to save one into; and deleting quill's own.
+#[test]
+fn skills_switch_upload_replace_download_and_delete() {
+    use quill_model::{ExtensionOp, GlobalOp};
+    let (store, mut ui) = two_agents_on(view::SETTINGS_SKILLS);
+    heard_extensions(
+        &mut ui,
+        "claude",
+        skills_list(vec![skill("graphify", "user", "on")]),
+    );
+    assert_eq!(
+        click(&store, &mut ui, "czp:skill-switch:claude:graphify"),
+        vec![Intent::ExtensionOp {
+            agent: "claude".into(),
+            folder: "/work".into(),
+            op: ExtensionOp::SkillState {
+                skill: skill("graphify", "user", "on"),
+                state: "off".into()
+            }
+        }]
+    );
+    // The host answers "Upload a file…" with the file the person chose.
+    let upload = customize::file_action("upload", "");
+    assert!(click(&store, &mut ui, &upload).is_empty());
+    assert_eq!(
+        customize::file_chosen(&mut ui, &upload, "/tmp/review.skill".into()),
+        vec![Intent::Global(GlobalOp::UploadSkill {
+            path: "/tmp/review.skill".into(),
+            replace: None
+        })]
+    );
+    assert_eq!(
+        customize::file_chosen(
+            &mut ui,
+            &customize::file_action("replace", "review"),
+            "/tmp/new.zip".into()
+        ),
+        vec![Intent::Global(GlobalOp::UploadSkill {
+            path: "/tmp/new.zip".into(),
+            replace: Some("review".into())
+        })]
+    );
+    assert_eq!(
+        customize::file_chosen(
+            &mut ui,
+            &customize::file_action("download", "review"),
+            "/home/me/review.zip".into()
+        ),
+        vec![Intent::Global(GlobalOp::ExportSkill {
+            name: "review".into(),
+            to: "/home/me/review.zip".into()
+        })]
+    );
+    ui.applied(&Event::Global(quill_model::GlobalState {
+        skills: vec![quill_model::GlobalSkill {
+            name: "review".into(),
+            description: "Reviews".into(),
+            except: vec![],
+        }],
+        ..Default::default()
+    }));
+    click(&store, &mut ui, "czp:open:skill::review");
+    click(&store, &mut ui, "cz:more:skill-detail:review");
+    assert!(drawn(&store, &ui, "Download") && drawn(&store, &ui, "Replace"));
+    assert_eq!(
+        click(&store, &mut ui, "czp:skill-delete:review"),
+        vec![Intent::Global(GlobalOp::RemoveSkill("review".into()))]
+    );
+    assert!(ui.customize.as_ref().unwrap().detail.is_none());
+}
+
+fn skills_list(skills: Vec<quill_model::Skill>) -> quill_model::Extensions {
+    quill_model::Extensions {
+        skills,
+        skill_states: vec![("on".into(), "On".into()), ("off".into(), "Off".into())],
+        ..Default::default()
+    }
 }

@@ -3,8 +3,8 @@
 //! heatmap's design is openADE's (`settings_ui/activity_charts.rs`, the user's own code, MIT OR
 //! Apache-2.0): `contribution_scale`, `calendar_chart` and `github_card`, with quill's strings
 //! in English. Desktop's Settings shows GitHub as a connector row, "Signed in as @{login}",
-//! and usage rows "5-hour limit" and "Weekly · all models" with 4 px bars (desk-onboarding-
-//! usage.md); the grouping by agent is quill's.
+//! and usage rows "5-hour limit" and "Weekly · all models" with 4 px bars; the grouping by
+//! agent is quill's.
 
 use crate::github::{self, Calendar};
 use crate::view;

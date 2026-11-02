@@ -223,6 +223,36 @@ pub(crate) fn mcp_servers(data: &Value) -> Vec<McpServer> {
 /// `config.mcp_servers` of `thread/start` (V2): `command`, `args`, `env` and `env_vars` for a
 /// command, `url` and `http_headers` / `env_http_headers` for an address. A secret is only
 /// the name of a variable of the app-server's process.
+/// The person's tool permissions in a thread's config, which Codex lays over the person's own
+/// for that thread: a blocked tool among the server's `disabled_tools`, the others as the
+/// tool's `approval_mode`, `approve` to allow and `prompt` to ask.
+pub(crate) fn tool_rules_config(config: &mut Value, rules: &[quill_agent::ToolRule]) {
+    use quill_agent::ToolPolicy;
+    for rule in rules {
+        let server = &mut config["mcp_servers"][&rule.server];
+        match rule.policy {
+            ToolPolicy::Block => {
+                let hidden = &mut server["disabled_tools"];
+                if !hidden.is_array() {
+                    *hidden = json!([]);
+                }
+                hidden
+                    .as_array_mut()
+                    .expect("a list")
+                    .push(json!(rule.tool));
+            }
+            ToolPolicy::Allow | ToolPolicy::Ask => {
+                let mode = if rule.policy == ToolPolicy::Allow {
+                    "approve"
+                } else {
+                    "prompt"
+                };
+                server["tools"][&rule.tool] = json!({ "approval_mode": mode });
+            }
+        }
+    }
+}
+
 pub(crate) fn mcp_servers_config(servers: &[quill_agent::InjectedServer]) -> Value {
     let map = |pairs: &[(String, String)]| -> Value {
         pairs
@@ -298,12 +328,12 @@ pub(crate) fn op(op: &ExtensionOp) -> Option<ProgramRun> {
 }
 
 /// `codex mcp add NAME --url URL` or `codex mcp add NAME [--env K=V]… -- COMMAND [ARGS]…`
-/// (`mcp add --help`, 0.163.0). Codex has no option for headers: a server that needs them is
-/// not added here.
+/// (`mcp add --help`, 0.163.0). Codex has no option for headers or an OAuth client of the
+/// person's own: a server that needs them is not added here.
 fn add_server(server: &NewServer) -> Option<ProgramRun> {
     let mut args: Vec<String> = vec!["mcp".into(), "add".into(), server.name.clone()];
     if server.remote {
-        if !server.headers.is_empty() {
+        if !server.headers.is_empty() || server.client_id.is_some() {
             return None;
         }
         args.extend(["--url".into(), server.target.clone()]);

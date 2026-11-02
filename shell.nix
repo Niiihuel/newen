@@ -19,5 +19,7 @@ pkgs.mkShell {
   # winit and wgpu dlopen these at runtime; libcef.so is linked from CEF_PATH, which comes
   # last: its own libvulkan.so.1 does not know where NixOS keeps the drivers, and with it first
   # wgpu finds no Vulkan and falls back to GL, where Chromium's GPU frames cannot be imported.
-  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon vulkan-loader libGL libx11 libxcursor libxi libxrandr libgbm ]) + ":${cef}";
+  # stdenv.cc.cc.lib is libstdc++.so.6, which Cisco's OpenH264 library (the clips of What's
+  # new, downloaded from Cisco at run time) needs when it is loaded; without it, the poster.
+  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [ wayland libxkbcommon vulkan-loader libGL libx11 libxcursor libxi libxrandr libgbm stdenv.cc.cc.lib ]) + ":${cef}";
 }

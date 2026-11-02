@@ -37,7 +37,7 @@ pub struct Claude {
     /// `mcp_authenticate` requests waiting for their answers, with their server.
     sign_ins: HashMap<String, String>,
     interrupted: bool,
-    /// The turn's answer was the CLI's `authentication_failed` (cli-auth.md §4): its result
+    /// The turn's answer was the CLI's `authentication_failed`: its result
     /// ends the turn with `AuthRequired`.
     auth_failed: bool,
     /// `can_use_tool` waiting for a decision: its tool call and input, echoed back on allow.
@@ -326,6 +326,16 @@ impl AgentAdapter for Claude {
             env_by_name: false,
             skills: true,
         }
+    }
+
+    /// Its permission rules take each MCP tool by name to allow, ask or deny (`--settings`).
+    fn tool_policies(&self) -> Vec<quill_agent::ToolPolicy> {
+        quill_agent::ToolPolicy::ALL.to_vec()
+    }
+
+    /// `mcp add --client-id`, and `--client-secret`, which asks for the secret.
+    fn server_oauth_client(&self) -> bool {
+        true
     }
 
     fn launch(&self, spec: &SessionSpec) -> LaunchPlan {
@@ -762,6 +772,15 @@ impl AgentAdapter for Claude {
                 for header in server.headers.iter().filter(|_| server.remote) {
                     args.extend(["-H".into(), header.clone()]);
                 }
+                // The secret is typed in where the CLI asks for it, never an argument
+                // (inferred: its prompt reads a line from stdin when it is not a terminal).
+                let secret = (server.client_secret.clone()).filter(|_| server.remote);
+                if let Some(id) = server.client_id.as_ref().filter(|_| server.remote) {
+                    args.extend(["--client-id".into(), id.clone()]);
+                    if secret.is_some() {
+                        args.push("--client-secret".into());
+                    }
+                }
                 args.extend([server.name.clone(), server.target.clone()]);
                 if !server.args.is_empty() {
                     args.push("--".into());
@@ -769,7 +788,9 @@ impl AgentAdapter for Claude {
                 }
                 ProgramRun {
                     args,
-                    stdin: None,
+                    stdin: secret
+                        .filter(|_| server.client_id.is_some())
+                        .map(|s| format!("{s}\n")),
                     timeout: 30,
                     until: None,
                 }
@@ -1565,6 +1586,9 @@ const PROMPT_SUGGESTIONS: &str = "prompt_suggestions";
 fn option_settings(spec: &SessionSpec) -> Option<Value> {
     let on = |key: &str| spec.options.get(key).is_some_and(|v| v == "true");
     let mut settings = serde_json::Map::new();
+    if let Some(permissions) = tool_permissions(&spec.tool_rules) {
+        settings.insert("permissions".into(), permissions);
+    }
     if let Some(style) = spec.options.get(OUTPUT_STYLE).filter(|s| !s.is_empty()) {
         settings.insert("outputStyle".into(), json!(style));
     }
@@ -1576,6 +1600,37 @@ fn option_settings(spec: &SessionSpec) -> Option<Value> {
         settings.insert("sandbox".into(), sandbox);
     }
     (!settings.is_empty()).then_some(Value::Object(settings))
+}
+
+/// The person's tool permissions as Claude Code's permission rules: `mcp__<server>__<tool>` in
+/// `allow`, `ask` or `deny`. They add to the person's own settings, where a deny wins over an
+/// ask and an ask over an allow. A server's name is written as the CLI writes it in a tool's
+/// name: anything but a letter, digit, `_` or `-` becomes `_`.
+fn tool_permissions(rules: &[quill_agent::ToolRule]) -> Option<Value> {
+    use quill_agent::ToolPolicy;
+    let clean = |name: &str| -> String {
+        name.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    let mut lists = serde_json::Map::new();
+    for rule in rules {
+        let list = match rule.policy {
+            ToolPolicy::Allow => "allow",
+            ToolPolicy::Ask => "ask",
+            ToolPolicy::Block => "deny",
+        };
+        let name = format!("mcp__{}__{}", clean(&rule.server), rule.tool);
+        let entry = lists.entry(list).or_insert_with(|| json!([]));
+        entry.as_array_mut().expect("a list").push(json!(name));
+    }
+    (!lists.is_empty()).then_some(Value::Object(lists))
 }
 
 /// One line of `claude mcp list`: its name before the first ": " (a name may hold colons,

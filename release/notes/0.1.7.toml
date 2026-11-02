@@ -1,0 +1,14 @@
+# The notes of the release after 0.1.6 (docs/UPDATES.md, "Escribir las notas de una release").
+# Rename this file to the version it ships as. An announcement with a screenshot or a clip goes
+# under [announcement], its files in release/media/<version>/.
+
+new = [
+    "**What's new**: every release's notes, newest first, from the account menu.",
+    "A release can show what it brings before you restart into it, from the sidebar's *Relaunch to update*, and once after the update.",
+    "Settings › System › Updates › **Show what's new** turns those announcements off; the notes stay a click away.",
+    "An announcement can play a short clip, once you let quill download Cisco's OpenH264 video codec; it asks first.",
+    "Settings › System › quill › **Licenses** shows the terms of third-party software quill uses.",
+]
+improved = [
+    "A release's notes and pictures are checked against the update's signature before quill shows them.",
+]

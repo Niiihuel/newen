@@ -2088,7 +2088,6 @@ pub fn view(ide: &Ide, window: Size) -> Element {
             page,
             &ide.settings_query,
             None,
-            vec![],
             window,
         ),
         None => root,

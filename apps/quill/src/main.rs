@@ -30,6 +30,7 @@ mod direct {
 mod editors;
 mod images;
 mod page;
+mod video;
 
 use eframe::egui;
 use limn::{Element, Size, UiTree};
@@ -56,6 +57,8 @@ struct App {
     picked: Arc<Mutex<Option<PathBuf>>>,
     /// The Chromium chosen in Settings › Browser, kept on the next frame.
     chromium: Arc<Mutex<Option<PathBuf>>>,
+    /// A skill's file chosen in Customize, for what it was asked for, sent on the next frame.
+    skill_file: Arc<Mutex<Option<(String, PathBuf)>>>,
     /// Files chosen for a page's file field, sent on the next frame.
     chosen: Arc<Mutex<Option<(SessionId, quill_model::BrowserOp)>>>,
     /// Files or a folder chosen from "+", to go into the message as @-mentions.
@@ -74,6 +77,8 @@ struct App {
     /// The viewer's full-size pictures, decoded like the thumbnails, and the images asked for.
     full_done: Arc<Mutex<Vec<(PathBuf, limn::RasterImage)>>>,
     full_asked: std::collections::HashSet<PathBuf>,
+    /// The clip of a release's announcement and Cisco's codec that plays it (video.rs).
+    clips: video::Clips,
     /// The width over height of the picture the editor lays out, read from its file off the
     /// window's thread, and the images asked for so far.
     sizes_done: Arc<Mutex<Vec<ImageSize>>>,
@@ -81,7 +86,7 @@ struct App {
     /// Annotated copies made off the window's thread, each with the picture it replaces; `None`
     /// when the copy could not be written.
     annotated: Arc<Mutex<Vec<AnnotatedCopy>>>,
-    /// The terminal tabs of each folder, kept while the window lives (features/terminal.md).
+    /// The terminal tabs of each folder, kept while the window lives.
     terminals: HashMap<PathBuf, quill_pty::Tabs>,
     fonts_attached: bool,
     /// The interface font and code font in force, as Settings chose them.
@@ -861,8 +866,13 @@ impl eframe::App for App {
             self.qr_for = link;
         }
         self.ui.pixels_per_point = ctx.pixels_per_point();
-        // The image the viewer shows, at full size, read once off the window's thread.
-        if let Some(path) = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone()) {
+        // The image the viewer shows and the picture of a release's announcement, at full
+        // size, read once off the window's thread.
+        let viewed = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
+        for path in viewed
+            .into_iter()
+            .chain(quill_ui::whats_new::media(&self.ui))
+        {
             if !self.ui.full.contains_key(&path) && self.full_asked.insert(path.clone()) {
                 let (done, ctx) = (self.full_done.clone(), ctx.clone());
                 std::thread::spawn(move || {
@@ -873,13 +883,17 @@ impl eframe::App for App {
                 });
             }
         }
+        self.clips.tick(&mut self.ui, &ctx);
         for (path, full) in std::mem::take(&mut *self.full_done.lock().unwrap()) {
             self.ui.full.insert(path, full);
         }
         // A whole picture weighs megabytes: past a few, only the one shown is kept.
         if self.ui.full.len() > 8 {
             let shown = self.ui.viewer.as_ref().map(|viewer| viewer.path.clone());
-            self.ui.full.retain(|path, _| Some(path) == shown.as_ref());
+            let media = quill_ui::whats_new::media(&self.ui);
+            self.ui
+                .full
+                .retain(|path, _| Some(path) == shown.as_ref() || media.contains(path));
             let full = &self.ui.full;
             self.full_asked.retain(|path| full.contains_key(path));
         }
@@ -910,6 +924,11 @@ impl eframe::App for App {
         }
         if let Some((session, op)) = self.chosen.lock().unwrap().take() {
             self.engine.send(Intent::Browser { session, op });
+        }
+        let skill_file = self.skill_file.lock().unwrap().take();
+        if let Some((purpose, path)) = skill_file {
+            let intents = quill_ui::customize::file_chosen(&mut self.ui, &purpose, path);
+            self.dispatch(intents);
         }
         let chromium = self.chromium.lock().unwrap().take();
         if let Some(program) = chromium {
@@ -1189,6 +1208,10 @@ impl eframe::App for App {
         }
         actions.extend(limn_egui::apply_access_requests(&ctx, &mut self.tree));
         for action in actions {
+            // The clip's play and pause button is its player's.
+            if (self.ui.video.as_mut()).is_some_and(|player| player.handle(&action)) {
+                continue;
+            }
             if let limn::UiAction::CopyRequested { text } = &action {
                 ctx.copy_text(text.clone());
             }
@@ -1287,6 +1310,26 @@ impl eframe::App for App {
                             line.parse().ok(),
                         ),
                     }
+                }
+                // Customize: a skill's file to add or put in another's place, or where to
+                // save one, from the platform's dialog.
+                if let Some(rest) = id.strip_prefix("czp:file:") {
+                    let (skill_file, ctx, purpose) =
+                        (self.skill_file.clone(), ctx.clone(), id.clone());
+                    let saving = rest.strip_prefix("download:").map(|n| format!("{n}.zip"));
+                    std::thread::spawn(move || {
+                        let dialog = rfd::FileDialog::new();
+                        let path = match saving {
+                            Some(name) => dialog.set_file_name(name).save_file(),
+                            None => dialog
+                                .add_filter("Skill", &["skill", "zip", "md"])
+                                .pick_file(),
+                        };
+                        if let Some(path) = path {
+                            *skill_file.lock().unwrap() = Some((purpose, path));
+                            ctx.request_repaint();
+                        }
+                    });
                 }
                 // Settings › Browser: the Chromium to run, from the platform's dialog.
                 if id == quill_ui::view::BROWSER_PROGRAM_CHOOSE {
@@ -1487,6 +1530,11 @@ impl eframe::App for App {
         if focus_terminal && self.tree.focus(quill_ui::view::TERMINAL) {
             frame = self.tree.layout(window);
         }
+        // The clip's frame that is due, and a repaint when the next is: only while it plays
+        // in view.
+        if let Some(player) = self.ui.video.as_mut() {
+            player.update(&ctx, &frame);
+        }
         limn_egui::paint_at(ui, &frame, area.min);
         limn_egui::set_cursor(&ctx, self.tree.cursor());
         self.page_frame(&ctx, &frame, area.min);
@@ -1498,6 +1546,17 @@ impl eframe::App for App {
             ctx.request_repaint_after(after);
         }
     }
+}
+
+/// Cisco's OpenH264 release for this system, which the engine downloads from Cisco once the
+/// person allows it; limn-video names it, as it loads only that release.
+fn codec_release() -> Option<quill_engine::CodecRelease> {
+    limn_video::cisco::current().map(|release| quill_engine::CodecRelease {
+        version: limn_video::cisco::VERSION.into(),
+        url: release.url.into(),
+        file_name: release.file_name.into(),
+        sha256: release.sha256.into(),
+    })
 }
 
 /// The local time zone's offset from UTC in seconds, as `date +%z` says it (`-0300`).
@@ -1866,6 +1925,7 @@ fn main() -> eframe::Result {
                     quill_engine::Config {
                         frames: frames.clone(),
                         native: native.clone(),
+                        codec: codec_release(),
                         ..quill_engine::Config::default_database()
                     },
                 ),
@@ -1909,6 +1969,7 @@ fn main() -> eframe::Result {
                 picked: Arc::default(),
                 chosen: Arc::default(),
                 chromium: Arc::default(),
+                skill_file: Arc::default(),
                 attached: Arc::default(),
                 pasted: Arc::default(),
                 v_down: false,
@@ -1918,6 +1979,7 @@ fn main() -> eframe::Result {
                 qr_for: None,
                 full_done: Arc::default(),
                 full_asked: Default::default(),
+                clips: Default::default(),
                 sizes_done: Arc::default(),
                 sizes_asked: Default::default(),
                 annotated: Arc::default(),

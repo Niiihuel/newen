@@ -32,9 +32,36 @@ impl Store {
                  session INTEGER NOT NULL,
                  event TEXT NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS events_by_session ON events (session, id);",
+             CREATE INDEX IF NOT EXISTS events_by_session ON events (session, id);
+             CREATE TABLE IF NOT EXISTS marks (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
         )?;
         Ok(Self { conn })
+    }
+
+    /// Keep `value` under `key`: a small fact quill must not forget, such as the version whose
+    /// announcement was shown.
+    pub fn mark(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO marks (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// What [`mark`](Self::mark) kept under `key`, if anything.
+    pub fn marked(&self, key: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT value FROM marks WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
     }
 
     /// Whether `event` is worth keeping: what the transcript shows once it has settled.
@@ -54,6 +81,8 @@ impl Store {
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::FilesFound { .. }
             | Event::Servers { .. }
@@ -295,5 +324,25 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], Event::Queued { text, .. } if text == "hi 2"));
         assert!(store.load_session(3).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_mark_is_kept_across_openings_and_replaced_by_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quill.db");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.marked("whats_new_seen").unwrap(), None);
+        store.mark("whats_new_seen", "0.1.7").unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.marked("whats_new_seen").unwrap().as_deref(),
+            Some("0.1.7")
+        );
+        store.mark("whats_new_seen", "0.1.8").unwrap();
+        assert_eq!(
+            store.marked("whats_new_seen").unwrap().as_deref(),
+            Some("0.1.8")
+        );
     }
 }

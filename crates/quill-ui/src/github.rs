@@ -2,8 +2,8 @@
 //! sign-in with its one-time code, and the question before signing out. GitHub is not an
 //! agent: the engine asks the `gh` program (`quill-engine/src/github.rs`), which keeps the
 //! credentials; this shows what it reports. Desktop shows GitHub only as a connector row,
-//! "Signed in as @{login}" with Disconnect and Reconnect (desk-onboarding-usage.md); the
-//! foot's use of it as the person's identity is quill's (inferred).
+//! "Signed in as @{login}" with Disconnect and Reconnect; the foot's use of it as the
+//! person's identity is quill's (inferred).
 
 use crate::Ui;
 use limn::{Component, Element};

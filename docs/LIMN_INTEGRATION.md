@@ -12,7 +12,7 @@ quill follows it on the same versions.
 
 | PR | Branch | What quill uses it for | State |
 |---|---|---|---|
-| — | — | nothing waiting | — |
+| — | — | nothing waiting: every limn change quill uses is in `main` | — |
 
 Keeping it so:
 

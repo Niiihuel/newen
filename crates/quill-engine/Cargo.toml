@@ -39,5 +39,16 @@ base64 = "0.22"
 # The system keychain (Secret Service on Linux) where the secrets of "All agents" servers live,
 # so they reach the agent only as environment variables (global.rs, docs/agents.md).
 keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
+# A skill uploaded or saved as a .zip / .skill of its folder (skills.rs); deflate only.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # Stopping a dev server's whole process group (kill with a negative pid).
 libc = "0.2"
+# Cisco's OpenH264 library comes bzip2-compressed (codec.rs); this one decodes in pure Rust
+# (libbz2-rs-sys), no C library to build or link, and is already in the lock.
+bzip2 = "0.6"
+# The codec's digest, matched against the release limn-video loads (already in the tree).
+sha2 = "0.10"
+
+[dev-dependencies]
+# A folder of kept release notes in update.rs's tests; already in the lock.
+tempfile = "3"

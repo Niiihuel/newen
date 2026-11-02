@@ -8,8 +8,10 @@
 //! - When an agent has a server or skill of its own with the name of a global one, the
 //!   agent's wins and the global one is not added (the person's decision, spec §9.4).
 
-use quill_agent::{InjectedServer, SessionExtras};
-use quill_model::{AppliedTo, Applies, GlobalOp, GlobalServer, GlobalSkill, GlobalState};
+use quill_agent::{InjectedServer, SessionExtras, ToolRule};
+use quill_model::{
+    AppliedTo, Applies, GlobalOp, GlobalServer, GlobalSkill, GlobalState, ToolChoice,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -101,6 +103,9 @@ struct File {
     version: u32,
     servers: Vec<GlobalServer>,
     skills: SkillsFile,
+    /// The tool permissions the person chose on connectors' pages, every agent's.
+    #[serde(default)]
+    tools: Vec<ToolChoice>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -209,6 +214,10 @@ impl Layer {
             .flatten()
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
+                // A skill being uploaded waits beside them under a dot.
+                if name.starts_with('.') {
+                    return None;
+                }
                 let text = std::fs::read_to_string(entry.path().join("SKILL.md")).ok()?;
                 Some(GlobalSkill {
                     description: frontmatter(&text, "description").unwrap_or_default(),
@@ -257,22 +266,43 @@ impl Layer {
                 self.write(&file)?;
             }
             GlobalOp::ImportSkill(from) => return self.import_skill(&from),
-            GlobalOp::NewSkill { name, description } => {
+            GlobalOp::NewSkill {
+                name,
+                description,
+                instructions,
+            } => {
                 let dir = self.new_skill_dir(&name)?;
+                let instructions = match instructions.trim() {
+                    "" => "What the agent should do when this skill applies.",
+                    words => words,
+                };
                 let body = format!(
-                    "---\nname: {name}\ndescription: {}\n---\n\n# {name}\n\nWhat the agent should do when this skill applies.\n",
+                    "---\nname: {name}\ndescription: {}\n---\n\n# {name}\n\n{instructions}\n",
                     description.replace('\n', " ")
                 );
                 std::fs::write(dir.join("SKILL.md"), body).map_err(|e| e.to_string())?;
             }
-            GlobalOp::RemoveSkill(name) => {
-                let dir = self
-                    .skills_dir()
-                    .ok_or("quill has no folder for this")?
-                    .join(&name);
-                if !valid_name(&name) || !dir.join("SKILL.md").is_file() {
-                    return Err(format!("There is no skill named {name}"));
+            GlobalOp::UploadSkill { path, replace } => {
+                return self.upload_skill(&path, replace.as_deref())
+            }
+            GlobalOp::ExportSkill { name, to } => {
+                let dir = self.skill_dir(&name)?;
+                return crate::skills::zip_folder(&dir, &name, &to);
+            }
+            GlobalOp::Tools(choices) => {
+                for choice in choices {
+                    file.tools.retain(|t| {
+                        (&t.agent, &t.server, &t.tool)
+                            != (&choice.agent, &choice.server, &choice.tool)
+                    });
+                    if choice.policy.is_some() {
+                        file.tools.push(choice);
+                    }
                 }
+                self.write(&file)?;
+            }
+            GlobalOp::RemoveSkill(name) => {
+                let dir = self.skill_dir(&name)?;
                 std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
                 file.skills.except.remove(&name);
                 self.write(&file)?;
@@ -347,6 +377,81 @@ impl Layer {
                 if !keep.contains(&acc) {
                     self.secrets.delete(&acc);
                 }
+            }
+        }
+    }
+
+    /// The folder of the skill `name`, which has a SKILL.md.
+    fn skill_dir(&self, name: &str) -> Result<PathBuf, String> {
+        let dir = self
+            .skills_dir()
+            .ok_or("quill has no folder for this")?
+            .join(name);
+        if !valid_name(name) || !dir.join("SKILL.md").is_file() {
+            return Err(format!("There is no skill named {name}"));
+        }
+        Ok(dir)
+    }
+
+    /// A skill from a file (crate::skills): unpacked beside quill's skills, then moved in,
+    /// over the one it replaces.
+    fn upload_skill(&self, from: &Path, replace: Option<&str>) -> Result<(), String> {
+        let root = self.skills_dir().ok_or("quill has no folder for this")?;
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let staged = root.join(".upload");
+        let _ = std::fs::remove_dir_all(&staged);
+        let unpacked = crate::skills::unpack(from, &staged);
+        let name = match unpacked {
+            Ok(found) => replace.map(str::to_owned).unwrap_or(found),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staged);
+                return Err(e);
+            }
+        };
+        let done = (|| {
+            let dir = match replace {
+                Some(old) => {
+                    let dir = self.skill_dir(old)?;
+                    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+                    dir
+                }
+                None => {
+                    let dir = self.new_skill_dir(&name)?;
+                    std::fs::remove_dir(&dir).map_err(|e| e.to_string())?;
+                    dir
+                }
+            };
+            std::fs::rename(&staged, &dir).map_err(|e| e.to_string())
+        })();
+        let _ = std::fs::remove_dir_all(&staged);
+        done
+    }
+
+    /// What `agent`'s session is told of its tools: the person's choices for its own servers,
+    /// and for the "All agents" servers it gets (`injected`).
+    pub fn tool_rules(&self, agent: &str, injected: &[String]) -> Vec<ToolRule> {
+        let file = self.read().unwrap_or_default();
+        (file.tools.into_iter())
+            .filter(|t| t.agent == agent || t.agent.is_empty() && injected.contains(&t.server))
+            .filter_map(|t| {
+                Some(ToolRule {
+                    policy: t.policy?,
+                    server: t.server,
+                    tool: t.tool,
+                })
+            })
+            .collect()
+    }
+
+    /// Forget the choices for a server `agent` no longer has: a rule for a server that is not
+    /// there would name a server to the agent that it does not know.
+    pub fn forget_tools(&self, agent: &str, server: &str) {
+        if let Ok(mut file) = self.read() {
+            let before = file.tools.len();
+            file.tools
+                .retain(|t| !(t.agent == agent && t.server == server));
+            if file.tools.len() != before {
+                let _ = self.write(&file);
             }
         }
     }
@@ -554,6 +659,7 @@ impl Layer {
             .get_or_init(|| self.secrets.get("probe").is_ok());
         GlobalState {
             skills: self.skills(&file),
+            tools: file.tools,
             servers: file.servers,
             applied,
             error: error.or(read_error),
@@ -563,7 +669,7 @@ impl Layer {
 }
 
 /// A `key: value` line of a SKILL.md's frontmatter (the part between the first two `---`).
-fn frontmatter(text: &str, key: &str) -> Option<String> {
+pub(crate) fn frontmatter(text: &str, key: &str) -> Option<String> {
     let head = text.strip_prefix("---")?.split("\n---").next()?;
     head.lines().find_map(|line| {
         let value = line.strip_prefix(key)?.strip_prefix(':')?.trim();
@@ -827,6 +933,7 @@ mod tests {
             .op(GlobalOp::NewSkill {
                 name: "release-notes".into(),
                 description: "Writes notes".into(),
+                instructions: String::new(),
             })
             .unwrap();
         let from = dir.0.join("elsewhere/other-skill");
@@ -841,7 +948,8 @@ mod tests {
         assert!(layer
             .op(GlobalOp::NewSkill {
                 name: "Bad Name".into(),
-                description: String::new()
+                description: String::new(),
+                instructions: String::new(),
             })
             .is_err());
         let state = layer.state(&[CLAUDE, CODEX], &HashMap::new(), None);
@@ -885,5 +993,104 @@ mod tests {
             .skills
             .iter()
             .any(|s| s.name == "other-skill"));
+    }
+
+    /// Tool permissions are kept before they are announced, replace the one before for the
+    /// same tool, go to the agent they were chosen for (and an "All agents" server's to every
+    /// agent it is added to), and go away with their server.
+    #[test]
+    fn tool_choices_are_kept_and_reach_their_agents_sessions() {
+        use quill_agent::ToolPolicy;
+        let (layer, _dir, _) = layer();
+        let choice = |agent: &str, server: &str, tool: &str, policy| ToolChoice {
+            agent: agent.into(),
+            server: server.into(),
+            tool: tool.into(),
+            policy,
+        };
+        layer
+            .op(GlobalOp::Tools(vec![
+                choice("claude", "sentry", "search", Some(ToolPolicy::Allow)),
+                choice("claude", "sentry", "delete", Some(ToolPolicy::Ask)),
+                choice("", "github", "push", Some(ToolPolicy::Block)),
+            ]))
+            .unwrap();
+        layer
+            .op(GlobalOp::Tools(vec![
+                choice("claude", "sentry", "delete", Some(ToolPolicy::Block)),
+                choice("claude", "sentry", "search", None),
+            ]))
+            .unwrap();
+        let state = layer.state(&[CLAUDE], &HashMap::new(), None);
+        assert_eq!(state.tools.len(), 2);
+        let rules = layer.tool_rules("claude", &["github".into()]);
+        let said: Vec<(&str, &str, ToolPolicy)> = (rules.iter())
+            .map(|r| (r.server.as_str(), r.tool.as_str(), r.policy))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("github", "push", ToolPolicy::Block),
+                ("sentry", "delete", ToolPolicy::Block)
+            ]
+        );
+        // Not added to Codex's sessions: its rule is not given.
+        assert!(layer.tool_rules("codex", &[]).is_empty());
+        layer.forget_tools("claude", "sentry");
+        assert_eq!(layer.tool_rules("claude", &[]).len(), 0);
+    }
+
+    /// A skill uploaded as a file is added, replaces another, and saves back as a .zip.
+    #[test]
+    fn a_skill_is_uploaded_replaced_and_exported() {
+        let (layer, dir, _) = layer();
+        let md = dir.0.join("Review.md");
+        std::fs::write(&md, "---\nname: review\ndescription: Reviews\n---\nLook.").unwrap();
+        layer
+            .op(GlobalOp::UploadSkill {
+                path: md.clone(),
+                replace: None,
+            })
+            .unwrap();
+        assert!(layer
+            .op(GlobalOp::UploadSkill {
+                path: md.clone(),
+                replace: None
+            })
+            .is_err());
+        std::fs::write(
+            &md,
+            "---\nname: other\ndescription: Better\n---\nLook again.",
+        )
+        .unwrap();
+        layer
+            .op(GlobalOp::UploadSkill {
+                path: md,
+                replace: Some("review".into()),
+            })
+            .unwrap();
+        let state = layer.state(&[CLAUDE], &HashMap::new(), None);
+        let names: Vec<(&str, &str)> = (state.skills.iter())
+            .map(|s| (s.name.as_str(), s.description.as_str()))
+            .collect();
+        assert_eq!(names, [("review", "Better")]);
+        let zip = dir.0.join("review.zip");
+        layer
+            .op(GlobalOp::ExportSkill {
+                name: "review".into(),
+                to: zip.clone(),
+            })
+            .unwrap();
+        layer.op(GlobalOp::RemoveSkill("review".into())).unwrap();
+        layer
+            .op(GlobalOp::UploadSkill {
+                path: zip,
+                replace: None,
+            })
+            .unwrap();
+        assert_eq!(
+            layer.state(&[CLAUDE], &HashMap::new(), None).skills.len(),
+            1
+        );
     }
 }

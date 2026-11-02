@@ -16,6 +16,7 @@ mod auth;
 #[cfg(unix)]
 mod bridge;
 mod chime;
+mod codec;
 mod github;
 mod global;
 mod images;
@@ -23,6 +24,7 @@ mod logos;
 mod registry;
 mod servers;
 mod shared;
+mod skills;
 mod update;
 
 pub use quill_browser::{native, Frame, Frames, Native, Pixels, Present};
@@ -75,6 +77,7 @@ fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
     }
 }
 
+pub use codec::CodecRelease;
 pub use global::{Keychain, MemorySecrets, Secrets};
 
 pub struct Engine {
@@ -108,6 +111,13 @@ pub struct Config {
     pub secrets: Option<Arc<dyn global::Secrets>>,
     /// Whether quill looks for its own updates (update.rs): the app does, the tests do not.
     pub updates: bool,
+    /// Where each release's notes and media are kept once downloaded with its update; `None`
+    /// keeps none.
+    pub whats_new: Option<PathBuf>,
+    /// The video codec this platform downloads, once the person allows it, and where it is
+    /// kept; `None` for either plays no clip (codec.rs).
+    pub codec: Option<CodecRelease>,
+    pub codecs: Option<PathBuf>,
     /// Whether a sign-in page opens in the person's browser: the app does, the tests do not.
     pub open_pages: bool,
     /// Where the browser leaves its pages' frames for the window to present.
@@ -131,6 +141,8 @@ impl Config {
             browser: Some(data.join("quill/browser")),
             extensions: Some(config.join("quill/extensions.json")),
             updates: true,
+            whats_new: Some(data.join("quill/whats-new")),
+            codecs: Some(data.join("quill/codecs")),
             open_pages: true,
             ..Self::default()
         }
@@ -309,6 +321,8 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
         .await
         .unwrap_or_default();
     router.updates.auto(router.settings.auto_update);
+    router.updates.whats_new(router.settings.whats_new);
+    router.sync_codec(None);
     router.restore();
     (router.ui)(Event::Restored);
     router.announce_settings();
@@ -535,7 +549,13 @@ impl Router {
             )
         };
         // Settings are read after this, and say whether a found version downloads at once.
-        let updates = update::Updates::start(ui.clone(), config.updates, true);
+        let updates = update::Updates::start(
+            ui.clone(),
+            config.updates,
+            true,
+            store.clone(),
+            config.whats_new.clone(),
+        );
         let global = global::Layer::new(
             config.extensions.clone(),
             config
@@ -604,6 +624,12 @@ impl Router {
                 sign_in_code: a.login_takes_code(),
                 modes: a.modes(),
                 default_mode: a.default_mode().to_owned(),
+                customize: quill_model::CustomizeSupport {
+                    plugins: a.plugins_query().is_some(),
+                    connectors: a.servers_query().is_some(),
+                    tool_policies: a.tool_policies(),
+                    oauth_client: a.server_oauth_client(),
+                },
             })
             .collect();
         (self.ui)(Event::Settings {
@@ -788,6 +814,10 @@ impl Router {
                     },
                     None => error = Some(cannot(adapter.name(), op)),
                 }
+                // Its tools' permissions go with it.
+                if let (quill_model::ExtensionOp::RemoveServer(name), None) = (op, &error) {
+                    layer.forget_tools(adapter.id(), name);
+                }
             }
             let mut servers = vec![];
             if let Some(args) = adapter.servers_query() {
@@ -913,6 +943,13 @@ impl Router {
             .cloned()
             .unwrap_or_default();
         let plan = tokio::task::block_in_place(|| self.global.plan(&agent, &own, true));
+        // The tool permissions the person chose, those the agent can say.
+        let policies = actor.adapter.tool_policies();
+        actor.spec.tool_rules =
+            tokio::task::block_in_place(|| self.global.tool_rules(&id, &plan.names))
+                .into_iter()
+                .filter(|r| policies.contains(&r.policy))
+                .collect();
         actor.spec.servers = plan.servers;
         actor.spec.skill_roots = plan.skill_roots;
         actor.env.extend(plan.env);
@@ -1265,7 +1302,7 @@ impl Router {
             self.announce_settings();
             return;
         }
-        self.settings = settings;
+        let before = std::mem::replace(&mut self.settings, settings);
         // Sessions already running follow Settings as they are now, at their next launch.
         for (session, tx) in &self.sessions {
             if let Some(new) = self.started.get(session) {
@@ -1275,7 +1312,53 @@ impl Router {
         }
         self.updates.auto(self.settings.auto_update);
         self.hold_awake();
+        let codec_before = before.video_codec;
         self.announce_settings();
+        // The person's yes is kept (and told) before anything is fetched.
+        self.sync_codec(codec_before);
+    }
+
+    /// The video codec as Settings now say, after `before`: downloaded from Cisco only once the
+    /// person said yes, checked if it is here already, deleted once they turn it off.
+    fn sync_codec(&self, before: Option<bool>) {
+        let (now, ui) = (self.settings.video_codec, self.ui.clone());
+        let (Some(release), Some(folder)) = (self.config.codec.clone(), self.config.codecs.clone())
+        else {
+            if now == Some(true) {
+                ui(Event::Codec(quill_model::CodecState::Failed(
+                    "This system has no video codec from Cisco.".into(),
+                )));
+            }
+            return;
+        };
+        match now {
+            Some(true) => {
+                tokio::task::spawn_blocking(move || {
+                    let path = match codec::kept(&release, &folder) {
+                        Some(path) => Ok(path),
+                        None => {
+                            ui(Event::Codec(quill_model::CodecState::Downloading));
+                            codec::fetch(&release, &folder)
+                        }
+                    };
+                    ui(Event::Codec(match path {
+                        Ok(path) => quill_model::CodecState::Ready(path),
+                        Err(reason) => {
+                            eprintln!("quill: video codec: {reason}");
+                            quill_model::CodecState::Failed(reason)
+                        }
+                    }));
+                });
+            }
+            _ if before == Some(true) => {
+                tokio::task::spawn_blocking(move || {
+                    codec::remove(&folder);
+                    ui(Event::Codec(quill_model::CodecState::Off));
+                });
+            }
+            // Never asked, or declined: nothing is fetched.
+            _ => {}
+        }
     }
 
     /// The person answered a site permission the browser asked for: the answer is the
@@ -1652,6 +1735,36 @@ impl Router {
                 self.servers(agent, folder);
                 return;
             }
+            Intent::ServerTools { agent, folder } => {
+                let Some(adapter) = adapter(&agent) else {
+                    return;
+                };
+                let program = (self.program(&agent))
+                    .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+                let ui = self.ui.clone();
+                tokio::spawn(async move {
+                    let folder = if folder.is_dir() {
+                        folder
+                    } else {
+                        quill_files::home_dir().unwrap_or_else(|| ".".into())
+                    };
+                    let (servers, error) = match tools_of(adapter, &program, &folder).await {
+                        Some(servers) => (servers, None),
+                        None => (
+                            vec![],
+                            Some(
+                                "It didn\u{2019}t say which tools its connectors have.".to_owned(),
+                            ),
+                        ),
+                    };
+                    ui(Event::ServerTools {
+                        agent,
+                        servers,
+                        error,
+                    });
+                });
+                return;
+            }
             Intent::CheckSignIn { agent } => {
                 // Asked when the agent is offered: its models, too, before any session of it,
                 // and its own servers and skills, so the first session already leaves to the
@@ -1782,6 +1895,10 @@ impl Router {
             }
             Intent::InstallUpdate => {
                 self.updates.install();
+                return;
+            }
+            Intent::WhatsNewOpened => {
+                self.updates.opened();
                 return;
             }
             Intent::MeasureStorage => {
@@ -2908,6 +3025,7 @@ impl Actor {
             servers: Vec::new(),
             skill_roots: Vec::new(),
             env: Vec::new(),
+            tool_rules: Vec::new(),
         };
         Self {
             id,
@@ -4139,6 +4257,69 @@ async fn skills_of(
         .unwrap_or_default();
     let _ = child.kill().await;
     skills
+}
+
+/// The MCP servers an agent loads in `cwd` with their tools, asked of a short-lived start of
+/// its program as [`skills_of`] asks for skills: asked again each second while one is still
+/// connecting, for at most 30 s. `None` when it never answers.
+async fn tools_of(
+    mut adapter: Box<dyn AgentAdapter>,
+    program: &str,
+    cwd: &std::path::Path,
+) -> Option<Vec<quill_model::McpServer>> {
+    let plan = adapter.launch(&SessionSpec {
+        cwd: cwd.to_owned(),
+        ..Default::default()
+    });
+    let mut command = Command::from(quill_files::command(program));
+    command
+        .args(&plan.args)
+        .current_dir(&plan.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for (key, value) in &plan.env {
+        command.env(key, value);
+    }
+    for key in &plan.env_remove {
+        command.env_remove(key);
+    }
+    let mut child = command.spawn().ok()?;
+    let (mut stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    let start = adapter.encode(AgentCommand::Start);
+    let ask = adapter.encode(AgentCommand::McpStatus);
+    for line in start.iter().chain(&ask) {
+        stdin.write_all(format!("{line}\n").as_bytes()).await.ok()?;
+    }
+    let read = async {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut last = None;
+        while let Ok(Some(line)) = lines.next_line().await {
+            for event in adapter.decode(&line).events {
+                let AgentEvent::McpServers(servers) = event else {
+                    continue;
+                };
+                let waiting = (servers.iter()).any(|s| s.status == quill_model::McpStatus::Pending);
+                last = Some(servers);
+                if !waiting {
+                    return last;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                for line in adapter.encode(AgentCommand::McpStatus) {
+                    let _ = stdin.write_all(format!("{line}\n").as_bytes()).await;
+                }
+            }
+        }
+        last
+    };
+    // shortcut: a server still connecting at 30 s is shown without tools; the page asks again.
+    let servers = tokio::time::timeout(std::time::Duration::from_secs(30), read)
+        .await
+        .ok()
+        .flatten();
+    let _ = child.kill().await;
+    servers
 }
 
 /// Tell the UI the "All agents" layer and how each agent treats it; whatever changed is

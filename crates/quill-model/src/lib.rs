@@ -8,7 +8,8 @@ pub use quill_agent::{
     ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
     ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
-    TaskUsage, Todo, ToolContent, Usage, UsageWindow, WebSearchRun, WebSource,
+    TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage, UsageWindow, WebSearchRun,
+    WebSource,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
@@ -68,12 +69,26 @@ pub struct AppliedTo {
     pub applies: Applies,
 }
 
+/// When one tool of one connector may be used, as the person chose on its page: for one
+/// agent's own server (`agent` its id) or for an "All agents" server (`agent` empty).
+/// `policy` `None` leaves it to the agent's own settings again.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolChoice {
+    pub agent: String,
+    pub server: String,
+    pub tool: String,
+    pub policy: Option<ToolPolicy>,
+}
+
 /// Everything the "All agents" layer holds and how each agent treats it.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalState {
     pub servers: Vec<GlobalServer>,
     pub skills: Vec<GlobalSkill>,
     pub applied: Vec<AppliedTo>,
+    /// The tool permissions the person chose, for every agent's connectors.
+    #[serde(default)]
+    pub tools: Vec<ToolChoice>,
     /// Why the last change failed, or why the layer could not be read.
     pub error: Option<String>,
     /// The system keychain answers; without it a secret cannot be kept.
@@ -99,8 +114,24 @@ pub enum GlobalOp {
     NewSkill {
         name: String,
         description: String,
+        /// What the agent reads when the skill applies; a placeholder when empty.
+        #[serde(default)]
+        instructions: String,
     },
     RemoveSkill(String),
+    /// A skill from a file: a `SKILL.md`-like `.md`, or a `.zip` / `.skill` of its folder.
+    /// With `replace`, it takes the place of that skill.
+    UploadSkill {
+        path: PathBuf,
+        replace: Option<String>,
+    },
+    /// A skill's folder written as a `.zip` at `to`.
+    ExportSkill {
+        name: String,
+        to: PathBuf,
+    },
+    /// Tool permissions chosen, each replacing the one before for the same tool.
+    Tools(Vec<ToolChoice>),
 }
 
 /// quill's own id of a session.
@@ -276,6 +307,12 @@ pub struct Settings {
     /// Make every new session reachable from another device as it starts, for agents that
     /// offer it (Desktop's "Connect new sessions to Remote Control").
     pub remote_new_sessions: bool,
+    /// Show a release's announcement before restarting into it and once after; off, the
+    /// release notes are still a click away.
+    pub whats_new: bool,
+    /// Whether the person let quill download Cisco's OpenH264 codec to play the clips of What's
+    /// new: `None` while never asked, so nothing is downloaded until they say yes.
+    pub video_codec: Option<bool>,
 }
 
 impl Default for Settings {
@@ -316,6 +353,8 @@ impl Default for Settings {
             logos: true,
             auto_update: true,
             remote_new_sessions: false,
+            whats_new: true,
+            video_codec: None,
         }
     }
 }
@@ -414,9 +453,31 @@ pub enum Motion {
     Full,
 }
 
+/// What of Customize an agent takes part in, as its adapter declares it: a tab it has no part
+/// in shows off, with why, and a tool permission it cannot say is not offered.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CustomizeSupport {
+    pub plugins: bool,
+    pub connectors: bool,
+    pub tool_policies: Vec<ToolPolicy>,
+    /// A server can be added with an OAuth client of the person's own.
+    pub oauth_client: bool,
+}
+
+impl Default for CustomizeSupport {
+    fn default() -> Self {
+        Self {
+            plugins: true,
+            connectors: true,
+            tool_policies: ToolPolicy::ALL.to_vec(),
+            oauth_client: false,
+        }
+    }
+}
+
 /// An agent quill can run: its id, its name for people, and the versions of its program
 /// quill was tested with.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentInfo {
     pub id: String,
     pub name: String,
@@ -440,6 +501,8 @@ pub struct AgentInfo {
     /// The mode a new session starts in.
     #[serde(default)]
     pub default_mode: String,
+    #[serde(default)]
+    pub customize: CustomizeSupport,
 }
 
 /// Where a message sent while a turn runs goes.
@@ -747,6 +810,15 @@ pub enum Intent {
     /// Install the downloaded quill and start it in place of this one; answered by
     /// `Event::Update` with `Installed`, then the host restarts.
     InstallUpdate,
+    /// The person opened the release notes: this version's "What's new" button goes; answered
+    /// by `Event::WhatsNew` once that is kept.
+    WhatsNewOpened,
+    /// The tools of an agent's MCP servers, asked of a short start of its program with no
+    /// session; answered by `Event::ServerTools`.
+    ServerTools {
+        agent: String,
+        folder: PathBuf,
+    },
     /// The MCP servers an agent is set up with for a folder, outside any session; answered by
     /// `Event::Servers`. Listing them can start them, to see how they stand.
     Servers {
@@ -1137,6 +1209,73 @@ pub enum UpdateState {
     NeedsAccess,
 }
 
+/// The release notes quill keeps (docs/UPDATES.md): each downloaded with its update, the
+/// media matched against their digests, kept in the data folder.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WhatsNew {
+    /// This version's and earlier ones', newest first.
+    pub releases: Vec<ReleaseNotes>,
+    /// The downloaded version's, which a restart installs.
+    pub ready: Option<ReleaseNotes>,
+    /// The first of `releases` is this version, just updated to: its announcement shows now,
+    /// once (it is already kept as seen).
+    pub announce: bool,
+    /// This version came by an update and its notes were never opened: the "What's new"
+    /// button shows.
+    pub unopened: bool,
+}
+
+/// Cisco's OpenH264 library, which plays the clips of What's new once the person allows its
+/// download (`Settings::video_codec`).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CodecState {
+    /// Not allowed, or not there.
+    #[default]
+    Off,
+    Downloading,
+    /// Downloaded from Cisco and matched against its digest: the library to load.
+    Ready(PathBuf),
+    /// The download or the check failed; `reason` is for the person.
+    Failed(String),
+}
+
+/// What one release says is new in it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReleaseNotes {
+    pub version: String,
+    /// As its author wrote it (`2026-11-10`).
+    pub date: String,
+    pub new: Vec<String>,
+    pub improved: Vec<String>,
+    pub fixed: Vec<String>,
+    pub announcement: Option<Announcement>,
+}
+
+/// The one thing a release puts forward.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Announcement {
+    pub title: String,
+    pub body: String,
+    pub bullets: Vec<String>,
+    /// Its picture or clip, on this computer and matched; none when none matched.
+    pub media: Option<Media>,
+    /// Where "Try it" takes the person: one of the interface's own targets, or no button.
+    pub try_it: Option<String>,
+}
+
+/// An announcement's picture or clip.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Media {
+    Image {
+        path: PathBuf,
+    },
+    /// A clip and the picture shown while it cannot play.
+    Video {
+        poster: PathBuf,
+        clip: PathBuf,
+    },
+}
+
 /// quill's own sounds, made by the engine: one when a task completes, one when a session
 /// needs the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1350,6 +1489,10 @@ pub enum Event {
     },
     /// Where quill's own update stands; not stored.
     Update(UpdateState),
+    /// The release notes quill keeps, and whether to announce this version; not stored.
+    WhatsNew(WhatsNew),
+    /// Where the video codec stands on this computer; not stored.
+    Codec(CodecState),
     /// An agent's plugins, marketplaces and skills for `folder`, as its program lists them;
     /// `error` says why a change or a list failed.
     Extensions {
@@ -1360,6 +1503,13 @@ pub enum Event {
     },
     /// The "All agents" layer and how each agent treats it; written before it is announced.
     Global(GlobalState),
+    /// The servers an agent's program loaded with their tools, outside any session, or why it
+    /// did not say.
+    ServerTools {
+        agent: String,
+        servers: Vec<McpServer>,
+        error: Option<String>,
+    },
     /// An agent's MCP servers for a folder, where one can be added, or why they could not be
     /// listed.
     Servers {
@@ -1520,8 +1670,11 @@ impl Event {
             | Event::Storage { .. }
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
+            | Event::WhatsNew(_)
+            | Event::Codec(_)
             | Event::Extensions { .. }
             | Event::Global(_)
+            | Event::ServerTools { .. }
             | Event::Servers { .. }
             | Event::ServersFound { .. }
             | Event::Auth { .. }

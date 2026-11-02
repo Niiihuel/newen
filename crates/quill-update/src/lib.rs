@@ -15,6 +15,7 @@
 pub mod install;
 #[cfg(any(test, feature = "serve"))]
 pub mod serve;
+pub mod whats_new;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -68,6 +69,15 @@ pub struct Manifest {
     pub minimum_version: Option<Version>,
     /// By [`platform`] key.
     pub platforms: BTreeMap<String, Artifact>,
+    /// The release's `whats-new.json` ([`whats_new`]): its notes, and an announcement whose
+    /// media it names by size and digest, so this signature covers them too. A copy that does
+    /// not know the field ignores it, as serde does any unknown field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whats_new: Option<Artifact>,
+    /// The release's files by name, with their addresses in the private repository's API, which
+    /// the media of `whats_new` are fetched from. Never signed: the check fills it.
+    #[serde(skip)]
+    pub assets: BTreeMap<String, String>,
 }
 
 /// What a platform downloads.
@@ -89,6 +99,10 @@ pub struct Release {
     pub mandatory: bool,
     /// `None`: the release has nothing for this platform.
     pub artifact: Option<Artifact>,
+    /// Its `whats-new.json`, when it has a usable one.
+    pub whats_new: Option<Artifact>,
+    /// See [`Manifest::assets`].
+    pub assets: BTreeMap<String, String>,
 }
 
 /// Why a check, a download or an installation did not go through. Each leaves quill as it was.
@@ -204,16 +218,22 @@ pub fn offer(manifest: Manifest, installed: &Version, platform: &str) -> Option<
         .get(platform)
         .filter(|artifact| usable(artifact))
         .cloned();
+    let whats_new =
+        (manifest.whats_new).filter(|file| usable(file) && file.size <= whats_new::MAX_JSON);
     Some(Release {
         version: manifest.version,
         date: manifest.date,
         notes: manifest.notes,
         mandatory,
         artifact,
+        whats_new,
+        assets: manifest.assets,
     })
 }
 
-fn usable(artifact: &Artifact) -> bool {
+/// An address quill may download from: HTTPS (or a test feed on this machine), a size within
+/// bounds and a digest.
+pub(crate) fn usable(artifact: &Artifact) -> bool {
     let https = artifact.url.starts_with("https://")
         // The test feeds of `serve`, on this machine only.
         || artifact.url.starts_with("http://127.0.0.1:");
@@ -280,7 +300,7 @@ impl Source {
     }
 
     /// The token and the API base a request to the API carries, if any.
-    fn grant(&self) -> Option<(&str, &str)> {
+    pub(crate) fn grant(&self) -> Option<(&str, &str)> {
         match self {
             Self::Api { token, api } => Some((token, api)),
             Self::Files { .. } => None,
@@ -361,14 +381,21 @@ pub fn check(
             let mut manifest = verify(&manifest, text(&signature)?, key)?;
             // The signed addresses name the release's files; the API reaches the same files.
             for artifact in manifest.platforms.values_mut() {
-                let name = artifact.url.rsplit('/').next().unwrap_or_default();
-                if let Some(url) = assets.get(name) {
-                    artifact.url = url.clone();
-                }
+                artifact.url = via(&assets, &artifact.url);
             }
+            if let Some(file) = manifest.whats_new.as_mut() {
+                file.url = via(&assets, &file.url);
+            }
+            manifest.assets = assets;
             Ok(manifest)
         }
     }
+}
+
+/// Where the API serves the release file `url` names (by its last part), else `url` itself.
+pub(crate) fn via(assets: &BTreeMap<String, String>, url: &str) -> String {
+    let name = url.rsplit('/').next().unwrap_or_default();
+    assets.get(name).cloned().unwrap_or_else(|| url.to_owned())
 }
 
 fn text(bytes: &[u8]) -> Result<&str, Error> {
@@ -448,7 +475,7 @@ fn request(
 }
 
 /// The body of `url` when it answers 2xx, read up to `limit` bytes.
-fn fetch(
+pub(crate) fn fetch(
     agent: &ureq::Agent,
     url: &str,
     grant: Option<(&str, &str)>,
@@ -491,7 +518,7 @@ fn network(error: impl fmt::Display) -> Error {
     Error::Network
 }
 
-fn disk(error: io::Error) -> Error {
+pub(crate) fn disk(error: io::Error) -> Error {
     eprintln!("quill: update: {error}");
     Error::Disk
 }
@@ -588,7 +615,7 @@ pub fn download(
 }
 
 /// The SHA-256 of the file at `path`, lowercase hex.
-fn sha256(path: &Path) -> io::Result<String> {
+pub(crate) fn sha256(path: &Path) -> io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
