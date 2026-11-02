@@ -9,9 +9,11 @@
 //! A manifest also names its product and channel, a `sequence` that only grows (a copy refuses
 //! one lower than the highest it saw) and maybe when it expires ([`admit`]).
 //!
-//! A check reads the latest release of [`REPOSITORY`], which is public, at its download
+//! A check reads the latest release of [`REPOSITORIES`], which are public, at their download
 //! addresses (not GitHub's API, so no token and no API rate limit); a feed at a base address
-//! (`QUILL_UPDATE_FEED`, for the tests) the same way. The signature is verified
+//! (`QUILL_UPDATE_FEED`, for the tests) the same way. Newen, quill's next name, publishes
+//! `newen-update.json` from `Niiihuel/newen`: both are looked for first (docs/UPDATES.md, «El
+//! paso a Newen»). The signature is verified
 //! before the JSON is read, and an artifact is installed only once its size and digest match
 //! what was signed ([`install`]). Network, disk and every wait run on the caller's thread:
 //! never the interface's.
@@ -39,15 +41,22 @@ pub use semver::Version;
 
 /// This program's version: the workspace's, which a release's tag matches.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The repository the releases are published in; public, so read with no token.
-pub const REPOSITORY: &str = "Niiihuel/quill";
+/// The repositories releases are read from, in turn: Newen's, the name quill's repository is
+/// renamed to, then quill's own. Public, so read with no token.
+pub const REPOSITORIES: [&str; 2] = ["Niiihuel/newen", "Niiihuel/quill"];
+/// The manifest's name in quill's releases: the one copies up to 0.1.8 look for.
 pub const MANIFEST: &str = "quill-update.json";
 pub const SIGNATURE: &str = "quill-update.json.sig";
 /// More signatures of the manifest, one a line: a rotation's new keys sign here. Copies up to
 /// 0.1.8 read only [`SIGNATURE`], which keeps one line.
 pub const SIGNATURES: &str = "quill-update.json.sigs";
+/// The manifest's name in Newen's releases, looked for before [`MANIFEST`]; its signatures are
+/// beside it the same way (`.sig`, `.sigs`).
+pub const NEWEN_MANIFEST: &str = "newen-update.json";
 /// What every manifest of quill names as its product and channel.
 pub const PRODUCT: &str = "quill";
+/// Newen's manifests may name it as their product: it is quill renamed.
+pub const NEWEN_PRODUCT: &str = "newen";
 pub const CHANNEL: &str = "stable";
 /// The word in an annotated tag's message that makes its version mandatory.
 pub const MANDATORY_WORD: &str = "mandatory";
@@ -332,10 +341,11 @@ impl Trust {
     }
 }
 
-/// `manifest`, verified, is quill's stable channel, not lower than `sequence` and not expired
-/// at `now` (seconds since 1970).
+/// `manifest`, verified, is quill's (or Newen's) stable channel, not lower than `sequence` and
+/// not expired at `now` (seconds since 1970).
 pub fn admit(manifest: &Manifest, sequence: u64, now: u64) -> Result<(), Error> {
-    if manifest.product != PRODUCT || manifest.channel != CHANNEL {
+    if ![PRODUCT, NEWEN_PRODUCT].contains(&manifest.product.as_str()) || manifest.channel != CHANNEL
+    {
         return Err(Error::Foreign);
     }
     if manifest.sequence < sequence {
@@ -464,26 +474,38 @@ pub fn minimum_version<'a>(
         .max()
 }
 
-/// Where a release's files are read from: the files of one release at a base address.
-#[derive(Clone, Debug)]
+/// Where a release's files are read from: the files of one release at a base address, the
+/// first of `bases` that has a manifest.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
-    pub base: String,
+    pub bases: Vec<String>,
 }
 
 impl Source {
     /// Where this copy looks: `QUILL_UPDATE_FEED` when set (a test feed), else the latest
-    /// release of [`REPOSITORY`], at its public addresses, with no token.
+    /// release of each of [`REPOSITORIES`], at its public addresses, with no token.
     pub fn locate() -> Self {
-        if let Some(base) = std::env::var("QUILL_UPDATE_FEED")
-            .ok()
-            .filter(|base| !base.trim().is_empty())
-        {
-            return Self {
-                base: base.trim_end_matches('/').to_owned(),
-            };
+        Self::from_feed(std::env::var("QUILL_UPDATE_FEED").ok())
+    }
+
+    /// The release at `base` alone.
+    pub fn at(base: impl Into<String>) -> Self {
+        Self {
+            bases: vec![base.into()],
+        }
+    }
+
+    /// `feed` alone when it is set, else the repositories'.
+    fn from_feed(feed: Option<String>) -> Self {
+        if let Some(base) = feed.filter(|base| !base.trim().is_empty()) {
+            return Self::at(base.trim_end_matches('/'));
         }
         Self {
-            base: format!("https://github.com/{REPOSITORY}/releases/latest/download"),
+            bases: (REPOSITORIES.iter())
+                .map(|repository| {
+                    format!("https://github.com/{repository}/releases/latest/download")
+                })
+                .collect(),
         }
     }
 }
@@ -509,16 +531,30 @@ pub fn check(agent: &ureq::Agent, source: &Source, trust: &Trust) -> Result<Mani
     if trust.keys.is_empty() {
         return Err(Error::NoKey);
     }
-    let base = &source.base;
-    let manifest = fetch(agent, &format!("{base}/{MANIFEST}"), MAX_MANIFEST)?;
-    let signature = fetch(agent, &format!("{base}/{SIGNATURE}"), MAX_SIGNATURE)?;
-    let more = match fetch(agent, &format!("{base}/{SIGNATURES}"), MAX_SIGNATURES) {
+    let (url, manifest) = find_manifest(agent, source)?;
+    let signature = fetch(agent, &format!("{url}.sig"), MAX_SIGNATURE)?;
+    let more = match fetch(agent, &format!("{url}.sigs"), MAX_SIGNATURES) {
         Err(Error::Status(404)) => Vec::new(),
         more => more?,
     };
     let manifest = verify_signed(&manifest, &signatures(&signature, &more)?, &trust.keys)?;
     admit(&manifest, trust.sequence, now())?;
     Ok(manifest)
+}
+
+/// The first manifest `source` has, and its address: at each base in turn, Newen's name and
+/// then quill's. Only a 404 moves on to the next; anything else is the answer.
+fn find_manifest(agent: &ureq::Agent, source: &Source) -> Result<(String, Vec<u8>), Error> {
+    for base in &source.bases {
+        for name in [NEWEN_MANIFEST, MANIFEST] {
+            let url = format!("{base}/{name}");
+            match fetch(agent, &url, MAX_MANIFEST) {
+                Err(Error::Status(404)) => {}
+                found => return found.map(|bytes| (url, bytes)),
+            }
+        }
+    }
+    Err(Error::Status(404))
 }
 
 /// The signature and the lines of the further ones.

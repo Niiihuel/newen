@@ -170,9 +170,139 @@ fn the_minimum_is_the_newest_mandatory_tag_up_to_the_release() {
 
 /// Publish `manifest`, signed by `signer`, on `server`.
 fn publish(server: &Server, signer: &SigningKey, manifest: &Manifest) {
+    publish_as(server, signer, manifest, MANIFEST);
+}
+
+/// [`publish`] under the manifest's `name`, its signature beside it.
+fn publish_as(server: &Server, signer: &SigningKey, manifest: &Manifest, name: &str) {
     let bytes = serde_json::to_vec_pretty(manifest).unwrap();
-    server.put(&format!("/{SIGNATURE}"), sign(signer, &bytes).into_bytes());
-    server.put(&format!("/{MANIFEST}"), bytes);
+    server.put(&format!("/{name}.sig"), sign(signer, &bytes).into_bytes());
+    server.put(&format!("/{name}"), bytes);
+}
+
+/// The paths `server` was asked for since `from`.
+fn asked(server: &Server, from: usize) -> Vec<String> {
+    server.requests()[from..]
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// At a feed, Newen's manifest is looked for first and quill's when there is none; either goes
+/// through the same signature and admission, and Newen's may name itself the product.
+#[test]
+fn a_feed_s_newen_manifest_is_read_first_and_quill_s_when_there_is_none() {
+    let signer = key();
+    let server = serve(0).unwrap();
+    let (agent, feed) = (agent(), Source::at(server.base()));
+    let trust = Trust::new(vec![signer.verifying_key()]);
+    let quill = manifest("9.0.0", None, &[]);
+    publish(&server, &signer, &quill);
+    assert_eq!(check(&agent, &feed, &trust), Ok(quill.clone()));
+    assert_eq!(
+        asked(&server, 0),
+        [
+            "/newen-update.json",
+            "/quill-update.json",
+            "/quill-update.json.sig",
+            "/quill-update.json.sigs"
+        ]
+    );
+    let newen = Manifest {
+        product: NEWEN_PRODUCT.into(),
+        ..manifest("9.1.0", None, &[])
+    };
+    publish_as(&server, &signer, &newen, NEWEN_MANIFEST);
+    let before = server.requests().len();
+    assert_eq!(check(&agent, &feed, &trust), Ok(newen.clone()));
+    assert_eq!(
+        asked(&server, before),
+        [
+            "/newen-update.json",
+            "/newen-update.json.sig",
+            "/newen-update.json.sigs"
+        ]
+    );
+    // Newen's, signed by another key: refused, and quill's is not read instead.
+    publish_as(&server, &key(), &newen, NEWEN_MANIFEST);
+    assert_eq!(check(&agent, &feed, &trust), Err(Error::Signature));
+    // Nor another product's under Newen's name.
+    let other = Manifest {
+        product: "other".into(),
+        ..newen
+    };
+    publish_as(&server, &signer, &other, NEWEN_MANIFEST);
+    assert_eq!(check(&agent, &feed, &trust), Err(Error::Foreign));
+}
+
+/// The releases are read from Newen's repository first and from quill's when Newen's has no
+/// manifest (before the rename); only a 404 moves on. A test feed is one base alone.
+#[test]
+fn newen_s_repository_is_read_first_and_quill_s_when_it_has_no_manifest() {
+    assert_eq!(
+        Source::from_feed(None).bases,
+        [
+            "https://github.com/Niiihuel/newen/releases/latest/download",
+            "https://github.com/Niiihuel/quill/releases/latest/download"
+        ]
+    );
+    assert_eq!(
+        Source::from_feed(Some("  ".into())),
+        Source::from_feed(None)
+    );
+    assert_eq!(
+        Source::from_feed(Some("http://127.0.0.1:8765/".into())),
+        Source::at("http://127.0.0.1:8765")
+    );
+
+    let signer = key();
+    let trust = Trust::new(vec![signer.verifying_key()]);
+    let (renamed, old) = (serve(0).unwrap(), serve(0).unwrap());
+    let both = Source {
+        bases: vec![renamed.base(), old.base()],
+    };
+    let published = manifest("9.0.0", None, &[]);
+    publish(&old, &signer, &published);
+    assert_eq!(check(&agent(), &both, &trust), Ok(published));
+    assert_eq!(
+        asked(&renamed, 0),
+        ["/newen-update.json", "/quill-update.json"]
+    );
+    // Once the first has a release, the second is not asked.
+    let newer = manifest("9.1.0", None, &[]);
+    publish(&renamed, &signer, &newer);
+    let before = old.requests().len();
+    assert_eq!(check(&agent(), &both, &trust), Ok(newer));
+    assert_eq!(old.requests().len(), before);
+    // A first base that does not answer is the answer: no fallback hides it.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let nobody = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let unreachable = Source {
+        bases: vec![nobody, old.base()],
+    };
+    assert_eq!(check(&agent(), &unreachable, &trust), Err(Error::Network));
+}
+
+/// What copies up to 0.1.8 read of a release stays what 0.1.9 publishes: they look its
+/// manifest and signature up by these names, and install only a bundle with this program at
+/// its root (`tools/quill-release`, `scripts/package.sh` and the workflows are unchanged).
+#[test]
+fn what_copies_up_to_0_1_8_read_of_a_release_is_unchanged() {
+    assert_eq!(MANIFEST, "quill-update.json");
+    assert_eq!(SIGNATURE, "quill-update.json.sig");
+    assert_eq!(
+        install::PROGRAM,
+        if cfg!(windows) { "quill.exe" } else { "quill" }
+    );
+    // The local test feed publishes under them, and a check still finds them.
+    let server = serve(0).unwrap();
+    let published = manifest("9.0.0", None, &[]);
+    let key = serve::publish(&server, &published);
+    assert_eq!(
+        check(&agent(), &Source::at(server.base()), &Trust::new(vec![key])),
+        Ok(published)
+    );
 }
 
 #[test]
@@ -181,9 +311,7 @@ fn a_check_reads_a_signed_feed_on_loopback_and_refuses_a_forged_one() {
     let release = manifest("9.0.0", Some("9.0.0"), &[]);
     let server = serve(0).unwrap();
     let agent = agent();
-    let feed = Source {
-        base: server.base(),
-    };
+    let feed = Source::at(server.base());
     let public = signer.verifying_key();
     // Nothing there yet.
     assert_eq!(
@@ -712,9 +840,7 @@ fn a_release_goes_from_a_loopback_feed_to_the_installation() {
     );
 
     let agent = agent();
-    let source = Source {
-        base: server.base(),
-    };
+    let source = Source::at(server.base());
     let manifest = check(&agent, &source, &Trust::new(vec![signer.verifying_key()])).unwrap();
     let offered = offer(manifest, &version("1.0.0"), &platform()).unwrap();
     assert!(offered.mandatory);
@@ -1035,9 +1161,7 @@ fn a_lower_sequence_another_product_or_an_expired_manifest_is_refused() {
     let signer = key();
     let server = serve(0).unwrap();
     publish(&server, &signer, &at(4));
-    let feed = Source {
-        base: server.base(),
-    };
+    let feed = Source::at(server.base());
     let trust = |sequence| Trust {
         keys: vec![signer.verifying_key()],
         sequence,
