@@ -109,6 +109,10 @@ pub const IMAGE_ANNOTATE: &str = "image:annotate";
 /// The viewer's arrows, through the pictures of a run of steps.
 pub const IMAGE_PREVIOUS: &str = "image:previous";
 pub const IMAGE_NEXT: &str = "image:next";
+/// The prefix of the thumbnails under the viewer's picture; the index in its run follows it.
+pub const IMAGE_AT: &str = "image:at:";
+/// The viewer's zoom toggle; the viewer zooms itself and reports the scale.
+pub const IMAGE_ZOOM: &str = "image:zoom";
 pub const ATTACH_FOLDER: &str = "attach:folder";
 pub const SLASH: &str = "attach:slash";
 pub const TERMINAL_TOGGLE: &str = "terminal:toggle";
@@ -3697,9 +3701,9 @@ fn shape_icon(tool: limn::SketchTool) -> &'static str {
     }
 }
 
-/// The image viewer over the window: the picture at full size once decoded, else its thumbnail,
-/// fitted to its size, with its file name under it and, for a composer image, the annotate
-/// control.
+/// The image viewer over the window: the picture as large as the window allows, up to one of
+/// its pixels on each of the screen's, zoomed and panned as limn's lightbox does. Its thumbnail
+/// stands in while the whole picture decodes.
 fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette) -> Element {
     let Some(viewer) = &ui.viewer else {
         return base;
@@ -3711,23 +3715,37 @@ fn image_viewer(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
-    let picture = ui.full.get(&viewer.path).or(ui.thumbs.get(&viewer.path));
-    // Desktop's lightbox: the picture fitted at most 640 wide, its controls beside it and its
-    // name under it, over the dimmed window.
-    let mut shown = limn::ImageViewer::new(base, true, name.clone(), IMAGE_CLOSE, palette)
+    // limn's lightbox draws only the toggle of the three zoom controls.
+    let mut shown = limn::ImageViewer::new(base, true, name, IMAGE_CLOSE, palette)
         .viewport(window)
-        .lightbox(true)
-        .caption(name);
+        .layout(limn::ViewerLayout::Lightbox)
+        .zoom_actions(IMAGE_ZOOM, IMAGE_ZOOM, IMAGE_ZOOM);
     if viewer.gallery.len() > 1 {
         shown = (shown.gallery(viewer.index, viewer.gallery.len()))
             .previous_action(IMAGE_PREVIOUS)
             .next_action(IMAGE_NEXT);
+        for (at, (path, caption)) in viewer.gallery.iter().enumerate() {
+            shown = shown.thumbnail(
+                format!("{IMAGE_AT}{at}"),
+                ui.thumbs.get(path).cloned(),
+                caption,
+            );
+        }
     }
-    if let Some(picture) = picture {
+    if let Some(picture) = ui.full.get(&viewer.path) {
         shown = shown.image(picture.clone());
     }
+    if let Some(thumb) = ui.thumbs.get(&viewer.path) {
+        shown = shown.placeholder(thumb.clone());
+    }
+    // 100 % is one of the picture's pixels on each of the screen's, so it fits without being
+    // enlarged past them.
     if let Some(&(width, height)) = ui.sizes.get(&viewer.path) {
-        shown = shown.natural_size(width, height);
+        let scale = ui.pixels_per_point.max(0.25);
+        shown = shown.picture_size(Size::new(width / scale, height / scale));
+    }
+    if let Some((scale, fitted)) = viewer.zoom {
+        shown = shown.zoom_level(scale, fitted);
     }
     if let Some(origin) = viewer.origin {
         shown = shown.origin(origin);

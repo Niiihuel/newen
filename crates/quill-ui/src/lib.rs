@@ -1129,6 +1129,22 @@ pub struct Viewer {
     /// where `path` is among them; empty for a picture alone.
     pub gallery: Vec<(PathBuf, String)>,
     pub index: usize,
+    /// The last scale the viewer reported and whether it was the fit, until another picture.
+    pub zoom: Option<(f32, bool)>,
+}
+
+impl Viewer {
+    /// Show the picture at `index` of the gallery, wrapping around its ends, fitted.
+    fn show(&mut self, index: usize) {
+        let Some(index) = index.checked_rem(self.gallery.len()) else {
+            return;
+        };
+        self.path = self.gallery[index].0.clone();
+        self.index = index;
+        self.zoom = None;
+        // Closed now, it shrinks into no thumbnail but the one it grew from.
+        self.origin = None;
+    }
 }
 
 /// What the person is doing, apart from what the engine knows.
@@ -1163,8 +1179,8 @@ pub struct Ui {
     pub logo_asked: std::collections::HashSet<String>,
     /// The image the viewer shows, if any.
     pub viewer: Option<Viewer>,
-    /// The images at up to 2048 px for the viewer, decoded off the window's thread once it opens
-    /// on them; until then it shows the thumbnail.
+    /// The images at their own size for the viewer (smaller only past what limn decodes), read
+    /// off the window's thread once it opens on them; until then it shows the thumbnail.
     pub full: std::collections::HashMap<PathBuf, limn::RasterImage>,
     /// The composer's image being annotated, while its editor is open.
     pub annotating: Option<PathBuf>,
@@ -1185,6 +1201,9 @@ pub struct Ui {
     /// Each image's size in pixels, read from its file by the host: the viewer fits the
     /// picture to it and the editor lays it out at its shape.
     pub sizes: std::collections::HashMap<PathBuf, (f32, f32)>,
+    /// The screen's pixels for each logical one, which the host sets every frame: the viewer
+    /// shows a picture at 100 % with one of its pixels on each of the screen's.
+    pub pixels_per_point: f32,
     /// Why the last image was left out, until the composer's images change again.
     pub image_notice: Option<String>,
     /// The request whose changes the diff pane shows.
@@ -2013,6 +2032,7 @@ impl Ui {
             discarding: false,
             saving: false,
             sizes: Default::default(),
+            pixels_per_point: 1.0,
             image_notice: None,
             diff: None,
             panes: vec![],
@@ -3065,6 +3085,13 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
         return vec![];
     }
     match action {
+        // The viewer's zoom view, whose ID its close control's prefixes.
+        UiAction::Zoomed { id, scale, fitted } if id.starts_with(view::IMAGE_CLOSE) => {
+            if let Some(viewer) = &mut ui.viewer {
+                viewer.zoom = Some((*scale, *fitted));
+            }
+            vec![]
+        }
         UiAction::InputChanged { id, value } if id == view::TERMINAL_RENAME => {
             if let Some((_, name)) = &mut ui.terminal.renaming {
                 *name = value.clone();
@@ -3669,19 +3696,25 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         });
         return vec![];
     }
+    // limn's lightbox wraps its arrows around the run.
     if id == view::IMAGE_PREVIOUS || id == view::IMAGE_NEXT {
         if let Some(viewer) = &mut ui.viewer {
-            let index = if id == view::IMAGE_NEXT {
-                viewer.index + 1
+            let total = viewer.gallery.len();
+            let step = if id == view::IMAGE_NEXT {
+                1
             } else {
-                viewer.index.wrapping_sub(1)
+                total.saturating_sub(1)
             };
-            if let Some((path, _)) = viewer.gallery.get(index) {
-                viewer.path = path.clone();
-                viewer.index = index;
-                // Closed now, it shrinks into no thumbnail but the one it grew from.
-                viewer.origin = None;
-            }
+            viewer.show(viewer.index + step);
+        }
+        return vec![];
+    }
+    if let Some(index) = id
+        .strip_prefix(view::IMAGE_AT)
+        .and_then(|i| i.parse::<usize>().ok())
+    {
+        if let Some(viewer) = ui.viewer.as_mut().filter(|v| index < v.gallery.len()) {
+            viewer.show(index);
         }
         return vec![];
     }
