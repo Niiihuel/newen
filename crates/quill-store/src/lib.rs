@@ -92,6 +92,10 @@ impl Store {
             | Event::SignInUrl { .. }
             | Event::SignInFailed { .. }
             | Event::NotificationClicked { .. } => false,
+            // A message taken back to the composer is the moment's: told again at start, it
+            // would fill the box with words the person may have deleted since. The queue is
+            // kept by `QueueChanged`.
+            Event::QueueTaken { .. } => false,
             // What a session's browser shows is the moment's; its tabs' addresses are kept.
             Event::Browser { update, .. } => {
                 matches!(update, quill_model::BrowserUpdate::Kept(_))
@@ -146,9 +150,11 @@ impl Store {
         let rows = statement.query_map(params![session as i64], |row| row.get::<_, String>(0))?;
         let mut events = vec![];
         for row in rows {
-            // An event this version cannot read is skipped, as in `load`.
+            // An event this version cannot read, or no longer keeps, is skipped, as in `load`.
             if let Ok(event) = serde_json::from_str(&row?) {
-                events.push(event);
+                if Self::keeps(&event) {
+                    events.push(event);
+                }
             }
         }
         Ok(events)
@@ -169,6 +175,10 @@ impl Store {
             let Ok(event) = serde_json::from_str(&json) else {
                 continue;
             };
+            // One an earlier version kept and this one does not is never told again.
+            if !Self::keeps(&event) {
+                continue;
+            }
             match sessions.last_mut() {
                 Some((id, events)) if *id == session => events.push(event),
                 _ => sessions.push((session, vec![event])),
@@ -204,6 +214,30 @@ mod tests {
             },
         };
         assert!(!Store::keeps(&suggested));
+    }
+
+    /// A message taken back to the composer is not told again at start, even from a record an
+    /// earlier version wrote: its words would fill the composer after the person deleted them.
+    #[test]
+    fn a_message_taken_back_to_the_composer_never_comes_back() {
+        let store = Store::in_memory().unwrap();
+        let taken = Event::QueueTaken {
+            session: 1,
+            text: "deleted since".into(),
+            images: vec![],
+        };
+        store.append(1, &taken).unwrap();
+        assert!(store.load().unwrap().is_empty());
+        // As 0.1.8 and earlier kept it.
+        store
+            .conn
+            .execute(
+                "INSERT INTO events (session, event) VALUES (1, ?1)",
+                params![serde_json::to_string(&taken).unwrap()],
+            )
+            .unwrap();
+        assert!(store.load().unwrap().is_empty());
+        assert!(store.load_session(1).unwrap().is_empty());
     }
 
     #[test]
