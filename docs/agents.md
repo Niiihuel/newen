@@ -70,7 +70,7 @@ Al restaurar, el motor también rehace qué sesiones no terminaron su tarea (un 
 
 **UI.** Mientras espera, la sesión muestra al final de su conversación, sobre la línea de estado, una fila con un reloj de arena: "Waiting for «título» · Codex" (el nombre del agente sale de la lista de agentes, no está escrito en la UI), con el brillo que pasa de las filas en curso mientras la otra trabaja; "«título» is asking you something" mientras la otra espera a la persona; "«título» stopped before its task was done" si su turno terminó sin la tarea hecha. Es una sola línea que se desvanece al final (`one_line` / `working_words`) y nunca tapa el botón **Cancel**, que manda `Intent::CancelWait { session, on }`; el motor guarda el fin de la espera antes de avisar y la fila se va. Al despertar, la fila se va y el mensaje de Newen aparece como el de un informe, con "Waited for" y la sesión. En la barra lateral la sesión que espera lleva el reloj de arena, apagado, y cuelga de la esperada con la guía de árbol, como una sesión iniciada por otra (una espera cuenta como conexión, salvo que la esperada ya cuelgue de ella); el orden congelado bajo el puntero y las familias que se mueven juntas siguen igual.
 
-Lo que no se pudo verificar: que un modelo real elija llamar la herramienta (las pruebas usan capturas reproducidas), y la forma de `dynamicTools`/`item/tool/call` en Codex, inferida del esquema del app-server sin captura.
+Lo que no se pudo verificar: que un modelo real elija llamar la herramienta (las pruebas usan capturas reproducidas y modelos guionados). La forma de `dynamicTools`/`item/tool/call` en Codex está verificada de punta a punta (2026-11-03, ver [codex.md](codex.md) «Herramientas de Newen»).
 
 ## Modos de permiso (`modes`, `default_mode`)
 

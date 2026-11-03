@@ -2665,7 +2665,7 @@ impl Router {
     /// hears of it; one on a session whose task is already done is not kept.
     fn wait_for(&mut self, session: SessionId, input: &serde_json::Value) -> (String, bool) {
         let then = input["then"].as_str().map(str::trim).unwrap_or_default();
-        let Some(on) = input["session_id"].as_u64().filter(|_| !then.is_empty()) else {
+        let Some(on) = session_arg(input).filter(|_| !then.is_empty()) else {
             return (
                 "wait_for_session needs a session_id and what you will do then.".into(),
                 true,
@@ -4626,6 +4626,13 @@ fn mention_note(mentions: &[(SessionId, String)]) -> String {
     note
 }
 
+/// The `session_id` a tool was given: a number, or one written as text, which a model may send
+/// where the schema is not enforced.
+fn session_arg(input: &serde_json::Value) -> Option<SessionId> {
+    let id = &input["session_id"];
+    id.as_u64().or_else(|| id.as_str()?.trim().parse().ok())
+}
+
 /// What `read_session` answers for `session`: its title and folder, then its conversation
 /// (the latest last) as far as the limits of [`transcript`] reach. Off the router's thread.
 async fn read_session(
@@ -4633,10 +4640,17 @@ async fn read_session(
     asker: SessionId,
     input: &serde_json::Value,
 ) -> (Vec<newen_agent::ToolContent>, bool) {
-    let id = input["session_id"].as_u64();
-    let Some(id) = id.filter(|id| *id != asker) else {
-        return (newen_agent::ToolContent::text("No such session."), true);
+    let Some(id) = session_arg(input) else {
+        return (
+            newen_agent::ToolContent::text("read_session needs the session_id of a session."),
+            true,
+        );
     };
+    if id == asker {
+        let said =
+            "That is this session: read_session reads another one, by an id list_sessions gives.";
+        return (newen_agent::ToolContent::text(said), true);
+    }
     let read = tokio::task::spawn_blocking(move || store.lock().unwrap().load_session(id));
     let events = read.await.ok().and_then(Result::ok).unwrap_or_default();
     let Some(restored) = Restored::from(&events) else {
@@ -4986,6 +5000,13 @@ mod tests {
     async fn a_wait_is_refused_on_itself_in_a_cycle_and_past_the_cap() {
         let (mut router, heard) = router();
         assert!(router.wait_for(1, &wait(1)).1, "itself");
+        // A model may write the id as text.
+        let said = serde_json::json!({ "session_id": "2", "then": "Cut version 0.1.0" });
+        assert_eq!(super::session_arg(&said), Some(2));
+        assert_eq!(
+            super::session_arg(&serde_json::json!({ "session_id": "two" })),
+            None
+        );
         assert!(router.wait_for(1, &wait(42)).1, "no such session");
         assert!(!router.wait_for(1, &wait(2)).1);
         assert!(router.wait_for(2, &wait(1)).1, "a cycle");

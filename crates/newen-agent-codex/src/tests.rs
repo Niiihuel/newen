@@ -435,6 +435,7 @@ fn newen_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() 
     let tools = thread.unwrap()["params"]["dynamicTools"]
         .as_array()
         .unwrap();
+    assert!(tools.iter().all(|t| t["type"] == "function"));
     let wait = tools.iter().find(|t| t["name"] == "wait_for_session");
     assert_eq!(
         wait.unwrap()["inputSchema"]["required"],

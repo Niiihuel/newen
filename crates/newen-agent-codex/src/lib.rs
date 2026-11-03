@@ -235,13 +235,16 @@ impl Codex {
         let resume = self.spec.lock().unwrap().resume.clone();
         let mut params = self.thread_params();
         let Some(id) = resume else {
-            // Newen's own tools, as tools the client declares; a resumed thread keeps the ones
-            // it started with (inferred from the schema: only `thread/start` takes them).
+            // Newen's own tools, as tools the client declares. Only `thread/start` takes them: a
+            // resumed or forked thread keeps the ones it started with, from its saved session
+            // (codex-rs core `session/mod.rs`, verified end to end with 0.163.0 and 0.166.0).
             params["dynamicTools"] = newen_agent::HOST_TOOLS
                 .iter()
                 .map(|(name, description, schema)| {
                     let schema: Value = serde_json::from_str(schema).unwrap_or_default();
-                    json!({ "name": name, "description": description, "inputSchema": schema })
+                    // The canonical form (`DynamicToolSpec`, tagged by `type`); 0.163.0 still
+                    // takes the untagged one as "legacy".
+                    json!({ "type": "function", "name": name, "description": description, "inputSchema": schema })
                 })
                 .collect();
             return self.request("thread/start", params, Pending::Thread);
