@@ -12,6 +12,9 @@ newen-model = { path = "../newen-model" }
 newen-agent = { path = "../newen-agent" }
 newen-agent-claude = { path = "../newen-agent-claude" }
 newen-agent-codex = { path = "../newen-agent-codex" }
+# The agents that speak the Agent Client Protocol (newen-agent-acp): OpenCode and Hermes.
+newen-agent-opencode = { path = "../newen-agent-opencode" }
+newen-agent-hermes = { path = "../newen-agent-hermes" }
 newen-store = { path = "../newen-store" }
 newen-git = { path = "../newen-git" }
 # The built-in browser, a Chromium driven over DevTools (docs/browser.md).

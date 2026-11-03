@@ -1,0 +1,40 @@
+[
+  {
+    "type": "document",
+    "path": "/home/user/config/opencode.json",
+    "info": {
+      "mcp": {
+        "servers": {
+          "web": {
+            "type": "remote",
+            "url": "https://example.invalid/mcp"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "directory",
+    "path": "/home/user/config"
+  },
+  {
+    "type": "document",
+    "path": "/home/user/project/opencode.json",
+    "info": {
+      "mcp": {
+        "servers": {
+          "demo": {
+            "type": "local",
+            "command": [
+              "echo",
+              "hi"
+            ],
+            "environment": {
+              "A": "b"
+            }
+          }
+        }
+      }
+    }
+  }
+]

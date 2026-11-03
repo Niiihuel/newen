@@ -630,8 +630,20 @@ impl Layer {
         let mut env = vec![];
         for (header, vars) in [(false, &server.env), (true, &server.headers)] {
             for var in vars {
-                if !var.secret {
-                    let pair = (var.key.clone(), var.value.clone().unwrap_or_default());
+                // A secret goes inline for an agent whose servers inherit nothing of its own.
+                let inline = var.secret && agent.extras.inline_secrets;
+                if inline && !resolve {
+                    continue;
+                }
+                if !var.secret || inline {
+                    let value = if inline {
+                        self.secrets
+                            .get(&account(&server.name, header, &var.key))?
+                            .ok_or_else(|| format!("{} is not in the keychain", var.key))?
+                    } else {
+                        var.value.clone().unwrap_or_default()
+                    };
+                    let pair = (var.key.clone(), value);
                     if header {
                         out.headers.push(pair)
                     } else {
@@ -833,6 +845,8 @@ mod tests {
             sse: true,
             env_by_name: false,
             skills: true,
+            host: false,
+            inline_secrets: false,
         },
     };
     const CODEX: AgentView = AgentView {
@@ -843,6 +857,8 @@ mod tests {
             sse: false,
             env_by_name: true,
             skills: true,
+            host: false,
+            inline_secrets: false,
         },
     };
 
@@ -927,6 +943,32 @@ mod tests {
         );
         // Without resolving, the keychain is not read.
         assert!(layer.plan(&CLAUDE, &Own::default(), false).env.is_empty());
+    }
+
+    #[test]
+    fn an_agent_whose_servers_inherit_nothing_gets_the_secret_in_the_server_alone() {
+        let (layer, _dir, _) = layer();
+        layer.op(GlobalOp::SetServer(github())).unwrap();
+        let acp = AgentView {
+            id: "opencode",
+            name: "OpenCode",
+            extras: SessionExtras {
+                servers: true,
+                inline_secrets: true,
+                ..Default::default()
+            },
+        };
+        let plan = layer.plan(&acp, &Own::default(), true);
+        assert!(plan.env.is_empty(), "not in the process: {:?}", plan.env);
+        assert!(plan.servers[0].env_vars.is_empty());
+        assert!(plan.servers[0]
+            .env
+            .contains(&("GITHUB_TOKEN".to_owned(), "ghp_secret".to_owned())));
+        // Without resolving, the keychain is not read and the secret is left out.
+        let shown = layer.plan(&acp, &Own::default(), false);
+        assert!(!serde_json::to_string(&shown.servers)
+            .unwrap()
+            .contains("ghp_secret"));
     }
 
     #[test]

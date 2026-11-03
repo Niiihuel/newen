@@ -1,6 +1,6 @@
 # Adaptadores de agente (`newen-agent`)
 
-Newen maneja cualquier agente de código por CLI mediante un adaptador (spec.md D11). Este documento fija el contrato común y cómo se proyecta cada CLI sobre él. Solo el adaptador de Claude Code está verificado con capturas (engine.md §11.4). Las filas de otros CLIs son **hipótesis de diseño a verificar** con su propia fase de captura antes de implementarlos. La columna de Codex ya está verificada con capturas de `codex-cli 0.163.0` (`app-server` v2); el detalle está en [codex.md](codex.md).
+Newen maneja cualquier agente de código por CLI mediante un adaptador (spec.md D11). Este documento fija el contrato común y cómo se proyecta cada CLI sobre él. Cada columna está verificada con capturas del CLI real: Claude Code (engine.md §11.4), Codex `0.163.0` (`app-server` v2, [codex.md](codex.md)), y OpenCode `2.2.5` y Hermes Agent, que hablan el Agent Client Protocol con un núcleo común ([acp.md](acp.md), [opencode.md](opencode.md), [hermes.md](hermes.md)). Un CLI nuevo se verifica con su propia fase de captura antes de implementarlo.
 
 ## Contrato
 
@@ -12,20 +12,20 @@ decode(line) → Decoded { events: Vec<AgentEvent>, replies: Vec<String> }   // 
 encode(cmd)  → Vec<String>                                                  // líneas a escribir
 ```
 
-| Concepto | `AgentEvent` / `AgentCommand` | Claude Code (verificado) | Codex 0.163.0 (verificado) | OpenCode (hipótesis) |
+| Concepto | `AgentEvent` / `AgentCommand` | Claude Code (verificado) | Codex 0.163.0 (verificado) | OpenCode 2.2.5 y Hermes (ACP, verificado) |
 |---|---|---|---|---|
-| Arranque | `Command::Start` → `Event::Ready{session, capabilities}` | `control_request initialize` → respuesta con `models`, `commands`, modo actual; `system/init` con `session_id` y `capabilities` | `codex app-server` (JSON-RPC por stdio): `initialize` → `initialized` → `thread/start` / `thread/resume` / `thread/fork`; los modelos salen de `model/list` | `opencode serve` (HTTP + SSE): crear sesión por API |
-| Prompt | `Command::Prompt{request, text}` | `user` con `uuid` = `RequestId` | `turn/start` (con un turno en curso, `turn/steer`) | `POST /session/:id/message` |
-| Texto en streaming | `Event::TextDelta` / `Event::Text` | `stream_event` `text_delta`; `assistant` completo | `item/agentMessage/delta` y `item/completed` | evento SSE de parte de mensaje |
-| Herramienta | `Event::ToolUse{call, name, input}` / `Event::ToolResult{call, output, is_error, files, command}` | `assistant.tool_use`; `user.tool_result` + `tool_use_result` estructurado | `item/started` / `item/completed` de `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`; el plan, con `turn/plan/updated` | partes `tool` del mensaje |
-| Permiso | `Event::PermissionRequest{id, call, tool, input, suggestions}` → `Command::Decide{id, Decision}` | `control_request can_use_tool` → `control_response` allow/deny | pedidos del servidor `item/commandExecution/requestApproval` y `item/fileChange/requestApproval`; se contestan `accept` / `acceptForSession` / `decline` | evento `permission.updated` → responder por API |
-| Pregunta al usuario | `PermissionRequest` con `interactive: true` e input `{questions: [{question, header, options, multiSelect, other?, secret?}], blocking?}`; respuesta en `Decision::Answer` (una pregunta sin respuesta no está) | AskUserQuestion vía `can_use_tool` + `updatedInput.answers` | `item/tool/requestUserInput`, contestado con `{answers:{id:{answers:[…]}}}` | — |
-| Interrumpir | `Command::Interrupt` → `Event::TurnFinished{interrupted}` | `control_request interrupt` | `turn/interrupt` → `turn/completed` interrumpido | `POST /session/:id/abort` |
-| Fin de turno | `Event::TurnFinished{ok, usage, cost}` | `result` sin `parent_tool_use_id` | `turn/completed` | sesión idle |
-| Atribución por herramienta | `capabilities.tool_hooks` | `hook_callback` PostToolUse con `prompt_id` | no hay hooks: atribución por turno | partes `patch` |
-| Cambios de archivo estructurados | `ToolResult.files` | Write/Edit: `structuredPatch`, `originalFile` | `fileChange`: solo el diff por archivo (el hunk de un cambio, el contenido de un archivo nuevo) | parte `patch` |
-| Reanudar / fork | `capabilities.resume/fork` | `--resume`, `--fork-session` | `thread/resume`, `thread/fork` | sesiones persistidas del servidor |
-| Rewind propio del CLI | `capabilities.rewind` | `rewind_files` | — | `revert` |
+| Arranque | `Command::Start` → `Event::Ready{session, capabilities}` | `control_request initialize` → respuesta con `models`, `commands`, modo actual; `system/init` con `session_id` y `capabilities` | `codex app-server` (JSON-RPC por stdio): `initialize` → `initialized` → `thread/start` / `thread/resume` / `thread/fork`; los modelos salen de `model/list` | `opencode acp` / `hermes acp` (ACP, JSON-RPC por stdio): `initialize` → `session/new`, `session/resume`, `session/fork`; modelos, esfuerzos y modos de `configOptions` / `models` / `modes` |
+| Prompt | `Command::Prompt{request, text}` | `user` con `uuid` = `RequestId` | `turn/start` (con un turno en curso, `turn/steer`) | `session/prompt`; un turno a la vez |
+| Texto en streaming | `Event::TextDelta` / `Event::Text` | `stream_event` `text_delta`; `assistant` completo | `item/agentMessage/delta` y `item/completed` | `agent_message_chunk` por `messageId` |
+| Herramienta | `Event::ToolUse{call, name, input}` / `Event::ToolResult{call, output, is_error, files, command}` | `assistant.tool_use`; `user.tool_result` + `tool_use_result` estructurado | `item/started` / `item/completed` de `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`; el plan, con `turn/plan/updated` | `tool_call` / `tool_call_update` (nombre propio en `name` o en el título) |
+| Permiso | `Event::PermissionRequest{id, call, tool, input, suggestions}` → `Command::Decide{id, Decision}` | `control_request can_use_tool` → `control_response` allow/deny | pedidos del servidor `item/commandExecution/requestApproval` y `item/fileChange/requestApproval`; se contestan `accept` / `acceptForSession` / `decline` | `session/request_permission` → `{outcome: {outcome: "selected", optionId}}` |
+| Pregunta al usuario | `PermissionRequest` con `interactive: true` e input `{questions: [{question, header, options, multiSelect, other?, secret?}], blocking?}`; respuesta en `Decision::Answer` (una pregunta sin respuesta no está) | AskUserQuestion vía `can_use_tool` + `updatedInput.answers` | `item/tool/requestUserInput`, contestado con `{answers:{id:{answers:[…]}}}` | `elicitation/create` (form) → `{action: "accept", content}` |
+| Interrumpir | `Command::Interrupt` → `Event::TurnFinished{interrupted}` | `control_request interrupt` | `turn/interrupt` → `turn/completed` interrumpido | `session/cancel` → respuesta `cancelled` |
+| Fin de turno | `Event::TurnFinished{ok, usage, cost}` | `result` sin `parent_tool_use_id` | `turn/completed` | respuesta de `session/prompt` (`stopReason`) |
+| Atribución por herramienta | `capabilities.tool_hooks` | `hook_callback` PostToolUse con `prompt_id` | no hay hooks: atribución por turno | no hay hooks: atribución por turno |
+| Cambios de archivo estructurados | `ToolResult.files` | Write/Edit: `structuredPatch`, `originalFile` | `fileChange`: solo el diff por archivo (el hunk de un cambio, el contenido de un archivo nuevo) | bloques `diff` (OpenCode, archivo entero; Hermes, solo en la tarjeta) |
+| Reanudar / fork | `capabilities.resume/fork` | `--resume`, `--fork-session` | `thread/resume`, `thread/fork` | `session/resume`, `session/fork` (sin `resume_at`) |
+| Rewind propio del CLI | `capabilities.rewind` | `rewind_files` | — | — |
 | Desglose del contexto | `Command::ContextUsage` → `Event::ContextUsage{used, max, categories, groups}` (sin respuesta si el agente no lo sabe) | `control_request get_context_usage` (`detail: "full"`) | solo el total: `thread/tokenUsage/updated`, sin categorías | — |
 | Siguiente prompt sugerido | `Event::PromptSuggestion{text}` tras el fin de turno; efímero, el store no lo guarda | con la opción "Prompt suggestions" del adaptador (prendida por defecto), `initialize` lleva `promptSuggestions: true` y llega `prompt_suggestion{suggestion}` ~1 s después del `result`, nunca tras el primer turno (2.1.316, fixture `2.1.316/suggest`) | no tiene: `thread/prediction/request` es experimental y la 0.163.0 lo contesta "not implemented yet" | — |
 
@@ -33,7 +33,7 @@ Lo que un CLI no tenga se declara en `AgentCapabilities` y la UI lo muestra degr
 
 ## Transportes
 
-El contrato cubre CLIs por **stdio con líneas JSON**: Claude Code (stream-json) y Codex (`app-server`, JSON-RPC). Un CLI que expone un **servidor HTTP** (OpenCode) necesita otro transporte en el motor, que entrega al adaptador cada evento SSE como una "línea". Ese segundo transporte se agrega cuando se implemente el primer adaptador HTTP.
+El contrato cubre CLIs por **stdio con líneas JSON**: Claude Code (stream-json), Codex (`app-server`, JSON-RPC) y los agentes ACP (OpenCode con `opencode acp`, Hermes con `hermes acp`, JSON-RPC). OpenCode también tiene un servidor HTTP; no hace falta: su modo ACP es el mismo motor detrás. Un CLI que solo exponga HTTP necesitaría otro transporte en el motor.
 
 ## Un proceso para todas las sesiones (`mux`)
 
@@ -45,7 +45,7 @@ Cada agente recibe la misma guía, escrita por Newen (`newen_agent::WORK_GUIDE`)
 
 ## Las herramientas de Newen van a todos los agentes
 
-Cada CLI que Newen integra recibe **todas** las herramientas propias de Newen (`newen_agent::HOST_TOOLS`: abrir, leer, escribirle, listar y esperar a otras sesiones), por el mecanismo de su CLI: Claude Code, un servidor MCP dentro del proceso de Newen; Codex, `dynamicTools` en `thread/start`, respondidas en `item/tool/call`. Es lo que deja que sesiones de CLIs distintos trabajen juntas (un Codex que espera a un Claude, un Claude que le escribe a un Codex). Un adaptador nuevo no está completo sin ellas, y cada uno tiene un test que comprueba que las ofrece todas. Decisión del dueño (2026-11-01).
+Cada CLI que Newen integra recibe **todas** las herramientas propias de Newen (`newen_agent::HOST_TOOLS`: abrir, leer, escribirle, listar y esperar a otras sesiones), por el mecanismo de su CLI: Claude Code, un servidor MCP dentro del proceso de Newen; Codex, `dynamicTools` en `thread/start`, respondidas en `item/tool/call`; OpenCode y Hermes, que solo toman herramientas de servidores MCP que arrancan ellos, dos servidores MCP stdio de Newen en `session/new` (`newen --mcp-host`, atendidos por el puente del motor: `SessionExtras::host`, [acp.md](acp.md)). Es lo que deja que sesiones de CLIs distintos trabajen juntas (un Codex que espera a un Claude, un Claude que le escribe a un Codex). Un adaptador nuevo no está completo sin ellas, y cada uno tiene un test que comprueba que las ofrece todas. Decisión del dueño (2026-11-01).
 
 ## Iniciar una sesión con otro agente (`start_session`, `agent`)
 
@@ -109,7 +109,7 @@ El token no sale del llavero de `gh` (Linux, Windows y macOS); no se imprime ni 
 
 ## Extensiones por CLI (Skills, Plugins y Connectors)
 
-Customize muestra lo de **cada CLI por separado** y los cambios se hacen con los comandos propios de cada uno, así que quedan también en la terminal (decisión del dueño §9.1 de [`extensiones.md`](extensiones.md)). La capa "All agents" (sección siguiente) es de Newen y se inyecta por sesión. Lo que cada adaptador declara:
+Customize muestra lo de **cada CLI por separado** y los cambios se hacen con los comandos propios de cada uno, así que quedan también en la terminal (decisión del dueño §9.1 de [`extensiones.md`](extensiones.md)). La capa "All agents" (sección siguiente) es de Newen y se inyecta por sesión. Lo que declaran OpenCode (conectores por `debug config` y `mcp add`, sin quitar) y Hermes (conectores por `mcp list` y `config set|unset`) está en [opencode.md](opencode.md) y [hermes.md](hermes.md) "Customize". Lo que cada adaptador declara:
 
 | Concepto | Contrato | Claude Code 2.1.312 | Codex 0.163.0 |
 |---|---|---|---|
@@ -143,6 +143,8 @@ Es de Newen, no de ningún CLI: **se inyecta en cada sesión y no se escribe en 
 | Servidores | `--mcp-config '<json>'` en argv, **sin secretos**: un secreto es `"${NEWEN_MCP_…}"` y el CLI lo expande con la variable de su entorno. Sin `--strict-mcp-config`, así que suma a los de la persona. stdio, http y sse | `thread/start.config.mcp_servers` (viaja por stdin). stdio: `command`, `args`, `env`, `env_vars`; http: `url`, `http_headers`, `env_http_headers`. **Sin SSE.** `env_vars` solo reenvía una variable con su propio nombre, así que el secreto de un servidor stdio va en una variable **con el nombre de la clave** (`GITHUB_TOKEN`), y dos servidores globales que pidan el mismo nombre con valores distintos chocan (el segundo queda "not available") |
 | Skills | `--plugin-dir newen/injected/claude`: el adaptador escribe `.claude-plugin/plugin.json` (`name: newen`) y los skills salen como `/newen:<nombre>` | `skills/extraRoots/set {extraRoots}` justo después de `initialize`, antes de `thread/start`; los skills salen en `skills/list` con alcance `user` |
 | Estado en la sesión | `mcp_status` los muestra con `scope: "dynamic"`; el motor los marca Global | `mcpServerStatus/list` los muestra |
+
+OpenCode recibe los servidores en `session/new` (stdio y HTTP, **sin SSE**) y los skills por `OPENCODE_CONFIG_CONTENT` (`skills: [carpeta]`, una capa de config de ese proceso). Hermes recibe los servidores en `session/new` (stdio, HTTP y SSE) y **no** puede recibir skills (su carpeta extra es de su config y de su daemon compartido). Como sus servidores no heredan del entorno lo que Newen pone (Hermes los corre en su daemon), los secretos van como valores en `session/new`, por stdin (`SessionExtras::inline_secrets`, [acp.md](acp.md)).
 
 **Verificaciones con los CLIs reales (2026-10-28, sin turnos de modelo, sin tocar las configuraciones de la persona).** Claude Code con `CLAUDE_CONFIG_DIR` en una carpeta de prueba y un servidor MCP local que registra su argv y su entorno; Codex con `CODEX_HOME` de prueba y `app-server` (`initialize`, `thread/start`, `mcpServerStatus/list`, `skills/list`), sin `turn/start`.
 

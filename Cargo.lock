@@ -2877,6 +2877,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "newen-agent-acp"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "newen-agent",
+ "serde_json",
+]
+
+[[package]]
 name = "newen-agent-claude"
 version = "0.2.0"
 dependencies = [
@@ -2891,6 +2900,24 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "newen-agent",
+ "serde_json",
+]
+
+[[package]]
+name = "newen-agent-hermes"
+version = "0.2.0"
+dependencies = [
+ "newen-agent",
+ "newen-agent-acp",
+ "serde_json",
+]
+
+[[package]]
+name = "newen-agent-opencode"
+version = "0.2.0"
+dependencies = [
+ "newen-agent",
+ "newen-agent-acp",
  "serde_json",
 ]
 
@@ -2915,6 +2942,9 @@ dependencies = [
 name = "newen-capture"
 version = "0.2.0"
 dependencies = [
+ "newen-agent",
+ "newen-agent-hermes",
+ "newen-agent-opencode",
  "serde_json",
  "uuid",
 ]
@@ -2942,6 +2972,8 @@ dependencies = [
  "newen-agent",
  "newen-agent-claude",
  "newen-agent-codex",
+ "newen-agent-hermes",
+ "newen-agent-opencode",
  "newen-browser",
  "newen-files",
  "newen-git",

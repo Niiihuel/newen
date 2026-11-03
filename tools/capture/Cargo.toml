@@ -11,3 +11,7 @@ publish = false
 serde_json.workspace = true
 # Client-side message ids, as the SDK sends them.
 uuid = { version = "1", features = ["v4"] }
+# The ACP driver (acp.rs) drives each agent's CLI through Newen's own adapter, as the engine does.
+newen-agent = { path = "../../crates/newen-agent" }
+newen-agent-opencode = { path = "../../crates/newen-agent-opencode" }
+newen-agent-hermes = { path = "../../crates/newen-agent-hermes" }

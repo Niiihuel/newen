@@ -7,7 +7,7 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Which agent: `"claude"`, later `"codex"`, `"opencode"`…
+/// Which agent: `"claude"`, `"codex"`, `"opencode"`, `"hermes"`…
 pub type AgentId = &'static str;
 
 /// How the engine starts the agent's process.
@@ -39,8 +39,8 @@ pub struct SessionSpec {
     #[serde(default)]
     pub options: std::collections::BTreeMap<String, String>,
     /// The "All agents" servers the session adds, already chosen for this agent by the engine
-    /// (docs/agents.md "All agents"). They carry no secret: only the name of the variable of
-    /// the process that holds it.
+    /// (docs/agents.md "All agents"). They carry no secret, only the name of the variable of the
+    /// process that holds it, unless the agent takes them inline ([`SessionExtras::inline_secrets`]).
     #[serde(default)]
     pub servers: Vec<InjectedServer>,
     /// Folders of skills the session adds (`<folder>/<name>/SKILL.md`).
@@ -104,6 +104,12 @@ pub struct SessionExtras {
     /// Gives a secret to a server's environment only under the variable's own name.
     pub env_by_name: bool,
     pub skills: bool,
+    /// Takes Newen's own tools ([`HOST_TOOLS`], [`BROWSER_TOOLS`]) only as MCP servers it starts
+    /// itself: the engine adds them to [`SessionSpec::servers`], run by Newen's own program.
+    pub host: bool,
+    /// Its servers inherit nothing of its environment: a secret goes in what it is sent (the
+    /// session's setup, on its stdin), never in its arguments.
+    pub inline_secrets: bool,
 }
 
 /// One of an agent's own settings, as its adapter declares it, which Newen's Settings shows on
@@ -899,6 +905,10 @@ impl ToolContent {
         vec![Self::Text(words.into())]
     }
 }
+
+/// The MCP server that carries [`HOST_TOOLS`], by the name agents see their tools under
+/// (`mcp__sessions__start_session`); the browser's is `browser`.
+pub const HOST_SERVER: &str = "sessions";
 
 /// Newen's own tools, which an adapter offers its agent where the agent can take tools from
 /// its host: a tool's name, what it is for, and the JSON schema of its input.

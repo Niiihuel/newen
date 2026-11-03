@@ -66,14 +66,40 @@ pub(crate) type Ask = Arc<
         + Sync,
 >;
 
+/// Calls of Newen's own tools that came over the bridge, waiting for their answer by id.
+type Relayed = Arc<
+    Mutex<HashMap<String, tokio::sync::oneshot::Sender<(Vec<newen_agent::ToolContent>, bool)>>>,
+>;
+
+/// How the bridge runs one of Newen's tools: as a call of the session's agent, whose answer the
+/// router sends back through `relayed` (`Router::host_answer`).
+#[cfg(unix)]
+fn relay(internal: &UnboundedSender<Internal>, relayed: &Relayed) -> bridge::Host {
+    let (internal, relayed) = (internal.clone(), relayed.clone());
+    Arc::new(move |session, name, input| {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let id = format!("bridge-{}", uuid::Uuid::new_v4().simple());
+        relayed.lock().unwrap().insert(id.clone(), reply);
+        let _ = internal.send(Internal::HostTool {
+            session,
+            id,
+            name,
+            input,
+        });
+        answer
+    })
+}
+
 /// The agents Newen has adapters for, as Settings lists them.
-const AGENTS: [&str; 2] = ["claude", "codex"];
+const AGENTS: [&str; 4] = ["claude", "codex", "opencode", "hermes"];
 
 /// The adapter for an agent id; `None` for agents Newen does not have yet.
 fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
     match agent {
         "claude" => Some(Box::new(newen_agent_claude::Claude::new())),
         "codex" => Some(Box::new(newen_agent_codex::Codex::new())),
+        "opencode" => Some(Box::new(newen_agent_opencode::OpenCode::new())),
+        "hermes" => Some(Box::new(newen_agent_hermes::Hermes::new())),
         _ => None,
     }
 }
@@ -419,10 +445,12 @@ struct Router {
     ask: Ask,
     /// The dev servers agents started with preview_start.
     servers: Arc<servers::Servers>,
-    /// What the agents' `$BROWSER` hands back; `None` when the person has a `BROWSER` of
-    /// their own or there is no private folder for it.
+    /// What the agents' `$BROWSER` hands back, and where agents that start MCP servers reach
+    /// Newen's own tools; `None` when there is no private folder for it.
     #[cfg(unix)]
     bridge: Option<bridge::Bridge>,
+    /// Calls of Newen's tools that came over the bridge, by id: their answer goes back there.
+    relayed: Relayed,
     /// The reply being read aloud: what stops it, and the task that ends once it stopped.
     reading: Option<(
         tokio::sync::oneshot::Sender<()>,
@@ -599,6 +627,9 @@ impl Router {
             config.update_log.clone(),
             announce,
         );
+        let relayed = Relayed::default();
+        #[cfg(unix)]
+        let bridge = bridge::Bridge::start(browser.clone(), relay(&internal, &relayed));
         let global = global::Layer::new(
             config.extensions.clone(),
             config
@@ -615,7 +646,8 @@ impl Router {
             ask,
             servers: Arc::default(),
             #[cfg(unix)]
-            bridge: bridge::Bridge::start(browser.clone()),
+            bridge,
+            relayed,
             browser,
             site_waits,
             sessions: HashMap::new(),
@@ -994,6 +1026,12 @@ impl Router {
                 .filter(|r| policies.contains(&r.policy))
                 .collect();
         actor.spec.servers = plan.servers;
+        // Newen's own tools, for an agent that takes tools only from servers it starts.
+        #[cfg(unix)]
+        if agent.extras.host {
+            let ours = self.bridge.as_ref().map(|b| b.servers(&actor.env));
+            actor.spec.servers.extend(ours.unwrap_or_default());
+        }
         actor.spec.skill_roots = plan.skill_roots;
         actor.env.extend(plan.env);
         actor.injected = plan.names;
@@ -2161,6 +2199,29 @@ impl Router {
         }
     }
 
+    /// The answer to a call of Newen's tools: back over the bridge when it came that way, else
+    /// to the session's agent.
+    fn host_answer(
+        &mut self,
+        session: SessionId,
+        id: String,
+        content: Vec<newen_agent::ToolContent>,
+        is_error: bool,
+    ) {
+        if let Some(reply) = self.relayed.lock().unwrap().remove(&id) {
+            let _ = reply.send((content, is_error));
+            return;
+        }
+        self.tell(
+            session,
+            Input::Command(AgentCommand::HostToolResult {
+                id,
+                content,
+                is_error,
+            }),
+        );
+    }
+
     async fn internal(&mut self, note: Internal) {
         match note {
             // Dev servers are processes, the engine's own; they open in the browser.
@@ -2266,28 +2327,14 @@ impl Router {
                 input,
             } => {
                 let (text, is_error) = self.host_tool(session, &name, &input).await;
-                self.tell(
-                    session,
-                    Input::Command(AgentCommand::HostToolResult {
-                        id,
-                        content: newen_agent::ToolContent::text(text),
-                        is_error,
-                    }),
-                );
+                self.host_answer(session, id, newen_agent::ToolContent::text(text), is_error);
             }
             Internal::HostAnswered {
                 session,
                 id,
                 content,
                 is_error,
-            } => self.tell(
-                session,
-                Input::Command(AgentCommand::HostToolResult {
-                    id,
-                    content,
-                    is_error,
-                }),
-            ),
+            } => self.host_answer(session, id, content, is_error),
             Internal::Busy { session, busy } => {
                 if busy {
                     self.busy.insert(session);

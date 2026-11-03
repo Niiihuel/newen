@@ -1216,6 +1216,8 @@ impl AgentAdapter for Codex {
             sse: false,
             env_by_name: true,
             skills: true,
+            host: false,
+            inline_secrets: false,
         }
     }
 
