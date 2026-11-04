@@ -26,6 +26,7 @@ mod registry;
 mod servers;
 mod shared;
 mod skills;
+mod suggest;
 mod update;
 
 pub use newen_browser::{native, Frame, Frames, Native, Pixels, Present};
@@ -42,11 +43,13 @@ pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
 /// "Always" joins Settings, or a dev server) and where the answer goes.
 /// Each session's agent and permission mode, as last told.
 type Modes = Arc<Mutex<HashMap<SessionId, (String, String)>>>;
+/// Each card's session too, so the cards a session's turn left open stop waiting.
 type SiteWaits = Arc<
     Mutex<
         HashMap<
             String,
             (
+                SessionId,
                 Option<String>,
                 tokio::sync::oneshot::Sender<newen_browser::Grant>,
             ),
@@ -520,7 +523,10 @@ impl Router {
                     return heard;
                 }
                 let id = format!("site-{}", uuid::Uuid::new_v4().simple());
-                waits.lock().unwrap().insert(id.clone(), (site, answer));
+                waits
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), (session, site, answer));
                 sink(Event::Agent {
                     session,
                     request: None,
@@ -1429,6 +1435,13 @@ impl Router {
         }
     }
 
+    /// Newen's own cards that `session` left open and nothing can answer now (its turn ended,
+    /// interrupted, or its agent stopped), as the UI closes them: whoever waits on one hears
+    /// that it is gone.
+    fn drop_asks(&self, session: SessionId) {
+        (self.site_waits.lock().unwrap()).retain(|_, (asker, ..)| *asker != session);
+    }
+
     /// The person answered a site permission the browser asked for: the answer is the
     /// browser's, not the agent's. "Always allow" keeps the site in Settings.
     async fn site_decided(
@@ -1437,7 +1450,7 @@ impl Router {
         permission: String,
         decision: newen_model::Decision,
     ) -> bool {
-        let Some((site, answer)) = self.site_waits.lock().unwrap().remove(&permission) else {
+        let Some((_, site, answer)) = self.site_waits.lock().unwrap().remove(&permission) else {
             return false;
         };
         let grant = match &decision {
@@ -1559,6 +1572,9 @@ impl Router {
             }
             Intent::McpClearAuth { session, name } => {
                 (session, Input::Command(AgentCommand::McpClearAuth(name)))
+            }
+            Intent::McpAdd { session, server } => {
+                (session, Input::Command(AgentCommand::McpAdd(server)))
             }
             Intent::McpToggle {
                 session,
@@ -1898,22 +1914,7 @@ impl Router {
             Intent::FindServers { query } => {
                 let ui = self.ui.clone();
                 tokio::spawn(async move {
-                    let run = newen_agent::ProgramRun {
-                        args: vec![
-                            "-sSfL".into(),
-                            "--max-time".into(),
-                            "20".into(),
-                            registry::url(&query),
-                        ],
-                        stdin: None,
-                        timeout: 25,
-                        until: None,
-                    };
-                    let home = std::env::temp_dir();
-                    let found = run_program("curl", &run, &home)
-                        .await
-                        .and_then(|body| registry::offers(&body));
-                    let (offers, error) = match found {
+                    let (offers, error) = match registry::find(&query).await {
                         Ok(offers) => (offers, None),
                         Err(error) => (vec![], Some(error)),
                     };
@@ -2259,6 +2260,31 @@ impl Router {
                     });
                 });
             }
+            // A card of connectors waits on the person, beside the router.
+            Internal::HostTool {
+                session,
+                id,
+                name,
+                input,
+            } if name == "suggest_connectors" => {
+                let (actor, ask, internal) = (
+                    self.sessions.get(&session).cloned(),
+                    self.ask.clone(),
+                    self.internal.clone(),
+                );
+                tokio::spawn(async move {
+                    let (text, is_error) = match actor {
+                        Some(actor) => suggest::connectors(&actor, &ask, session, &input).await,
+                        None => ("This session is not running.".into(), true),
+                    };
+                    let _ = internal.send(Internal::HostAnswered {
+                        session,
+                        id,
+                        content: newen_agent::ToolContent::text(text),
+                        is_error,
+                    });
+                });
+            }
             Internal::HostTool {
                 session,
                 id,
@@ -2296,6 +2322,7 @@ impl Router {
                     if self.busy.remove(&session) {
                         self.unfinished.insert(session);
                     }
+                    self.drop_asks(session);
                     self.flush(session);
                 }
                 self.hold_awake();
@@ -2349,6 +2376,7 @@ impl Router {
                 text,
                 finished,
             } => {
+                self.drop_asks(session);
                 self.read_tree(session);
                 if let Some(url) = newen_model::find_pull_request(&text) {
                     if self.pull_requests.get(&session).map(String::as_str) != Some(url) {
@@ -3015,6 +3043,9 @@ enum Input {
     RewindTo(RequestId, Option<String>),
     UndoRewind,
     Command(AgentCommand),
+    /// Ask the agent for its MCP servers, given to the sender when they come with whether
+    /// it can add one while it runs (`capabilities.mcp_add`).
+    Servers(tokio::sync::oneshot::Sender<(Vec<newen_agent::McpServer>, bool)>),
     /// Settings now allow the agent's modes that skip every approval, or no longer do.
     AllowUnsafe(bool),
     Line {
@@ -3074,6 +3105,10 @@ struct Actor {
     steers: bool,
     /// Its skills were asked for the `/` menu, once the agent was ready.
     skills_asked: bool,
+    /// Those waiting for the agent's next list of MCP servers (`Input::Servers`).
+    server_waits: Vec<tokio::sync::oneshot::Sender<(Vec<newen_agent::McpServer>, bool)>>,
+    /// The agent adds a server while it runs, as its `Ready` says.
+    adds_servers: bool,
     /// The session can be reached from another device, as the agent last said.
     remote: bool,
     /// Make it reachable once the agent is ready (Settings' new sessions).
@@ -3138,6 +3173,8 @@ impl Actor {
             held: false,
             steers: false,
             skills_asked: false,
+            server_waits: Vec::new(),
+            adds_servers: false,
             remote: false,
             remote_at_start: false,
             shared: None,
@@ -3549,6 +3586,10 @@ impl Actor {
                 Input::RewindTo(request, at) => self.rewind_to(request, at).await,
                 Input::UndoRewind => self.undo_rewind().await,
                 Input::AllowUnsafe(allow) => self.spec.allow_unsafe = allow,
+                Input::Servers(answer) => {
+                    self.server_waits.push(answer);
+                    self.write(AgentCommand::McpStatus).await;
+                }
                 Input::Command(command) => {
                     // A launch after this one runs at what was chosen last.
                     match &command {
@@ -3852,6 +3893,7 @@ impl Actor {
                 && std::mem::take(&mut self.remote_at_start);
             if let AgentEvent::Ready { capabilities, .. } = &event {
                 self.steers = capabilities.steer;
+                self.adds_servers = capabilities.mcp_add;
                 // An agent whose commands do not name its skills is asked for them apart, so
                 // the `/` menu offers them.
                 if !std::mem::replace(&mut self.skills_asked, true)
@@ -3866,6 +3908,9 @@ impl Actor {
                     .filter(|s| self.injected.contains(&s.name))
                 {
                     server.source = newen_agent::McpSource::Global;
+                }
+                for wait in self.server_waits.drain(..) {
+                    let _ = wait.send((servers.clone(), self.adds_servers));
                 }
             }
             // The pictures a tool gave back are on disk before anyone hears of them.
@@ -4966,6 +5011,37 @@ mod tests {
         let (said, refused) = router.wait_for(3, &wait(8));
         assert!(!refused && said.contains("read_session"));
         assert!(!router.waits.contains_key(&3));
+    }
+
+    #[tokio::test]
+    async fn the_cards_a_turn_left_open_stop_waiting_when_it_ends() {
+        let (mut router, _) = router();
+        let card = || serde_json::json!({ "kind": "connectors", "servers": ["linear"] });
+        let mut mine = (router.ask)(2, card(), None);
+        let mut other = (router.ask)(3, card(), None);
+        router
+            .internal(Internal::TurnEnded {
+                session: 2,
+                text: String::new(),
+                finished: false,
+            })
+            .await;
+        assert_eq!(
+            mine.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        );
+        assert_eq!(
+            other.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+        // An agent that stopped answers none of its cards either.
+        router
+            .internal(Internal::Busy {
+                session: 3,
+                busy: false,
+            })
+            .await;
+        assert!(router.site_waits.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

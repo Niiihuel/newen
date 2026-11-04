@@ -301,6 +301,82 @@ fn a_mode_change_is_told_taken_or_refused() {
     );
 }
 
+/// A server added while the session runs: `mcp_set_servers` replaces every server not of
+/// `--mcp-config`, so Newen's own SDK servers and the ones added before go in each time (2.1.317,
+/// verified with the CLI); one the CLI could not add comes back as a sign-in that failed.
+#[test]
+fn adding_a_server_keeps_newens_own_and_the_ones_added_before() {
+    let mut claude = Claude::new();
+    let docs = newen_agent::NewServer {
+        name: "context7".into(),
+        target: "https://mcp.context7.com/mcp".into(),
+        remote: true,
+        ..Default::default()
+    };
+    claude.encode(AgentCommand::McpAdd(docs));
+    let probe = newen_agent::NewServer {
+        name: "probe".into(),
+        target: "python3".into(),
+        args: vec!["probe.py".into()],
+        env: vec!["TOKEN=x=y".into()],
+        ..Default::default()
+    };
+    let sent = claude.encode(AgentCommand::McpAdd(probe));
+    let request: Value = serde_json::from_str(&sent[0]).unwrap();
+    assert_eq!(
+        request["request"],
+        json!({"subtype": "mcp_set_servers", "servers": {
+            "sessions": {"type": "sdk", "name": "sessions"},
+            "browser": {"type": "sdk", "name": "browser"},
+            "context7": {"type": "http", "url": "https://mcp.context7.com/mcp"},
+            "probe": {"type": "stdio", "command": "python3", "args": ["probe.py"], "env": {"TOKEN": "x=y"}},
+        }})
+    );
+    // The CLI's answer (2.1.317): what it added and removed, and each server it could not add.
+    let id = request["request_id"].clone();
+    let added = json!({"type": "control_response", "response": {"subtype": "success", "request_id": id,
+        "response": {"added": ["probe"], "removed": [], "errors": {}}}});
+    assert!(claude.decode(&added.to_string()).events.is_empty());
+    let bad = newen_agent::NewServer {
+        name: "bad".into(),
+        target: "nope".into(),
+        ..Default::default()
+    };
+    let sent = claude.encode(AgentCommand::McpAdd(bad));
+    let id = serde_json::from_str::<Value>(&sent[0]).unwrap()["request_id"].clone();
+    let failed = json!({"type": "control_response", "response": {"subtype": "success", "request_id": id,
+        "response": {"added": [], "removed": [], "errors": {"bad": "spawn nope ENOENT"}}}});
+    assert_eq!(
+        claude.decode(&failed.to_string()).events,
+        [AgentEvent::McpSignIn {
+            server: "bad".into(),
+            url: None,
+            error: Some("spawn nope ENOENT".into())
+        }]
+    );
+    // Not sent again with the next one.
+    let sent = claude.encode(AgentCommand::McpAdd(newen_agent::NewServer {
+        name: "other".into(),
+        target: "x".into(),
+        ..Default::default()
+    }));
+    let request: Value = serde_json::from_str(&sent[0]).unwrap();
+    assert!(request["request"]["servers"].get("bad").is_none());
+    // A new process has them from the config: not added again.
+    claude.encode(AgentCommand::Start);
+    let sent = claude.encode(AgentCommand::McpAdd(newen_agent::NewServer {
+        name: "last".into(),
+        target: "x".into(),
+        ..Default::default()
+    }));
+    let request: Value = serde_json::from_str(&sent[0]).unwrap();
+    let servers = request["request"]["servers"].as_object().unwrap();
+    assert_eq!(
+        servers.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["browser", "last", "sessions"]
+    );
+}
+
 #[test]
 fn signing_in_to_a_server_gives_its_page_or_why_not() {
     let mut claude = Claude::new();

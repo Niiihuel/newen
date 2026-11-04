@@ -665,6 +665,11 @@ pub enum Intent {
         session: SessionId,
         name: String,
     },
+    /// Add a server to the session while it runs, as its agent can (`capabilities.mcp_add`).
+    McpAdd {
+        session: SessionId,
+        server: NewServer,
+    },
     /// Turn one of the session's MCP servers on or off.
     McpToggle {
         session: SessionId,

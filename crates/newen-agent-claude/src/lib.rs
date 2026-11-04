@@ -36,6 +36,11 @@ pub struct Claude {
     skills_request: Option<String>,
     /// `mcp_authenticate` requests waiting for their answers, with their server.
     sign_ins: HashMap<String, String>,
+    /// The servers added while the session runs (`mcp_set_servers`), each as the CLI takes it:
+    /// every add sends them all again, since the request replaces the set.
+    added: serde_json::Map<String, Value>,
+    /// `mcp_set_servers` requests waiting for their answers, with the server each adds.
+    adds: HashMap<String, String>,
     interrupted: bool,
     /// The turn's answer was the CLI's `authentication_failed`: its result
     /// ends the turn with `AuthRequired`.
@@ -828,6 +833,8 @@ impl AgentAdapter for Claude {
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {
         match command {
             AgentCommand::Start => {
+                // A new process loads its servers from the config, the ones added before too.
+                self.added.clear();
                 let mut request = json!({
                     "subtype": "initialize",
                     "hooks": { "PostToolUse": [{ "hookCallbackIds": [POST_TOOL_HOOK] }] },
@@ -944,6 +951,22 @@ impl AgentAdapter for Claude {
             AgentCommand::McpClearAuth(name) => vec![self.request(json!({
                 "subtype": "mcp_clear_auth", "serverName": name,
             }))],
+            // `mcp_set_servers` replaces every server not of `--mcp-config`, Newen's own SDK
+            // servers too, so they go in again with the ones added before (2.1.317, verified:
+            // the new server's tools are usable in the turn under way).
+            AgentCommand::McpAdd(server) => {
+                self.added
+                    .insert(server.name.clone(), server_config(&server));
+                let mut servers = serde_json::Map::new();
+                for sdk in [SERVER, BROWSER_SERVER] {
+                    servers.insert(sdk.into(), json!({ "type": "sdk", "name": sdk }));
+                }
+                servers.extend(self.added.clone());
+                let line =
+                    self.request(json!({ "subtype": "mcp_set_servers", "servers": servers }));
+                self.adds.insert(self.last_request_id(), server.name);
+                vec![line]
+            }
             // The rows of the CLI's /skills menu, which it offers to hosts that draw it.
             AgentCommand::Skills => {
                 let line = self.request(json!({ "subtype": "get_skills_dialog" }));
@@ -1037,6 +1060,26 @@ impl AgentAdapter for Claude {
                             error: text(&response["error"]),
                         },
                     });
+                    return decoded;
+                }
+                // An add that failed is told as a sign-in that could not start: its card says why.
+                if let Some(server) = self.adds.remove(&id) {
+                    let error = match (ok, body["errors"][&server].as_str()) {
+                        (true, None) => None,
+                        (_, Some(said)) => Some(said.to_owned()),
+                        (false, None) => Some(
+                            (response["error"].as_str())
+                                .unwrap_or("could not add it")
+                                .to_owned(),
+                        ),
+                    };
+                    if error.is_some() {
+                        self.added.remove(&server);
+                        let url = None;
+                        decoded
+                            .events
+                            .push(AgentEvent::McpSignIn { server, url, error });
+                    }
                     return decoded;
                 }
                 if let Some(server) = self.sign_ins.remove(&id) {
@@ -1574,6 +1617,7 @@ fn ready(body: &Value, ultracode: bool) -> AgentEvent {
             mcp: true,
             mcp_toggle: true,
             mcp_clear_auth: true,
+            mcp_add: true,
             thinking_text: true,
             steer: true,
             commands: slash_commands(&body["commands"]),
@@ -1740,6 +1784,29 @@ fn marketplace_source(pasted: &str) -> String {
 /// The answer to `mcp_status` (CLI 2.1.311): each server with its status, where it came
 /// from (`source`, else `scope`), why it failed and its tools. A plugin's server is named
 /// `plugin:{plugin}:{server}`; Newen's own in-process ones are `sdk`.
+/// A server as `mcp_set_servers` takes it: an address or a command, its `K=V` environment and
+/// `Name: value` headers as maps.
+fn server_config(server: &newen_agent::NewServer) -> Value {
+    let pairs = |list: &[String], sep: char| -> serde_json::Map<String, Value> {
+        (list.iter())
+            .filter_map(|pair| pair.split_once(sep))
+            .map(|(key, value)| (key.trim().to_owned(), json!(value.trim())))
+            .collect()
+    };
+    if server.remote {
+        let mut entry = json!({ "type": "http", "url": server.target });
+        if !server.headers.is_empty() {
+            entry["headers"] = Value::Object(pairs(&server.headers, ':'));
+        }
+        return entry;
+    }
+    let mut entry = json!({ "type": "stdio", "command": server.target, "args": server.args });
+    if !server.env.is_empty() {
+        entry["env"] = Value::Object(pairs(&server.env, '='));
+    }
+    entry
+}
+
 fn mcp_servers(body: &Value) -> Vec<McpServer> {
     let servers = body["mcpServers"].as_array().into_iter().flatten();
     servers

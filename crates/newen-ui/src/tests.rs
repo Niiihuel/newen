@@ -2983,6 +2983,221 @@ fn mcp_lists_the_sessions_servers_and_reconnects_or_turns_one_on() {
     assert!(ui.mcp.is_none() && !shows(&store, &ui, "MCP servers in this session"));
 }
 
+/// The agent offers connectors it has no tools of (`suggest_connectors`): Desktop's "Connectors
+/// that could help" card, under the turn that waits on it. Its buttons work while the turn runs;
+/// once all are connected the turn goes on by itself, and the cross lets it go on without them.
+#[test]
+fn a_connectors_card_connects_in_the_turn_and_goes_on_once_all_are_connected() {
+    use newen_model::{McpServer, McpSource, McpStatus};
+    let (mut store, mut ui) = store_with_session();
+    ui.selected = Some(1);
+    let gmail = "claude.ai Gmail";
+    let server = |status| McpServer {
+        name: gmail.into(),
+        label: "Gmail".into(),
+        status,
+        source: McpSource::User,
+        plugin: None,
+        error: None,
+        tools: vec![],
+        sign_in: true,
+    };
+    agent(
+        &mut store,
+        AgentEvent::McpServers(vec![server(McpStatus::NeedsAuth)]),
+    );
+    let card = |id: &str| Event::Agent {
+        session: 1,
+        request: Some("r1".into()),
+        event: AgentEvent::PermissionRequest {
+            id: id.into(),
+            call: None,
+            tool: newen_model::SITE_PERMISSION.into(),
+            input: serde_json::json!({ "kind": "connectors", "servers": [gmail] }),
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    };
+    store.apply(card("site-1"));
+    ui.applied(&card("site-1"));
+    let window = limn::Size::new(1408.0, 844.0);
+    let shows = |store: &Store, ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(shows(&store, &ui, "Connectors that could help"));
+    assert!(shows(&store, &ui, "Needs authentication") && shows(&store, &ui, "Connect"));
+    // Connect signs in as the MCP dialog does, and its row says where the sign-in is.
+    let connect = format!("{}1:{}{gmail}", view::SUGGESTED, view::MCP_CONNECT);
+    assert_eq!(
+        click(&store, &mut ui, &connect),
+        vec![Intent::McpAuthenticate {
+            session: 1,
+            name: gmail.into()
+        }]
+    );
+    assert!(shows(&store, &ui, "Opening sign-in"));
+    // Its servers are asked for again on their own, until it is answered.
+    ui.suggested.get_mut(&1).unwrap().sign_ins.asked = std::time::Instant::now() - crate::MCP_POLL;
+    assert_eq!(ui.due(), vec![Intent::McpStatus { session: 1 }]);
+    let connected = Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::McpServers(vec![server(McpStatus::Connected)]),
+    };
+    store.apply(connected.clone());
+    assert_eq!(
+        ui.applied(&connected),
+        vec![Intent::Decide {
+            session: 1,
+            permission: "site-1".into(),
+            decision: Decision::Allow
+        }]
+    );
+    assert!(ui.suggested.is_empty() && ui.due().is_empty());
+    // The cross closes another card without connecting.
+    store.apply(card("site-2"));
+    ui.applied(&card("site-2"));
+    assert_eq!(
+        click(&store, &mut ui, "perm:site-2:deny"),
+        vec![Intent::Decide {
+            session: 1,
+            permission: "site-2".into(),
+            decision: Decision::Deny {
+                message: "The person denied this.".into()
+            }
+        }]
+    );
+    ui.applied(&Event::Decided {
+        session: 1,
+        permission: "site-2".into(),
+        decision: Decision::Allow,
+    });
+    assert!(ui.suggested.is_empty());
+    // A turn that ends with one open (interrupted) leaves nothing asking for servers.
+    ui.applied(&card("site-3"));
+    ui.applied(&Event::Agent {
+        session: 1,
+        request: Some("r1".into()),
+        event: AgentEvent::TurnFinished {
+            ok: false,
+            interrupted: true,
+            usage: Default::default(),
+            error: None,
+        },
+    });
+    assert!(ui.suggested.is_empty());
+}
+
+/// A connector the session does not have, as the MCP registry offers it (Context7 in Desktop's
+/// card): its title and words with Connect, which adds it to the running session and to the
+/// agent's config; the card goes on once it connects, and says why when it could not be added.
+#[test]
+fn a_connector_the_session_lacks_is_added_from_the_registry_and_kept() {
+    use newen_model::{McpServer, McpSource, McpStatus, NewServer, ServerOffer};
+    let (mut store, mut ui) = store_with_session();
+    ui.selected = Some(1);
+    agent(&mut store, AgentEvent::McpServers(vec![]));
+    let offer = ServerOffer {
+        name: "io.github.upstash/context7".into(),
+        title: Some("Context7".into()),
+        description: "Up-to-date docs for AI agents".into(),
+        remote: true,
+        target: "https://mcp.context7.com/mcp".into(),
+        ..ServerOffer::default()
+    };
+    let card = |id: &str| Event::Agent {
+        session: 1,
+        request: Some("r1".into()),
+        event: AgentEvent::PermissionRequest {
+            id: id.into(),
+            call: None,
+            tool: newen_model::SITE_PERMISSION.into(),
+            input: serde_json::json!({ "kind": "connectors", "servers": [], "offers": [offer] }),
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    };
+    store.apply(card("site-1"));
+    ui.applied(&card("site-1"));
+    let window = limn::Size::new(1408.0, 844.0);
+    let shows = |store: &Store, ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(shows(&store, &ui, "Context7") && shows(&store, &ui, "Up-to-date docs"));
+    let server = NewServer {
+        name: "context7".into(),
+        target: "https://mcp.context7.com/mcp".into(),
+        remote: true,
+        scope: Some("user".into()),
+        ..NewServer::default()
+    };
+    let add = format!("{}1:{}0", view::SUGGESTED, view::SUGGESTED_ADD);
+    assert_eq!(
+        click(&store, &mut ui, &add),
+        vec![
+            Intent::ExtensionOp {
+                agent: "claude".into(),
+                folder: "/work".into(),
+                op: newen_model::ExtensionOp::AddServer(server.clone()),
+            },
+            Intent::McpAdd { session: 1, server },
+            Intent::McpStatus { session: 1 },
+        ]
+    );
+    assert_eq!(ui.suggested[&1].adding, ["context7"]);
+    let listed = |status| Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::McpServers(vec![McpServer {
+            name: "context7".into(),
+            label: "context7".into(),
+            status,
+            source: McpSource::Other,
+            plugin: None,
+            error: None,
+            tools: vec![],
+            sign_in: false,
+        }]),
+    };
+    // Listed by the session: its own row from then on.
+    store.apply(listed(McpStatus::Pending));
+    assert!(ui.applied(&listed(McpStatus::Pending)).is_empty());
+    assert!(ui.suggested[&1].adding.is_empty() && shows(&store, &ui, "Connecting"));
+    store.apply(listed(McpStatus::Connected));
+    assert_eq!(
+        ui.applied(&listed(McpStatus::Connected)),
+        vec![Intent::Decide {
+            session: 1,
+            permission: "site-1".into(),
+            decision: Decision::Allow
+        }]
+    );
+    // One the session could not add says why, and can be tried again.
+    agent(&mut store, AgentEvent::McpServers(vec![]));
+    store.apply(card("site-2"));
+    ui.applied(&card("site-2"));
+    click(&store, &mut ui, &add);
+    ui.applied(&Event::Agent {
+        session: 1,
+        request: None,
+        event: AgentEvent::McpSignIn {
+            server: "context7".into(),
+            url: None,
+            error: Some("spawn failed".into()),
+        },
+    });
+    assert!(ui.suggested[&1].adding.is_empty());
+    assert!(shows(&store, &ui, "spawn failed") && shows(&store, &ui, "Connect"));
+}
+
 #[test]
 fn btw_asks_beside_the_session_and_closing_puts_it_away() {
     let (mut store, mut ui) = store_with_session();
