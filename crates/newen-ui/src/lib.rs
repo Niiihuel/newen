@@ -1847,12 +1847,11 @@ fn session_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
         // The host opens the folder; the menus close.
         ui.row_menu = None;
         ui.open_menu = None;
-    } else if let Some(s) = session("delete:") {
+    } else {
+        let s = session("delete:")?;
         ui.row_menu = None;
         ui.open_menu = None;
         ui.deleting = Some(s);
-    } else {
-        return None;
     }
     Some(vec![])
 }

@@ -304,12 +304,12 @@ fn to_rgba(bgra: &[u8]) -> Vec<u8> {
             .zip(from)
             .for_each(|(to, from)| *to = swap(*from)),
         // Not aligned to a word: pixel by pixel.
-        _ => rgba
-            .chunks_exact_mut(4)
-            .zip(bgra.chunks_exact(4))
-            .for_each(|(to, from)| {
-                to.copy_from_slice(&[from[2], from[1], from[0], from[3]]);
-            }),
+        _ => {
+            let (to, _) = rgba.as_chunks_mut::<4>();
+            for (to, &[b, g, r, a]) in to.iter_mut().zip(bgra.as_chunks::<4>().0) {
+                *to = [r, g, b, a];
+            }
+        }
     }
     rgba
 }
