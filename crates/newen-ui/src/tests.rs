@@ -7912,6 +7912,41 @@ fn a_helper_row_opens_its_pane_and_is_not_the_agent_picker() {
 
 /// Claude Code and Codex, as the engine tells the agents, the folder `/work` a project and the
 /// Customize page `page` open.
+/// Connectors' row fills Add while the lists come and once one has a connector, and Discover
+/// only once every list came empty: it does not change its look as the lists arrive.
+#[test]
+fn the_filled_connectors_button_waits_for_the_lists() {
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    let window = limn::Size::new(1408.0, 844.0);
+    let filled = |ui: &Ui, id: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        let at = frame.regions.iter().find(|r| r.id == id).unwrap().rect;
+        frame.commands.iter().any(|c| {
+            matches!(c, limn::DrawCommand::FillRect { rect, color, .. }
+                if *rect == at && *color == newen_components::look::palette().text)
+        })
+    };
+    let (discover, add) = ("srv:tab:discover", "cz:add:connectors");
+    assert!(
+        filled(&ui, add) && !filled(&ui, discover),
+        "while the lists come"
+    );
+    let listed = |agent: &str| Event::Servers {
+        agent: agent.into(),
+        folder: "/work".into(),
+        servers: vec![],
+        scopes: vec![],
+        error: None,
+    };
+    ui.applied(&listed("claude"));
+    assert!(filled(&ui, add), "one list still to come");
+    ui.applied(&listed("codex"));
+    assert!(
+        filled(&ui, discover) && !filled(&ui, add),
+        "every list came empty"
+    );
+}
+
 fn two_agents_on(page: &str) -> (Store, Ui) {
     let (store, mut ui) = store_with_session();
     let agent = |id: &str, name: &str| newen_model::AgentInfo {

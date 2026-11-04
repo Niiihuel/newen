@@ -726,14 +726,19 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
             .icon(icons::of(icon))
             .into()
     };
-    let empty = |agent_has: &dyn Fn(&AgentInfo) -> bool| !agents(ui).into_iter().any(agent_has);
+    // Nothing yet only once every list shown has come and is empty: while one loads, Add stays
+    // the filled one, so the row does not change its look as the lists arrive.
+    let empty = |is_empty: &dyn Fn(&AgentInfo) -> Option<bool>| {
+        let shown = agents(ui);
+        !shown.is_empty() && shown.into_iter().all(|a| is_empty(a) == Some(true))
+    };
     let mut tools = vec![search];
     match page.tab.as_str() {
         SETTINGS_CONNECTORS => {
             let none = empty(&|a| {
                 (ui.connectors.listed.get(&a.id))
                     .and_then(|l| l.servers.as_ref())
-                    .is_some_and(|s| !s.is_empty())
+                    .map(Vec::is_empty)
             });
             let first = agents(ui)
                 .first()
@@ -794,8 +799,7 @@ fn toolbar(ui: &Ui, page: &Page, width: f32) -> Element {
             ));
         }
         SETTINGS_PLUGINS => {
-            let none =
-                empty(&|a| (ui.extensions.get(&a.id)).is_some_and(|k| !k.list.plugins.is_empty()));
+            let none = empty(&|a| (ui.extensions.get(&a.id)).map(|k| k.list.plugins.is_empty()));
             let first = agents(ui)
                 .first()
                 .map_or(ui.agent.clone(), |a| a.id.clone());
