@@ -58,7 +58,9 @@ const COPY_RELATIVE: &str = "editor:copy-relative";
 const REVEAL: &str = "editor:reveal";
 const NOTICE: f32 = 40.0;
 /// The line under the editor: mode, file, caret, language and branch.
-const FOOTER: f32 = 26.0;
+const FOOTER: f32 = 36.0;
+/// The footer's language chip, whose menu tells the file's server, line endings and indent.
+const LANGUAGE_MENU: &str = "footer:language";
 pub const PROBLEM_NEXT: &str = "problems:next";
 const PROBLEMS_TOGGLE: &str = "problems:toggle";
 const PANE_TERMINAL: &str = "pane:terminal";
@@ -191,6 +193,71 @@ pub struct Ask {
     pub path: PathBuf,
     pub offset: usize,
     pub kind: AskKind,
+}
+
+/// How a save came: asked for (Ctrl+S, or leaving the file or the window) or a second after
+/// the last edit, which neither formats nor trims the caret's line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Saving {
+    Asked,
+    Delayed,
+}
+
+/// How long after the last edit a file saves itself, and how long a save waits on the file's
+/// formatting before it goes without it.
+const AUTOSAVE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+const FORMAT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The edits that leave no spaces or tabs at the ends of `snapshot`'s lines (`trim`, all but
+/// `keep_row`) and a line break at its end (`final_newline`), in the file's own line ending.
+pub fn tidy_edits(
+    snapshot: &BufferSnapshot,
+    trim: bool,
+    final_newline: bool,
+    keep_row: Option<usize>,
+) -> Vec<limn_editor::TextEdit> {
+    let mut edits: Vec<limn_editor::TextEdit> = vec![];
+    if trim {
+        for row in (0..snapshot.line_count()).filter(|row| Some(*row) != keep_row) {
+            let Ok(range) = snapshot.line_range(row) else {
+                continue;
+            };
+            let Ok(line) = snapshot.slice(range.clone()) else {
+                continue;
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let kept = (chars.iter())
+                .rposition(|c| !matches!(c, ' ' | '\t'))
+                .map_or(0, |i| i + 1);
+            if kept < chars.len() {
+                edits.push(limn_editor::TextEdit {
+                    range: range.start + kept..range.end,
+                    replacement: String::new(),
+                });
+            }
+        }
+    }
+    let end = snapshot.char_count();
+    let last = (end > 0)
+        .then(|| {
+            snapshot
+                .slice(end - 1..end)
+                .ok()
+                .and_then(|s| s.chars().next())
+        })
+        .flatten();
+    if final_newline && last.is_some_and(|c| !matches!(c, '\n' | '\r')) {
+        let ending = snapshot.preferred_line_ending().as_str().to_owned();
+        // The spaces trimmed at the very end make way for it, in one edit.
+        match edits.last_mut().filter(|e| e.range.end == end) {
+            Some(trimmed) => trimmed.replacement = ending,
+            None => edits.push(limn_editor::TextEdit {
+                range: end..end,
+                replacement: ending,
+            }),
+        }
+    }
+    edits
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -460,12 +527,23 @@ pub struct Ide {
     /// The "···" menu over the editor is open; the diagrams of a preview shown as source; an
     /// address a link asks the host to open in the desktop's browser.
     pub more_open: bool,
+    /// The footer's language menu is open.
+    pub language_open: bool,
     pub diagram_sources: Vec<u64>,
     pub open_url: Option<String>,
     /// Completing the word at the caret, and where the caret was last drawn, which the host
     /// reads from limn while no popover hides it.
     pub completion: Option<Completion>,
     pub caret: Option<limn::Rect>,
+    /// Saves waiting on their file's formatting, since when; each file's revision and when it
+    /// last changed, and the revision a save after a delay last took.
+    pub formatting: Vec<(PathBuf, std::time::Instant)>,
+    pub edited: HashMap<PathBuf, (u64, std::time::Instant)>,
+    pub autosaved: HashMap<PathBuf, u64>,
+    /// Whether the window has the focus, as the host says, and the file shown, as the last tick
+    /// saw them: leaving either saves with "On focus change".
+    pub window_focused: bool,
+    pub seen: (bool, Option<PathBuf>),
 }
 
 #[derive(Default)]
@@ -555,10 +633,16 @@ impl Ide {
             link_out: vec![],
             link_note: None,
             more_open: false,
+            language_open: false,
             diagram_sources: vec![],
             open_url: None,
             completion: None,
             caret: None,
+            formatting: vec![],
+            edited: HashMap::new(),
+            autosaved: HashMap::new(),
+            window_focused: true,
+            seen: (true, None),
         };
         (ide, jobs)
     }
@@ -600,11 +684,10 @@ impl Ide {
 
     pub fn update(&mut self, action: &UiAction) -> Vec<Job> {
         if let UiAction::EditorSaveRequested { id, .. } = action {
-            let buffer = self.buffers.iter().find(|b| b.editor_id() == *id);
-            let snapshot = buffer.and_then(|b| Some((b, b.editor.as_ref()?.snapshot().ok()?)));
-            return snapshot
-                .map(|(b, s)| vec![Job::Write(b.path.clone(), Save(s))])
-                .unwrap_or_default();
+            let path = (self.buffers.iter())
+                .find(|b| b.editor_id() == *id)
+                .map(|b| b.path.clone());
+            return path.map_or_else(Vec::new, |p| self.save_file(&p, Saving::Asked));
         }
         if let UiAction::InputChanged { id, value } = action {
             if id == SETTINGS_SEARCH {
@@ -654,6 +737,9 @@ impl Ide {
         // The "···" menu shuts with whatever is chosen, in it or not.
         if id != MORE {
             self.more_open = false;
+        }
+        if id != LANGUAGE_MENU {
+            self.language_open = false;
         }
         if !id.starts_with("close:") {
             self.closing = None;
@@ -1165,6 +1251,7 @@ impl Ide {
         let mut save = false;
         match id {
             MORE => self.more_open = !self.more_open,
+            LANGUAGE_MENU => self.language_open = !self.language_open,
             PROBLEM_NEXT => self.next_problem(),
             ASK_AGENT => self.ask_agent(),
             LSP_RESTART => {
@@ -1495,8 +1582,174 @@ impl Ide {
         jobs
     }
 
-    /// Move what moves on its own: the tree's springs and its peek.
-    pub fn tick(&mut self) {
+    /// Save the open file at `path` as Settings ask: its text tidied first and, on a save asked
+    /// for, formatted by its language server when one is up, the write waiting for that.
+    pub fn save_file(&mut self, path: &Path, how: Saving) -> Vec<Job> {
+        self.tidy(path, how);
+        let language = limn_language::Language::from_path(&path.to_string_lossy());
+        let server_up =
+            (self.lsp_servers.get(&language)).is_some_and(|s| s.ready && s.failure.is_none());
+        if how == Saving::Asked && self.prefs.format_on_save && server_up {
+            let offset = (self.buffers.iter().find(|b| b.path == path))
+                .and_then(|b| b.editor.as_ref()?.snapshot().ok())
+                .map_or(0, |s| s.selection().head);
+            self.lsp_asks.push(Ask {
+                path: path.to_owned(),
+                offset,
+                kind: AskKind::Format,
+            });
+            self.formatting
+                .push((path.to_owned(), std::time::Instant::now()));
+            return vec![];
+        }
+        self.write_job(path).into_iter().collect()
+    }
+
+    /// The save that waited on `path`'s formatting, once the server formatted it or could not.
+    pub fn formatted(&mut self, path: &Path) -> Vec<Job> {
+        let waiting = self.formatting.len();
+        self.formatting.retain(|(p, _)| p != path);
+        if self.formatting.len() == waiting {
+            return vec![];
+        }
+        self.write_job(path).into_iter().collect()
+    }
+
+    fn write_job(&self, path: &Path) -> Option<Job> {
+        let buffer = self.buffers.iter().find(|b| b.path == path)?;
+        let snapshot = buffer.editor.as_ref()?.snapshot().ok()?;
+        Some(Job::Write(path.to_owned(), Save(snapshot)))
+    }
+
+    /// `path`'s text as Settings leave a save: its line endings, no spaces at the ends of its
+    /// lines (after a delay, not on the caret's) and a line break at its end, each one step to
+    /// undo, seen in the editor.
+    fn tidy(&mut self, path: &Path, how: Saving) {
+        let Some(editor) =
+            (self.buffers.iter().find(|b| b.path == path)).and_then(|b| b.editor.clone())
+        else {
+            return;
+        };
+        let shared = editor.shared_buffer();
+        let Ok(mut text) = shared.lock() else {
+            return;
+        };
+        let ending = match self.prefs.line_ending.as_str() {
+            "lf" => Some(limn_editor::LineEnding::Lf),
+            "crlf" => Some(limn_editor::LineEnding::CrLf),
+            _ => None,
+        };
+        if let Some(ending) = ending.filter(|e| *e != text.preferred_line_ending()) {
+            let _ = text.execute_command(limn_editor::EditorCommand::SetLineEnding(ending), 0);
+        }
+        let snapshot = text.snapshot();
+        let caret_row = (how == Saving::Delayed)
+            .then(|| snapshot.position_of(snapshot.selection().head).ok())
+            .flatten()
+            .map(|p| p.row);
+        let trim = self.prefs.trim_whitespace;
+        let edits = tidy_edits(&snapshot, trim, self.prefs.final_newline, caret_row);
+        if !edits.is_empty() {
+            let grown: isize = (edits.iter())
+                .map(|e| e.replacement.chars().count() as isize - e.range.len() as isize)
+                .sum();
+            let after = (snapshot.char_count() as isize + grown).max(0) as usize;
+            let head = snapshot.selection().head;
+            // The caret stays where it was, less what went before it.
+            let gone: usize = (edits.iter())
+                .filter(|e| e.range.end <= head)
+                .map(|e| e.range.len())
+                .sum();
+            let caret = Selection::caret((head - gone).min(after));
+            let _ = text.apply_transaction(&edits, caret, EditKind::Replace, 0);
+        }
+    }
+
+    /// When the host should look again, for a save due a second after an edit or a formatting
+    /// that is late.
+    pub fn next_due(&self) -> Option<std::time::Duration> {
+        let now = std::time::Instant::now();
+        let mut due = (self.formatting.iter())
+            .map(|(_, at)| FORMAT_WAIT.saturating_sub(now - *at))
+            .min();
+        if self.prefs.autosave == "delay" {
+            for buffer in self.buffers.iter().filter(|b| b.dirty()) {
+                if let Some((_, at)) = self.edited.get(&buffer.path) {
+                    let wait = AUTOSAVE_DELAY.saturating_sub(now - *at);
+                    due = Some(due.map_or(wait, |d| d.min(wait)));
+                }
+            }
+        }
+        due
+    }
+
+    /// The saves that are due: a second after the last edit, on leaving a file or the window,
+    /// and those whose formatting never came.
+    fn due_saves(&mut self) -> Vec<Job> {
+        let now = std::time::Instant::now();
+        let mut due: Vec<(PathBuf, Saving)> = vec![];
+        for buffer in &self.buffers {
+            let Some(revision) = (buffer.editor.as_ref())
+                .and_then(|e| e.snapshot().ok())
+                .map(|s| s.revision())
+            else {
+                continue;
+            };
+            let edited = self
+                .edited
+                .entry(buffer.path.clone())
+                .or_insert((revision, now));
+            if edited.0 != revision {
+                *edited = (revision, now);
+            }
+            let quiet = now - edited.1 >= AUTOSAVE_DELAY;
+            if self.prefs.autosave == "delay"
+                && buffer.dirty()
+                && quiet
+                && self.autosaved.get(&buffer.path) != Some(&revision)
+            {
+                self.autosaved.insert(buffer.path.clone(), revision);
+                due.push((buffer.path.clone(), Saving::Delayed));
+            }
+        }
+        let shown = self.active_buffer().map(|b| b.path.clone());
+        let (was_focused, was_shown) =
+            std::mem::replace(&mut self.seen, (self.window_focused, shown.clone()));
+        if self.prefs.autosave == "focus" {
+            let dirty = |path: &PathBuf| self.buffers.iter().any(|b| b.path == *path && b.dirty());
+            if was_focused && !self.window_focused {
+                due.extend(
+                    self.buffers
+                        .iter()
+                        .filter(|b| b.dirty())
+                        .map(|b| (b.path.clone(), Saving::Asked)),
+                );
+            } else if let Some(left) = was_shown.filter(|p| shown.as_ref() != Some(p) && dirty(p)) {
+                due.push((left, Saving::Asked));
+            }
+        }
+        let late: Vec<PathBuf> = (self.formatting.iter())
+            .filter(|(_, at)| now - *at >= FORMAT_WAIT)
+            .map(|(p, _)| p.clone())
+            .collect();
+        let mut jobs = vec![];
+        for path in late {
+            jobs.extend(self.formatted(&path));
+        }
+        for (path, how) in due {
+            jobs.extend(self.save_file(&path, how));
+        }
+        jobs
+    }
+
+    /// Move what moves on its own: the tree's springs and its peek, and the saves that are due.
+    pub fn tick(&mut self) -> Vec<Job> {
+        let jobs = self.due_saves();
+        self.tick_motion();
+        jobs
+    }
+
+    fn tick_motion(&mut self) {
         let now = std::time::Instant::now();
         // The pace of limn's own opening and closing slots, as Newen's.
         let motion = limn::SpringMotion::settling_in(std::time::Duration::from_millis(
@@ -2312,6 +2565,18 @@ fn editor(ide: &Ide, width: f32, height: f32) -> Element {
                 .vim_mode(ide.prefs.vim)
                 .soft_wrap(ide.prefs.wrap)
                 .minimap(ide.prefs.minimap)
+                .line_numbers(ide.prefs.line_numbers)
+                .highlight_current_line(ide.prefs.current_line)
+                .indent_guides(ide.prefs.indent_guides)
+                .show_whitespace(ide.prefs.whitespace)
+                .rulers((ide.prefs.ruler > 0).then_some(ide.prefs.ruler as usize))
+                .caret_style(match ide.prefs.caret.as_str() {
+                    "block" => limn::CaretStyle::Block,
+                    "underline" => limn::CaretStyle::Underline,
+                    _ => limn::CaretStyle::Line,
+                })
+                .caret_blink(ide.prefs.caret_blink)
+                .auto_pairs(ide.prefs.auto_pairs)
                 .vim_mode_label(false)
                 .context_actions(context_actions(ide.prefs.vim))
                 .change_marks(
@@ -2825,17 +3090,17 @@ fn structure_controls(
     (folds, scopes)
 }
 
-/// The gutter's marks, as editors draw them: added rows in Newen's added green, changed rows
-/// in its cursor blue, removed lines in its removed red.
+/// The gutter's marks, as editors draw them: added rows in Newen's sage, changed rows in its
+/// slate, removed lines in its clay.
 fn change_marks(changes: &[(std::ops::Range<usize>, Change)]) -> Vec<limn::CodeChangeMark> {
     changes
         .iter()
         .map(|(rows, change)| limn::CodeChangeMark {
             rows: rows.clone(),
             color: match change {
-                Change::Added => look::added(),
-                Change::Changed => look::cursor(),
-                Change::Removed => look::removed(),
+                Change::Added => look::diff_added(),
+                Change::Changed => look::diff_changed(),
+                Change::Removed => look::diff_removed(),
             },
         })
         .collect()
@@ -2872,40 +3137,62 @@ pub fn indent_style(prefs: &Prefs) -> limn_editor::IndentStyle {
     }
 }
 
-/// The line under the editor, quiet as Newen's pane headers: the Vim mode, the file and
-/// whether it is saved, then the caret, the language, the line ending and the branch.
+/// The line under the editor, in the chips under Newen's composer: on the left, filled as its
+/// place and folder are, the branch, Vim's mode and whether the file is saved; on the right,
+/// quiet as its mode and model, what the IDE says, the problems, the language with its server's
+/// state, and the caret.
 fn footer(ide: &Ide, width: f32) -> Element {
-    let small = |s: String| muted(s).font_size(SMALL).centered_y();
-    let mut lead = vec![hgap(12.0)];
+    let ink = look::palette().text;
+    let label = |s: String, ink: limn::Color| text(s).font_size(SMALL).foreground(ink).centered_y();
+    let glyph = |name: &'static str, ink: limn::Color| {
+        Element::icon(icons::of(name))
+            .foreground(ink)
+            .size(Some(14.0), Some(14.0))
+            .centered_y()
+    };
+    let dot = |ink: limn::Color| limn::StatusDot::new(ink).size(6.0).render().centered_y();
+    let mut lead = vec![];
+    if let Some(branch) = &ide.branch {
+        lead.push(filled(vec![
+            glyph(icons::GIT_BRANCH, ink),
+            label(branch.clone(), ink),
+        ]));
+    }
     let buffer = ide.active_buffer();
     if let Some(mode) = ide.vim_mode.filter(|_| buffer.is_some() && ide.prefs.vim) {
-        let ink = match mode {
+        let mode_ink = match mode {
             limn::VimMode::Insert => look::running(),
             limn::VimMode::Normal => look::muted(),
             _ => look::pro(),
         };
-        // Said as the rest of the footer, "Normal", in the mode's ink.
-        let label = mode.label().to_lowercase();
-        let mut chars = label.chars();
-        let label: String = chars
-            .next()
+        // "Normal", in the mode's ink.
+        let words = mode.label().to_lowercase();
+        let mut chars = words.chars();
+        let words: String = (chars.next())
             .map(|c| c.to_uppercase().chain(chars).collect())
             .unwrap_or_default();
-        lead.push(text(label).font_size(SMALL).foreground(ink).centered_y());
+        lead.push(filled(vec![label(words, mode_ink)]));
     }
-    let mut tail = vec![];
-    for note in [&ide.link_note, &ide.lsp_note].into_iter().flatten() {
-        tail.push(small(note.clone()));
-    }
+    let mut tail: Vec<Element> = [&ide.link_note, &ide.lsp_note]
+        .into_iter()
+        .flatten()
+        .map(|note| label(note.clone(), look::muted()))
+        .collect();
     let Some(buffer) = buffer else {
-        lead.push(small(name(&ide.root)));
-        return footer_row(ide, lead, tail, width);
+        lead.push(filled(vec![
+            glyph(icons::FOLDER, ink),
+            label(name(&ide.root), ink),
+        ]));
+        return footer_row(lead, tail, width);
     };
     if buffer.dirty() {
-        lead.push(small("Unsaved".into()));
+        lead.push(filled(vec![
+            dot(look::awaiting()),
+            label("Unsaved".into(), ink),
+        ]));
     }
     let Some(snapshot) = buffer.editor.as_ref().and_then(|e| e.snapshot().ok()) else {
-        return footer_row(ide, lead, tail, width);
+        return footer_row(lead, tail, width);
     };
     // Errors and warnings, each by its mark; a press goes to the next.
     let found = ide
@@ -2914,18 +3201,13 @@ fn footer(ide: &Ide, width: f32) -> Element {
         .and_then(|d| d.at(snapshot.revision()));
     let count = |severity| found.map_or(0, |d| d.iter().filter(|d| d.severity == severity).count());
     let mut problems = vec![];
-    for (icon, ink, n) in [
+    for (icon, mark, n) in [
         (icons::ERROR, look::failed(), count(1)),
         (icons::WARNING, look::awaiting(), count(2)),
     ] {
         if n > 0 {
-            problems.push(
-                Element::icon(icons::of(icon))
-                    .foreground(ink)
-                    .size(Some(13.0), Some(13.0))
-                    .centered_y(),
-            );
-            problems.push(small(n.to_string()));
+            problems.push(glyph(icon, mark));
+            problems.push(label(n.to_string(), ink));
         }
     }
     if !problems.is_empty() {
@@ -2937,45 +3219,62 @@ fn footer(ide: &Ide, width: f32) -> Element {
             Some("F8 goes to the next one."),
         ));
     }
-    // The file's language server: a dot of its state, and what it is in the tooltip.
+    // The language, led by its server's state; its menu says the rest of the file.
+    let ext = (buffer.path.extension())
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
     let language = limn_language::Language::from_path(&buffer.path.to_string_lossy());
-    if let Some(server) = ide.lsp_servers.get(&language) {
-        let (ink, says) = match (&server.failure, server.ready) {
-            (Some(why), _) => (look::failed(), why.clone()),
-            (None, true) => (look::running(), format!("{} is running", server.name)),
-            (None, false) => (look::awaiting(), format!("{} is starting", server.name)),
+    let server = ide.lsp_servers.get(&language);
+    let mut shown = vec![];
+    let mut entries = vec![];
+    if let Some(server) = server {
+        let (state_ink, state) = match (&server.failure, server.ready) {
+            (Some(_), _) => (look::failed(), "Stopped"),
+            (None, true) => (look::running(), "Running"),
+            (None, false) => (look::awaiting(), "Starting"),
         };
-        let dot = limn::StatusDot::new(ink).size(6.0).render().centered_y();
-        if server.failure.is_some() {
-            // Down, it says so, and a press starts it again: after installing it, too.
-            let label = if server.ready {
-                format!("{} stopped", server.name)
-            } else {
-                server.name.clone()
-            };
-            let again = Element::icon(icons::of(icons::RELOAD))
-                .foreground(look::muted())
-                .size(Some(13.0), Some(13.0))
-                .centered_y();
-            let more = match &server.hint {
-                Some(hint) => format!("{hint}. Click to start it again."),
-                None => "Click to start it again.".to_owned(),
-            };
-            tail.push(chip(
-                LSP_RESTART,
-                vec![dot, small(label), again],
-                &says,
-                None,
-                Some(&more),
-            ));
-        } else {
-            let item = Element::row(vec![hgap(6.0), dot, small(server.name.clone()), hgap(6.0)])
-                .gap(6.0)
-                .size(None, Some(22.0));
-            let tip = limn::Tooltip::new(item, "footer:server", says, look::palette());
-            tail.push(tip.render().centered_y());
-        }
+        shown.push(dot(state_ink));
+        entries.push(limn::DropdownMenuEntry::Heading("Language server".into()));
+        let item = limn::DropdownMenuItem::new(LSP_RESTART, server.name.clone());
+        entries.push(
+            match &server.failure {
+                // Down, a press starts it again: after installing it, too.
+                Some(why) => item.description(match &server.hint {
+                    Some(hint) => format!("{why}. {hint}. Choose to start it again."),
+                    None => format!("{why}. Choose to start it again."),
+                }),
+                None => item.annotation(state).disabled(),
+            }
+            .into(),
+        );
     }
+    shown.push(label(language_name(ext).into(), ink));
+    shown.push(glyph(icons::CARET_DOWN, look::muted()));
+    let ending = match snapshot.preferred_line_ending() {
+        limn_editor::LineEnding::CrLf => "CRLF",
+        _ => "LF",
+    };
+    let indent = match indent_style(&ide.prefs) {
+        limn_editor::IndentStyle::Spaces(n) => format!("{n} spaces"),
+        limn_editor::IndentStyle::Tabs(n) => format!("Tabs, {n} wide"),
+    };
+    entries.push(limn::DropdownMenuEntry::Heading("File".into()));
+    for (what, value) in [("Line endings", ending.to_owned()), ("Indentation", indent)] {
+        let item = limn::DropdownMenuItem::new(format!("{LANGUAGE_MENU}:{what}"), what);
+        entries.push(item.annotation(value).disabled().into());
+    }
+    let trigger = quiet(LANGUAGE_MENU, shown, ide.language_open);
+    tail.push(
+        menu(
+            trigger,
+            entries,
+            ide.language_open,
+            LANGUAGE_MENU,
+            260.0,
+            limn::PopoverPlacement::TopEnd,
+        )
+        .centered_y(),
+    );
     let at = snapshot
         .position_of(snapshot.selection().head)
         .unwrap_or_default();
@@ -2986,48 +3285,59 @@ fn footer(ide: &Ide, width: f32) -> Element {
     }
     tail.push(chip(
         QUICK_LINE,
-        vec![small(caret)],
+        vec![label(caret, ink)],
         "Go to line",
         Some("Ctrl+G"),
         None,
     ));
-    let ext = buffer
-        .path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    tail.push(small(language_name(ext).into()));
-    let ending = match snapshot.preferred_line_ending() {
-        limn_editor::LineEnding::CrLf => "CRLF",
-        _ => "LF",
-    };
-    tail.push(small(ending.into()));
-    footer_row(ide, lead, tail, width)
+    footer_row(lead, tail, width)
 }
 
-/// The footer's line: what is said of the file on the left, the rest and the branch on the
-/// right, under a hairline.
-fn footer_row(ide: &Ide, lead: Vec<Element>, mut tail: Vec<Element>, width: f32) -> Element {
-    if let Some(branch) = &ide.branch {
-        let icon = Element::icon(icons::of(icons::GIT_BRANCH))
-            .foreground(look::muted())
-            .size(Some(13.0), Some(13.0))
-            .centered_y();
-        let name = muted(branch.clone()).font_size(SMALL).centered_y();
-        tail.push(Element::row(vec![icon, name]).gap(4.0));
-    }
-    tail.push(hgap(8.0));
-    let mut row = lead;
+/// A footer chip that only says something, filled as the composer's "Local" and folder.
+fn filled(content: Vec<Element>) -> Element {
+    let mut row = vec![hgap(8.0)];
+    row.extend(content);
+    row.push(hgap(8.0));
+    Element::row(row)
+        .gap(6.0)
+        .background(look::cancel())
+        .radius(6.0)
+        .size(None, Some(24.0))
+        .centered_y()
+}
+
+/// The footer's row: the filled chips on the left, the quiet ones on the right, on the
+/// editor's own ground, with no line over it.
+fn footer_row(lead: Vec<Element>, tail: Vec<Element>, width: f32) -> Element {
+    let mut row = vec![hgap(10.0)];
+    row.push(Element::row(lead).gap(6.0).shrink_to_fit().centered_y());
     row.push(Element::spacer().flex(1.0));
-    row.extend(tail);
-    Element::column(vec![
-        hline(width, look::pane_border()),
-        Element::row(row).gap(8.0).size(None, Some(FOOTER - 1.0)),
-    ])
+    row.push(Element::row(tail).gap(2.0).centered_y());
+    row.push(hgap(10.0));
+    Element::row(row).size(Some(width), Some(FOOTER))
 }
 
-/// A footer item that does something, as Newen's composer chips: filled under
-/// the pointer, with what it does, its keys and more in its tooltip.
+/// A footer chip that does something, quiet as the composer's mode and model: filled under
+/// the pointer, and while its menu is `open`.
+fn quiet(id: &str, content: Vec<Element>, open: bool) -> Element {
+    let mut items = vec![hgap(8.0)];
+    items.extend(content);
+    items.push(hgap(8.0));
+    let row = Element::row(items).gap(6.0).size(None, Some(24.0));
+    let chip = ComponentPalette {
+        hover: look::chip_hover(),
+        ..look::palette()
+    }
+    .interactive_surface(Element::clickable(id, row))
+    .radius(6.0);
+    if open {
+        chip.background(look::chip_hover())
+    } else {
+        chip
+    }
+}
+
+/// [`quiet`], with what it does, its keys and more in its tooltip.
 fn chip(
     id: &str,
     content: Vec<Element>,
@@ -3035,17 +3345,7 @@ fn chip(
     keys: Option<&str>,
     more: Option<&str>,
 ) -> Element {
-    let mut items = vec![hgap(6.0)];
-    items.extend(content);
-    items.push(hgap(6.0));
-    let row = Element::row(items).gap(4.0).size(None, Some(22.0));
-    let chip = ComponentPalette {
-        hover: look::chip_hover(),
-        ..look::palette()
-    }
-    .interactive_surface(Element::clickable(id, row))
-    .radius(6.0);
-    let mut tip = limn::Tooltip::new(chip, id, tip, look::palette());
+    let mut tip = limn::Tooltip::new(quiet(id, content, false), id, tip, look::palette());
     if let Some(keys) = keys {
         tip = tip.shortcut(keys);
     }
@@ -3135,6 +3435,198 @@ mod tests {
 
     fn stamp(secs: u64) -> Stamp {
         Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+    }
+
+    /// The footer's chips: the branch filled on the left, the language and the caret quiet on
+    /// the right; the language's menu tells the file's line endings and indent.
+    #[test]
+    fn the_footer_is_chips_and_the_language_tells_the_rest_of_the_file() {
+        let mut ide = with_files();
+        ide.branch = Some("main".into());
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let window = Size::new(1200.0, 800.0);
+        let words = |ide: &Ide| -> Vec<String> {
+            let frame = UiTree::new(view(ide, window)).layout(window);
+            let mut words: Vec<String> = (frame.commands.iter())
+                .filter_map(|c| match c {
+                    limn::DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Text the backend lays out itself is in the frame's runs.
+            words.extend(
+                frame
+                    .text_layouts()
+                    .into_iter()
+                    .flat_map(|b| b.runs)
+                    .map(|r| r.text),
+            );
+            words
+        };
+        let shown = words(&ide);
+        for chip in ["main", "Rust", "Ln 1, Col 1"] {
+            assert!(shown.iter().any(|w| w == chip), "{chip}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|w| w == "Line endings"));
+        click(&mut ide, LANGUAGE_MENU);
+        assert!(ide.language_open);
+        let shown = words(&ide);
+        for said in ["Line endings", "LF", "Indentation", "4 spaces"] {
+            assert!(shown.iter().any(|w| w == said), "{said}: {shown:?}");
+        }
+        // Anything else chosen shuts it.
+        click(&mut ide, QUICK_LINE);
+        assert!(!ide.language_open);
+    }
+
+    #[test]
+    fn a_save_trims_line_ends_and_ends_in_a_line_break_in_one_edit() {
+        let tidied = |text: &str, trim, newline, keep| {
+            let snapshot = TextBuffer::new(text).unwrap().snapshot();
+            let mut text = text.to_owned();
+            let mut edits = tidy_edits(&snapshot, trim, newline, keep);
+            edits.sort_by_key(|e| std::cmp::Reverse(e.range.start));
+            for edit in edits {
+                let start = text
+                    .char_indices()
+                    .nth(edit.range.start)
+                    .map_or(text.len(), |(i, _)| i);
+                let end = text
+                    .char_indices()
+                    .nth(edit.range.end)
+                    .map_or(text.len(), |(i, _)| i);
+                text.replace_range(start..end, &edit.replacement);
+            }
+            text
+        };
+        assert_eq!(tidied("a  \n\tb\t\nc", true, false, None), "a\n\tb\nc");
+        assert_eq!(tidied("a  \nb  ", true, true, None), "a\nb\n");
+        assert_eq!(tidied("a  \nb  ", true, false, Some(1)), "a\nb  ");
+        assert_eq!(tidied("x\r\ny", false, true, None), "x\r\ny\r\n");
+        assert_eq!(tidied("done\n", true, true, None), "done\n");
+        assert_eq!(tidied("", true, true, None), "");
+    }
+
+    fn written(jobs: &[Job]) -> Option<String> {
+        jobs.iter().find_map(|job| match job {
+            Job::Write(_, Save(snapshot)) => Some(snapshot.chunks().collect()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_save_asked_for_tidies_the_text_and_can_be_undone() {
+        let mut ide = with_files();
+        (ide.prefs.trim_whitespace, ide.prefs.final_newline) = (true, true);
+        ide.prefs.line_ending = "crlf".into();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}   \nfn b() {}");
+        let id = ide.buffers[0].editor_id();
+        let jobs = ide.update(&UiAction::EditorSaveRequested {
+            id,
+            document_id: 0,
+            revision: 0,
+        });
+        assert_eq!(
+            written(&jobs).as_deref(),
+            Some("fn a() {}\r\nfn b() {}\r\n")
+        );
+        assert_eq!(text_of(&ide.buffers[0]), "fn a() {}\r\nfn b() {}\r\n");
+    }
+
+    #[test]
+    fn a_file_saves_itself_a_second_after_the_last_edit_but_not_the_line_being_written() {
+        let mut ide = with_files();
+        ide.prefs.autosave = "delay".into();
+        ide.prefs.trim_whitespace = true;
+        ide.prefs.format_on_save = true;
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}  \n");
+        type_in(&ide.buffers[0], 12, "let ");
+        assert!(ide.tick().is_empty(), "not yet: it was just written");
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        for edited in ide.edited.values_mut() {
+            edited.1 = past;
+        }
+        // The caret is at the end of "let ", on the second line: that line keeps its space.
+        assert_eq!(written(&ide.tick()).as_deref(), Some("fn a() {}\nlet "));
+        assert!(
+            ide.lsp_asks.is_empty(),
+            "no formatting on a save after a delay"
+        );
+        assert!(written(&ide.tick()).is_none(), "once for that edit");
+    }
+
+    #[test]
+    fn a_formatted_save_waits_for_the_server_but_not_forever() {
+        let mut ide = with_files();
+        ide.prefs.format_on_save = true;
+        ide.lsp_servers.insert(
+            limn_language::Language::Rust,
+            Server {
+                name: "rust-analyzer".into(),
+                ready: true,
+                failure: None,
+                hint: None,
+            },
+        );
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let id = ide.buffers[0].editor_id();
+        let save = UiAction::EditorSaveRequested {
+            id,
+            document_id: 0,
+            revision: 0,
+        };
+        assert!(
+            written(&ide.update(&save)).is_none(),
+            "it waits for the formatting"
+        );
+        assert!(matches!(
+            ide.lsp_asks.last(),
+            Some(Ask {
+                kind: AskKind::Format,
+                ..
+            })
+        ));
+        assert!(written(&ide.formatted(Path::new("/r/a.rs"))).is_some());
+        // A server that never answers: the save goes on without it.
+        ide.update(&save);
+        ide.formatting[0].1 -= std::time::Duration::from_secs(4);
+        assert!(written(&ide.tick()).is_some());
+        assert!(ide.formatting.is_empty());
+    }
+
+    #[test]
+    fn on_focus_change_leaving_the_window_saves_what_changed() {
+        let mut ide = with_files();
+        ide.prefs.autosave = "focus".into();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        ide.tick();
+        type_in(&ide.buffers[0], 0, "// ");
+        assert!(written(&ide.tick()).is_none());
+        ide.window_focused = false;
+        assert_eq!(written(&ide.tick()).as_deref(), Some("// fn a() {}\n"));
+    }
+
+    #[test]
+    fn the_editor_draws_as_settings_say() {
+        let mut ide = with_files();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let window = Size::new(1200.0, 800.0);
+        let drawn = |ide: &Ide, words: &str| {
+            let frame = UiTree::new(view(ide, window)).layout(window);
+            (frame.commands.iter())
+                .any(|c| matches!(c, limn::DrawCommand::Text { text, .. } if text == words))
+        };
+        assert!(drawn(&ide, "1") && !drawn(&ide, "\u{b7}"));
+        ide.prefs.line_numbers = false;
+        ide.prefs.whitespace = true;
+        assert!(!drawn(&ide, "1"), "no line numbers");
+        assert!(drawn(&ide, "\u{b7}"), "a space marked");
     }
 
     #[test]

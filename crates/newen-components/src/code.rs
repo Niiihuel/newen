@@ -5,17 +5,31 @@ use crate::look;
 use limn::{EditorController, Element};
 use std::path::Path;
 
-/// The inks code is drawn in: types, properties and functions apart, as newen-ide's.
+/// The inks code is drawn in, Newen's own (look's `code_*`): types, properties and functions
+/// apart, as newen-ide's.
 pub fn syntax_colors() -> limn::CodeSyntaxColors {
     limn::CodeSyntaxColors {
-        text: look::palette().text,
-        string: look::added(),
-        keyword: look::keyword(),
-        function: Some(look::cursor()),
-        interpolation: Some(look::removed()),
-        types: Some(look::pro()),
-        properties: Some(look::mention()),
-        ..limn::CodeSyntaxColors::for_palette(look::palette())
+        text: look::code_text(),
+        keyword: look::code_keyword(),
+        string: look::code_string(),
+        number: look::code_number(),
+        comment: look::code_comment(),
+        function: Some(look::code_function()),
+        interpolation: Some(look::code_interpolation()),
+        types: Some(look::code_type()),
+        properties: Some(look::code_property()),
+    }
+}
+
+/// A diff's tints, markers and bar in Newen's sage and clay.
+pub fn diff_colors() -> limn::DiffColors {
+    limn::DiffColors {
+        add_row: look::diff_add_row(),
+        add_word: look::diff_add_word(),
+        del_row: look::diff_del_row(),
+        del_word: look::diff_del_word(),
+        add_bar: look::diff_added(),
+        del_bar: look::diff_removed(),
     }
 }
 
@@ -26,15 +40,29 @@ pub fn is_markdown(path: &Path) -> bool {
     )
 }
 
+/// The language `path` is coloured as, from its extension.
+pub fn language(path: &Path) -> limn::CodeLanguage {
+    limn::CodeLanguage::from_code_fence(path.extension().and_then(|e| e.to_str()).unwrap_or(""))
+}
+
 /// The editor for `path`: its language, Newen's inks and Newen's rail, arrows and thumb, as
 /// every other scroll surface. The host sets the rest (size, keys, what it marks).
 pub fn editor(id: impl Into<String>, editor: &EditorController, path: &Path) -> limn::CodeEditor {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     limn::CodeEditor::new(id, editor.clone())
         .palette(look::palette())
-        .language(limn::CodeLanguage::from_code_fence(ext))
+        .language(language(path))
         .syntax_colors(syntax_colors())
         .scrollbar_appearance(limn::ScrollbarAppearance::default())
+}
+
+/// A diff of `path`: its language, and Newen's inks and tints, as the editor reads it. The
+/// host sets the rest (size, words, height).
+pub fn diff(id: impl Into<String>, lines: Vec<limn::CodeDiffLine>, path: &Path) -> limn::CodeDiff {
+    limn::CodeDiff::new(id, lines)
+        .palette(look::palette())
+        .language(language(path))
+        .colors(diff_colors())
+        .syntax_colors(syntax_colors())
 }
 
 /// Where a Markdown preview's ids go: itself, its scroll, and the prefixes of its links' and

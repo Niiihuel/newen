@@ -335,13 +335,59 @@ fn a_question_is_answered_with_the_picked_option() {
 
 #[test]
 fn a_rewritten_line_marks_only_what_changed() {
-    let lines = view::parse_patch("@@ -1,2 +1,2 @@\n-    print(\"Hola \" + nombre)\n+    print(f\"Hola, {nombre}!\")\n context\n");
+    let lines = view::unfold(view::patch_parts("@@ -1,2 +1,2 @@\n-    print(\"Hola \" + nombre)\n+    print(f\"Hola, {nombre}!\")\n context\n", None), &[], []);
     let words = view::word_ranges(&lines);
     assert_eq!(lines.len(), 3);
     // Common start "    print(" (10) and common end ")" (1).
     assert_eq!(words[0], vec![10..26]);
     assert_eq!(words[1], vec![10..28]);
     assert!(words[2].is_empty());
+}
+
+#[test]
+fn a_patch_folds_the_lines_before_and_between_its_hunks() {
+    use limn::CodeDiffLineKind::*;
+    use view::DiffPart::{Gap, Line};
+    let line = |kind, new: Option<usize>, text: &str| {
+        Line(limn::CodeDiffLine {
+            kind,
+            old_line: None,
+            new_line: new,
+            text: text.into(),
+        })
+    };
+    // The gaps only, with each line's new number: the old ones are the editor's to show.
+    let parts = |patch: &str| -> Vec<view::DiffPart> {
+        (view::patch_parts(patch, None).into_iter())
+            .map(|part| match part {
+                Line(l) => line(l.kind, l.new_line, &l.text),
+                gap => gap,
+            })
+            .collect()
+    };
+    let gap = |count| Gap { count, from: None };
+    assert_eq!(
+        parts("@@ -5,2 +5,2 @@\n-a\n+b\n c\n@@ -20,1 +20,2 @@\n x\n+y\n"),
+        [
+            gap(4),
+            line(Removed, None, "a"),
+            line(Added, Some(5), "b"),
+            line(Context, Some(6), "c"),
+            gap(13),
+            line(Context, Some(20), "x"),
+            line(Added, Some(21), "y"),
+        ]
+    );
+    // An empty side names the line before it: line 3 went, after two unchanged ones.
+    assert_eq!(parts("@@ -3 +2,0 @@\n-z\n")[0], gap(2));
+    // A new file starts at its first line, with nothing folded.
+    assert_eq!(parts("@@ -0,0 +1 @@\n+n\n"), [line(Added, Some(1), "n")]);
+    // Folded, a gap says what Desktop's says.
+    let rows = view::unfold(view::patch_parts("@@ -3 +2,0 @@\n-z\n", None), &[], []);
+    assert_eq!(
+        (rows[0].kind, rows[0].text.as_str()),
+        (Folded, "Show more lines")
+    );
 }
 
 #[test]
@@ -748,6 +794,256 @@ fn steps_are_named_in_desktops_words() {
     let kinds: Vec<_> = lines.iter().map(|l| l.kind).collect();
     use limn::CodeDiffLineKind::*;
     assert_eq!(kinds, [Context, Removed, Added, Context]);
+}
+
+#[test]
+fn a_diff_folds_its_long_unchanged_runs_and_opens_each_as_clicked() {
+    use view::{fold_unchanged, line_diff, unfold};
+    let before: String = (0..40).map(|n| format!("l{n}\n")).collect();
+    let after = before.replace("l10\n", "L10\n").replace("l25\n", "L25\n");
+    let folds = |opened: &[usize]| -> Vec<(usize, String)> {
+        let text: Vec<&str> = after.lines().collect();
+        unfold(
+            fold_unchanged(line_diff(&before, &after)),
+            &text,
+            opened.iter().copied(),
+        )
+        .into_iter()
+        .enumerate()
+        .filter(|(_, l)| l.kind == limn::CodeDiffLineKind::Folded)
+        .map(|(row, l)| (row, l.text))
+        .collect()
+    };
+    let fold = |row: usize| (row, "Show more lines".to_owned());
+    let last = fold(31);
+    assert_eq!(folds(&[]), [fold(0), fold(9), fold(18)]);
+    // Each click reads against the folds still closed when it came.
+    assert_eq!(folds(&[9, 0]), std::slice::from_ref(&last));
+    assert_eq!(folds(&[0, 15]), [last]);
+    assert_eq!(folds(&[0, 9]).len(), 2, "row 9 was a plain line by then");
+}
+
+#[test]
+fn a_long_gap_shows_twenty_more_lines_a_click_beside_the_changes() {
+    use view::{fold_unchanged, line_diff, unfold};
+    // Lines 31 and 132 of 181 changed: 27 lines fold before the first, 94 between the two
+    // and 46 after the last, three staying beside each change.
+    let before: String = (1..=181).map(|n| format!("l{n}\n")).collect();
+    let after = before.replace("l31\n", "L31\n").replace("l132\n", "L132\n");
+    let text: Vec<&str> = after.lines().collect();
+    // Each row by its new number; a removed row as "−", a folded one as "…".
+    let rows = |opened: &[usize]| -> Vec<String> {
+        let parts = fold_unchanged(line_diff(&before, &after));
+        (unfold(parts, &text, opened.iter().copied()).into_iter())
+            .map(|l| match (l.kind, l.new_line) {
+                (limn::CodeDiffLineKind::Folded, _) => "…".to_owned(),
+                (_, Some(n)) => n.to_string(),
+                (_, None) => "−".to_owned(),
+            })
+            .collect()
+    };
+    let nums = |lines: std::ops::RangeInclusive<usize>| lines.map(|n| n.to_string()).collect();
+    let fold = || vec!["…".to_owned()];
+    let changed = |n: usize| vec!["−".to_owned(), n.to_string()];
+    let folded: Vec<String> = [
+        fold(),
+        nums(28..=30),
+        changed(31),
+        nums(32..=34),
+        fold(),
+        nums(129..=131),
+        changed(132),
+        nums(133..=135),
+        fold(),
+    ]
+    .concat();
+    assert_eq!(rows(&[]), folded);
+    // Before the first change: the twenty next to it, the fold staying above, then the rest.
+    assert_eq!(rows(&[0])[..24], [fold(), nums(8..=30)].concat());
+    assert_eq!(rows(&[0, 0])[..30], nums(1..=30)[..]);
+    // Between two: ten under the one above and ten over the one below, each click.
+    let between = [nums(35..=44), fold(), nums(119..=131)].concat();
+    assert_eq!(rows(&[9])[9..33], between);
+    let between = [nums(35..=54), fold(), nums(109..=131)].concat();
+    assert_eq!(rows(&[9, 19])[9..53], between);
+    // After the last: twenty under it a click, until none is left to fold.
+    assert_eq!(rows(&[18])[18..], [nums(136..=155), fold()].concat());
+    assert_eq!(rows(&[18, 38, 58])[18..], nums(136..=181)[..]);
+}
+
+#[test]
+fn a_long_file_diffs_past_its_first_four_hundred_lines() {
+    use limn::CodeDiffLineKind::*;
+    let before: String = (0..1000).map(|n| format!("{n}\n")).collect();
+    let after = before.replace("900\n", "nine hundred\n");
+    let changed: Vec<_> = (view::line_diff(&before, &after).into_iter())
+        .filter(|l| l.kind != Context)
+        .map(|l| (l.kind, l.old_line, l.new_line))
+        .collect();
+    assert_eq!(
+        changed,
+        [(Removed, Some(901), None), (Added, None, Some(901))]
+    );
+}
+
+#[test]
+fn a_patchs_gaps_open_from_its_new_side_when_it_is_the_patchs_own() {
+    use view::{patch_parts, unfold};
+    let patch = "@@ -3,3 +3,3 @@\n c\n-d\n+X\n e\n";
+    let text = ["a", "b", "c", "X", "e", "f", "g", "h"];
+    let rows = |text: Option<&[&str]>, opened: &[usize]| -> Vec<(Option<usize>, String)> {
+        let parts = patch_parts(patch, text);
+        (unfold(parts, text.unwrap_or_default(), opened.iter().copied()).into_iter())
+            .map(|l| (l.new_line, l.text))
+            .collect()
+    };
+    let row = |new: Option<usize>, text: &str| (new, text.to_owned());
+    let fold = |_lines: usize| row(None, "Show more lines");
+    // The lines after the last hunk are known only from the text.
+    let folded = [
+        fold(2),
+        row(Some(3), "c"),
+        row(None, "d"),
+        row(Some(4), "X"),
+    ];
+    assert_eq!(
+        rows(Some(&text), &[]),
+        [&folded[..], &[row(Some(5), "e"), fold(3)]].concat()
+    );
+    assert_eq!(
+        rows(Some(&text), &[0, 6]),
+        [
+            row(Some(1), "a"),
+            row(Some(2), "b"),
+            row(Some(3), "c"),
+            row(None, "d"),
+            row(Some(4), "X"),
+            row(Some(5), "e"),
+            row(Some(6), "f"),
+            row(Some(7), "g"),
+            row(Some(8), "h"),
+        ]
+    );
+    // A text the patch was not made from, or none yet: the gaps stay folded.
+    let other = ["a", "b", "c", "Y", "e"];
+    for text in [Some(&other[..]), None] {
+        assert_eq!(
+            rows(text, &[0]),
+            [&folded[..], &[row(Some(5), "e")]].concat()
+        );
+    }
+}
+
+#[test]
+fn a_changed_files_band_mutes_its_folder_and_keeps_its_name_whole() {
+    use newen_model::{ChangeKind, FileEffect};
+    let (mut store, mut ui) = store_with_session();
+    let deep = format!(
+        "{}/main.rs",
+        ["far", "down", "a", "long", "way"].repeat(8).join("/")
+    );
+    let file = |path: &str| FileEffect {
+        path: path.into(),
+        kind: ChangeKind::Modified,
+        added: 1,
+        removed: 0,
+        patch: "@@ -1 +1,2 @@\n a\n+b\n".into(),
+    };
+    store.apply(Event::Changes {
+        session: 1,
+        request: "r1".into(),
+        files: vec![file("src/a.rs"), file(&deep)],
+        snapshot: "s".into(),
+        after: None,
+    });
+    click(&store, &mut ui, "changes:r1:view");
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    // The pane's own words, not the chat's card of the same files.
+    let pane = frame
+        .regions
+        .iter()
+        .find(|r| r.id == "diff:scroll")
+        .unwrap()
+        .rect;
+    let drawn: Vec<(&str, limn::Color)> = (frame.commands.iter())
+        .filter_map(|command| match command {
+            limn::DrawCommand::Text {
+                text,
+                color,
+                position,
+                ..
+            } if pane.contains(*position) => Some((text.as_str(), *color)),
+            _ => None,
+        })
+        .collect();
+    let ink = |words: &str| {
+        drawn
+            .iter()
+            .find(|(text, _)| *text == words)
+            .map(|(_, ink)| *ink)
+    };
+    assert_eq!(ink("src/"), Some(look::muted()));
+    assert_eq!(ink("a.rs"), Some(look::command_ink()));
+    // Too long for the band, the folder is cut and the name stays whole.
+    assert_eq!(ink("main.rs"), Some(look::command_ink()));
+    let folder = &deep[..deep.len() - "main.rs".len()];
+    assert!(ink(folder).is_none());
+    assert!(drawn
+        .iter()
+        .any(|(text, _)| text.starts_with("far/down/") && text.ends_with('…')));
+}
+
+#[test]
+fn a_fold_of_the_diff_pane_opens_from_the_text_the_engine_sends() {
+    use newen_model::{ChangeKind, DiffSource, FileEffect};
+    let (mut store, mut ui) = store_with_session();
+    let patch = "@@ -3,1 +3,1 @@\n-c\n+C\n";
+    store.apply(Event::Changes {
+        session: 1,
+        request: "r1".into(),
+        files: vec![FileEffect {
+            path: "src/a.rs".into(),
+            kind: ChangeKind::Modified,
+            added: 1,
+            removed: 1,
+            patch: patch.into(),
+        }],
+        snapshot: "s".into(),
+        after: Some("ab12".into()),
+    });
+    click(&store, &mut ui, "changes:r1:view");
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    let fold = |row: usize| format!("{}:expand:{row}", view::pane_diff_id("src/a.rs", patch));
+    let shows = |ui: &Ui, id: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        frame.regions.iter().any(|r| r.id == id)
+    };
+    // Lines 1 and 2 are folded before the hunk; the patch does not know what follows it.
+    assert!(shows(&ui, &fold(0)) && !shows(&ui, &fold(3)));
+    let source = DiffSource::Snapshot("ab12".into());
+    assert_eq!(
+        click(&store, &mut ui, &fold(0)),
+        [Intent::DiffText {
+            session: 1,
+            source: source.clone(),
+            path: "src/a.rs".into(),
+        }]
+    );
+    assert!(shows(&ui, &fold(0)), "folded until the text comes");
+    ui.applied(&Event::DiffText {
+        session: 1,
+        source,
+        path: "src/a.rs".into(),
+        text: Some("a\nb\nC\nd\ne\n".into()),
+    });
+    // a, b, −c, +C, then the two lines after it folded.
+    assert!(!shows(&ui, &fold(0)) && shows(&ui, &fold(4)));
+    // The text is read once: the next click opens at once.
+    assert!(click(&store, &mut ui, &fold(4)).is_empty());
+    assert!(!shows(&ui, &fold(4)));
 }
 
 #[test]
@@ -2284,6 +2580,7 @@ fn a_changed_file_folds_and_opens_in_files_or_elsewhere() {
             patch: "@@ -1,1 +4,2 @@\n a\n+b\n".into(),
         }],
         snapshot: "s".into(),
+        after: None,
     });
     click(&store, &mut ui, "changes:r1:view");
     settle(&store, &mut ui);
@@ -2292,11 +2589,12 @@ fn a_changed_file_folds_and_opens_in_files_or_elsewhere() {
         let frame = UiTree::new(view(&store, ui, window)).layout(window);
         frame.regions.iter().any(|r| r.id == id)
     };
-    assert!(shows(&ui, "diff:0"));
+    let diff = view::pane_diff_id("src/a.rs", "@@ -1,1 +4,2 @@\n a\n+b\n");
+    assert!(shows(&ui, &diff));
     click(&store, &mut ui, "diff:fold:src/a.rs");
-    assert!(!shows(&ui, "diff:0"));
+    assert!(!shows(&ui, &diff));
     click(&store, &mut ui, "diff:fold:src/a.rs");
-    assert!(shows(&ui, "diff:0") && shows(&ui, "doc:open-at:4:src/a.rs"));
+    assert!(shows(&ui, &diff) && shows(&ui, "doc:open-at:4:src/a.rs"));
     // Its menu lists the session's places for this file and line.
     click(&store, &mut ui, "open-file-menu:src/a.rs");
     assert_eq!(ui.diff_menu.as_deref(), Some("src/a.rs"));
@@ -3675,6 +3973,7 @@ fn a_turns_changes_list_three_files_then_the_rest_and_each_opens_the_diff() {
             })
             .collect(),
         snapshot: "s".into(),
+        after: None,
     });
     let window = limn::Size::new(1408.0, 844.0);
     let shown = |ui: &Ui, id: &str| {
@@ -3768,6 +4067,7 @@ fn outputs_open_in_a_document_pane_that_saves_and_follows_the_agent() {
             effect("old.txt", ChangeKind::Deleted),
         ],
         snapshot: "s".into(),
+        after: None,
     });
     let window = limn::Size::new(1408.0, 844.0);
     let frame = UiTree::new(view(&store, &ui, window)).layout(window);
@@ -9282,6 +9582,7 @@ fn a_diff_opens_its_files_and_a_large_one_starts_folded() {
             request: request.into(),
             files: (0..count).map(file).collect(),
             snapshot: String::new(),
+            after: None,
         });
     }
     let window = limn::Size::new(1408.0, 4000.0);

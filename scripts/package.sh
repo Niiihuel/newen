@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# A release's bundle: Newen with the CEF it was built against (docs/UPDATES.md). Usage:
+# A release's bundle: Newen with the CEF it was built against, and newen-ide beside it, where Newen
+# looks for it (docs/UPDATES.md). Usage:
 #   scripts/package.sh linux|windows|macos <cargo release dir> <out dir>
 # CEF is looked for under $CEF_PATH, where cef-dll-sys downloaded it during the build.
 # Writes <out>/newen-x86_64-linux.tar.gz, <out>/newen/ (Windows, zipped by the workflow) or
@@ -42,13 +43,16 @@ linux)
   rm -rf "$bundle"
   runtime "$bundle"
   cp "$release/newen" "$bundle/newen"
+  cp "$release/newen-ide" "$bundle/newen-ide"
   # CEF's Linux library carries its debug sections (over a gigabyte).
   strip --strip-debug "$bundle/libcef.so"
   # libcef.so must resolve beside the program, through its $ORIGIN rpath.
-  if ldd "$bundle/newen" | grep 'not found'; then
-    echo "newen's libraries are not all found beside it" >&2
-    exit 1
-  fi
+  for program in newen newen-ide; do
+    if ldd "$bundle/$program" | grep 'not found'; then
+      echo "$program's libraries are not all found beside it" >&2
+      exit 1
+    fi
+  done
   (cd "$bundle" && tar -czf "../newen-x86_64-linux.tar.gz" -- *)
   ;;
 windows)
@@ -56,12 +60,14 @@ windows)
   rm -rf "$bundle"
   runtime "$bundle"
   cp "$release/newen.exe" "$bundle/newen.exe"
+  cp "$release/newen-ide.exe" "$bundle/newen-ide.exe"
   ;;
 macos)
   app=$out/Newen.app
   rm -rf "$app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
   cp "$release/newen" "$app/Contents/MacOS/newen"
+  cp "$release/newen-ide" "$app/Contents/MacOS/newen-ide"
   cp -R "$framework" "$app/Contents/Frameworks/"
   plist() { # <file> <executable> <identifier> <helper: 0|1> <name>
     cat >"$1" <<PLIST

@@ -72,6 +72,7 @@ impl Store {
             | Event::Deleted { .. }
             | Event::Reading { .. }
             | Event::FileRead { .. }
+            | Event::DiffText { .. }
             | Event::FileWriteFailed { .. }
             | Event::Listed { .. }
             | Event::FileOpDone { .. }

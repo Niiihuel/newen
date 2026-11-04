@@ -12,13 +12,13 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # limn by path, as surco does: quill/integration is limn's main, plus any limn PR Newen
 # waits on (docs/LIMN_INTEGRATION.md).
-limn = { path = "../limn-quill-integration/crates/limn", default-features = false }
-limn-egui = { path = "../limn-quill-integration/crates/limn-egui", default-features = false }
+limn = { path = "../limn-code-look/crates/limn", default-features = false }
+limn-egui = { path = "../limn-code-look/crates/limn-egui", default-features = false }
 # The text buffer limn's code editor edits, for the document pane.
-limn-editor = { path = "../limn-quill-integration/crates/limn-editor" }
+limn-editor = { path = "../limn-code-look/crates/limn-editor" }
 # Plays the clips of What's new with Cisco's OpenH264 library, which Newen downloads from Cisco
 # once the person allows it and limn-video loads at run time (docs/UPDATES.md).
-limn-video = { path = "../limn-quill-integration/crates/limn-video" }
+limn-video = { path = "../limn-code-look/crates/limn-video" }
 # `clipboard`: the system's clipboard, text and pictures (off by default since eframe 0.37, which
 # left Ctrl+V with a clipboard of the window's own).
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "clipboard"] }

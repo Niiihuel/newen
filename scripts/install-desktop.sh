@@ -50,6 +50,26 @@ $exec_line
 StartupWMClass=newen
 Categories=Development;
 DESKTOP
+# newen-ide, when it is beside Newen (as Newen looks for it): its icon, Newen's on a hanada horizon,
+# and a launcher, so a Wayland desktop shows it by its app id, "newen-ide".
+ide=$(dirname "$bin")/newen-ide
+if [ -x "$ide" ]; then
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "$root/apps/newen-ide/assets/icons/newen-ide-$size.png" "$data/icons/hicolor/${size}x${size}/apps/newen-ide.png"
+  done
+  install -Dm644 "$root/apps/newen-ide/assets/icons/newen-ide.svg" "$data/icons/hicolor/scalable/apps/newen-ide.svg"
+  install -Dm644 /dev/stdin "$apps/newen-ide.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Newen IDE
+Comment=Newen's code editor
+Icon=newen-ide
+Exec="$ide" %F
+StartupWMClass=newen-ide
+Categories=Development;TextEditor;
+DESKTOP
+  echo "Installed newen-ide's icon and launcher too"
+fi
 rm -f "$apps/quill.desktop" "$data"/icons/hicolor/*/apps/quill.png "$data"/icons/hicolor/*/apps/quill.svg
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q "$data/icons/hicolor" 2>/dev/null || true
 echo "Installed Newen's icon and launcher under $data"

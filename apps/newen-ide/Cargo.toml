@@ -14,7 +14,7 @@ limn = { workspace = true, features = ["syntax"] }
 limn-egui.workspace = true
 limn-editor.workspace = true
 # Tree-sitter's folds and declarations, for folding, sticky scopes and the symbols' path.
-limn-language = { path = "../../../limn-quill-integration/crates/limn-language" }
+limn-language = { path = "../../../limn-code-look/crates/limn-language" }
 eframe.workspace = true
 newen-components = { path = "../../crates/newen-components" }
 # The tree's listing and its file operations, as Newen's.
@@ -29,3 +29,7 @@ serde_json.workspace = true
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 # A line diff of a file against its last commit, for the gutter's marks.
 similar = "2"
+
+# newen-ide's icon in its Windows executable (build.rs), as Newen's.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }

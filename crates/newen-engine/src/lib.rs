@@ -4,8 +4,8 @@
 
 use newen_agent::{AgentAdapter, AgentCommand, AgentEvent, SessionSpec};
 use newen_model::{
-    Event, Intent, Lane, NewSession, ProposalAnswer, ProposalOutcome, QueuedMessage, RequestId,
-    SessionId, SessionStatus, WaitOutcome,
+    DiffSource, Event, Intent, Lane, NewSession, ProposalAnswer, ProposalOutcome, QueuedMessage,
+    RequestId, SessionId, SessionStatus, WaitOutcome,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1750,6 +1750,36 @@ impl Router {
                             status: SessionStatus::Idle,
                         });
                     }
+                }
+                return;
+            }
+            Intent::DiffText {
+                session,
+                source,
+                path,
+            } => {
+                if let Some(cwd) = self.folders.get(&session).cloned() {
+                    let (sink, snapshots) = (self.sink.clone(), self.config.snapshots.clone());
+                    let (from, at) = (source.clone(), path.clone());
+                    tokio::spawn(async move {
+                        let text = tokio::task::spawn_blocking(move || match from {
+                            DiffSource::Working => newen_git::working_text(&cwd, &at),
+                            DiffSource::Snapshot(tree) => {
+                                newen_git::Shadow::open(&snapshots?, &cwd)
+                                    .ok()?
+                                    .text(&tree, &at)
+                            }
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        sink(Event::DiffText {
+                            session,
+                            source,
+                            path,
+                            text,
+                        });
+                    });
                 }
                 return;
             }
@@ -3537,6 +3567,7 @@ impl Actor {
                 request,
                 files,
                 snapshot: start,
+                after: Some(end),
             });
         }
         self.start = end;

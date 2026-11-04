@@ -4709,14 +4709,7 @@ fn item(
                 .code_copy_action_prefix(COPY_CODE)
                 .code_font_size(SMALL)
                 .inline_code_size(SMALL)
-                .code_syntax_colors(limn::CodeSyntaxColors {
-                    text: look::palette().text,
-                    string: look::added(),
-                    keyword: look::keyword(),
-                    function: Some(look::cursor()),
-                    interpolation: Some(look::removed()),
-                    ..limn::CodeSyntaxColors::for_palette(code_palette)
-                })
+                .code_syntax_colors(newen_components::code::syntax_colors())
                 .streaming(*streaming)
                 // New words come in out of a fade.
                 .streaming_fade(true)
@@ -4772,6 +4765,7 @@ fn item(
             request,
             files,
             rewound,
+            ..
         } => changes_card(
             request,
             files,
@@ -6353,44 +6347,173 @@ pub fn group_summary(steps: &[Step]) -> String {
     summary
 }
 
-/// The lines of `before` and `after` as a diff: an LCS walk, enough for the files a tool
-/// edits. shortcut: quadratic in lines, capped at 400 a side; a real diff when files grow.
+/// The lines of `before` and `after` as a diff, by Myers' algorithm as git's.
 pub fn line_diff(before: &str, after: &str) -> Vec<limn::CodeDiffLine> {
     use limn::{CodeDiffLine, CodeDiffLineKind};
-    let a: Vec<&str> = before.lines().take(400).collect();
-    let b: Vec<&str> = after.lines().take(400).collect();
-    let mut lcs = vec![vec![0u16; b.len() + 1]; a.len() + 1];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            lcs[i][j] = if a[i] == b[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
-    let (mut i, mut j, mut lines) = (0, 0, vec![]);
+    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
+    // Past this a diff is finished coarser rather than held up, as similar's deadline does.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    let ops =
+        similar::capture_diff_slices_deadline(similar::Algorithm::Myers, &a, &b, Some(deadline));
     let line = |kind, old: Option<usize>, new: Option<usize>, text: &str| CodeDiffLine {
         kind,
         old_line: old.map(|n| n + 1),
         new_line: new.map(|n| n + 1),
         text: text.to_owned(),
     };
-    while i < a.len() || j < b.len() {
-        if i < a.len() && j < b.len() && a[i] == b[j] {
-            lines.push(line(CodeDiffLineKind::Context, Some(i), Some(j), a[i]));
-            i += 1;
-            j += 1;
-        // On a tie the removed line goes first, as a unified diff reads.
-        } else if i < a.len() && (j == b.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
-            lines.push(line(CodeDiffLineKind::Removed, Some(i), None, a[i]));
-            i += 1;
+    let mut lines = vec![];
+    for op in ops {
+        let (old, new) = (op.old_range(), op.new_range());
+        if let similar::DiffOp::Equal { .. } = op {
+            lines.extend(
+                old.zip(new)
+                    .map(|(i, j)| line(CodeDiffLineKind::Context, Some(i), Some(j), a[i])),
+            );
         } else {
-            lines.push(line(CodeDiffLineKind::Added, None, Some(j), b[j]));
-            j += 1;
+            // The removed lines first, as a unified diff reads.
+            lines.extend(old.map(|i| line(CodeDiffLineKind::Removed, Some(i), None, a[i])));
+            lines.extend(new.map(|j| line(CodeDiffLineKind::Added, None, Some(j), b[j])));
         }
     }
     lines
+}
+
+/// A diff's rows before folding: its lines, and the runs of unchanged lines it leaves out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffPart {
+    Line(limn::CodeDiffLine),
+    /// `count` unchanged lines, from these old and new line numbers when the diff's new side
+    /// is at hand to show them; `None` when it is not, and the gap cannot open.
+    Gap {
+        count: usize,
+        from: Option<(usize, usize)>,
+    },
+}
+
+/// Unchanged lines kept beside a change when the rest of their run folds.
+const FOLD_CONTEXT: usize = 3;
+
+/// `lines` with each run of unchanged lines, but the three beside a change, as a gap, when it
+/// hides four or more.
+pub fn fold_unchanged(lines: Vec<limn::CodeDiffLine>) -> Vec<DiffPart> {
+    use limn::CodeDiffLineKind;
+    let mut runs = vec![];
+    let mut at = 0;
+    while at < lines.len() {
+        let end = at
+            + (lines[at..].iter())
+                .take_while(|l| l.kind == CodeDiffLineKind::Context)
+                .count();
+        let start = if at == 0 { 0 } else { at + FOLD_CONTEXT };
+        let stop = if end == lines.len() {
+            end
+        } else {
+            end.saturating_sub(FOLD_CONTEXT)
+        };
+        if stop.saturating_sub(start) >= 4 {
+            runs.push(start..stop);
+        }
+        at = end + 1;
+    }
+    let mut runs = runs.into_iter().peekable();
+    let mut parts = vec![];
+    for (i, line) in lines.into_iter().enumerate() {
+        match runs.peek() {
+            Some(run) if run.contains(&i) => {
+                if i == run.start {
+                    parts.push(DiffPart::Gap {
+                        count: run.len(),
+                        from: line.old_line.zip(line.new_line),
+                    });
+                }
+                if i + 1 == run.end {
+                    runs.next();
+                }
+            }
+            _ => parts.push(DiffPart::Line(line)),
+        }
+    }
+    parts
+}
+
+/// The lines one click on a folded row shows.
+const UNFOLD_STEP: usize = 20;
+
+/// `parts` as rows: each gap folded into one "Show more lines" row, as Desktop's diff says
+/// it, but for the lines the clicks on it showed, given as the folded rows' places in the
+/// listing shown then, in the order they were clicked. Each click shows [`UNFOLD_STEP`] more
+/// lines from `text` (the diff's new side, by line) beside the changes: half on each side of
+/// a gap between two, all on the change's side of the first or the last gap.
+pub fn unfold(
+    parts: Vec<DiffPart>,
+    text: &[&str],
+    opened: impl IntoIterator<Item = usize>,
+) -> Vec<limn::CodeDiffLine> {
+    use limn::{CodeDiffLine, CodeDiffLineKind};
+    let lines = |count: usize, from: Option<(usize, usize)>| {
+        let (old, new) = from?;
+        Some((old, new, text.get(new.checked_sub(1)?..)?.get(..count)?))
+    };
+    let last = parts.len().saturating_sub(1);
+    // How many of a gap's lines show above its folded row and below it after `clicks`.
+    let split = |at: usize, count: usize, clicks: usize| {
+        let shown = (clicks * UNFOLD_STEP).min(count);
+        match at {
+            0 if last > 0 => (0, shown),
+            _ if at == last => (shown, 0),
+            _ => (shown - shown / 2, shown / 2),
+        }
+    };
+    let mut clicks = vec![0; parts.len()];
+    for row in opened {
+        // Each click reads against the rows the clicks before it left.
+        let mut at = 0;
+        for (i, part) in parts.iter().enumerate() {
+            let DiffPart::Gap { count, from } = part else {
+                at += 1;
+                continue;
+            };
+            let (above, below) = split(i, *count, clicks[i]);
+            let folded = above + below < *count;
+            if folded && at + above == row {
+                clicks[i] += usize::from(lines(*count, *from).is_some());
+                break;
+            }
+            at += above + usize::from(folded) + below;
+        }
+    }
+    let mut rows = vec![];
+    for (i, part) in parts.into_iter().enumerate() {
+        let (count, from) = match part {
+            DiffPart::Line(line) => {
+                rows.push(line);
+                continue;
+            }
+            DiffPart::Gap { count, from } => (count, from),
+        };
+        let (above, below) = split(i, count, clicks[i]);
+        let shown = |range: std::ops::Range<usize>| {
+            (lines(count, from).into_iter()).flat_map(move |(old, new, text)| {
+                range.clone().map(move |k| CodeDiffLine {
+                    kind: CodeDiffLineKind::Context,
+                    old_line: Some(old + k),
+                    new_line: Some(new + k),
+                    text: text[k].to_owned(),
+                })
+            })
+        };
+        rows.extend(shown(0..above));
+        if above + below < count {
+            rows.push(CodeDiffLine {
+                kind: CodeDiffLineKind::Folded,
+                old_line: None,
+                new_line: None,
+                text: "Show more lines".to_owned(),
+            });
+        }
+        rows.extend(shown(count - below..count));
+    }
+    rows
 }
 
 /// A run of steps as Desktop shows it: one muted line with the files' added and
@@ -6457,13 +6580,13 @@ fn step_group(
         head.push(
             text(format!("+{added}"))
                 .font_size(chat())
-                .foreground(look::added())
+                .foreground(look::diff_added())
                 .centered_y(),
         );
         head.push(
             text(format!("−{removed}"))
                 .font_size(chat())
-                .foreground(look::removed())
+                .foreground(look::diff_removed())
                 .centered_y(),
         );
     }
@@ -6497,8 +6620,8 @@ fn step_group(
             }
             rows.push(step_row(step, &run, ui, view, column, palette));
         }
-        // A long group folds from its end too, by a chevron that shows while the pointer is
-        // on the box; Verbose holds it open, so there is none.
+        // A long group folds from its end too, by a chevron centred under it that shows while
+        // the pointer is on the box; Verbose holds it open, so there is none.
         if view != TranscriptView::Verbose {
             let fold = icon_tool(
                 &format!("{GROUP_FOLD}{key}"),
@@ -6509,8 +6632,12 @@ fn step_group(
             )
             .reveal_on_hover(format!("{key}:fold"));
             rows.push(
-                Element::row(vec![Element::spacer().flex(1.0), fold, hgap(4.0)])
-                    .size(Some(column), Some(28.0)),
+                Element::row(vec![
+                    Element::spacer().flex(1.0),
+                    fold,
+                    Element::spacer().flex(1.0),
+                ])
+                .size(Some(column), Some(28.0)),
             );
         }
         let card = Element::panel(Element::column(rows))
@@ -6648,12 +6775,12 @@ fn step_row(
         if r.added + r.removed > 0 {
             line.push(
                 text(format!("+{}", r.added))
-                    .foreground(look::added())
+                    .foreground(look::diff_added())
                     .centered_y(),
             );
             line.push(
                 text(format!("−{}", r.removed))
-                    .foreground(look::removed())
+                    .foreground(look::diff_removed())
                     .centered_y(),
             );
         }
@@ -6870,8 +6997,9 @@ fn step_body(step: &Step, ui: &Ui, inner: f32, palette: ComponentPalette) -> Ele
                 );
                 body.push(diff_box(
                     &format!("diff:{}:{}", step.call, file.path.display()),
-                    file.before.as_deref().unwrap_or_default(),
-                    file.after.as_deref().unwrap_or_default(),
+                    &path,
+                    (before, after),
+                    &ui.expanded,
                     inner,
                     palette,
                 ));
@@ -6897,13 +7025,26 @@ pub fn tagged<'a>(output: &'a str, name: &str) -> Option<&'a str> {
     Some(output[start..end].trim_matches('\n').trim_end())
 }
 
-/// Two versions of a file as a bordered diff, up to 480 px high.
-fn diff_box(id: &str, before: &str, after: &str, width: f32, palette: ComponentPalette) -> Element {
-    let lines = line_diff(before, after);
+/// Two versions of `path` as a bordered diff, up to 480 px high, its long unchanged runs
+/// folded but those `expanded` opened.
+fn diff_box(
+    id: &str,
+    path: &str,
+    (before, after): (&str, &str),
+    expanded: &[String],
+    width: f32,
+    palette: ComponentPalette,
+) -> Element {
+    let text: Vec<&str> = after.lines().collect();
+    let lines = unfold(
+        fold_unchanged(line_diff(before, after)),
+        &text,
+        clicks(expanded, id),
+    );
     let rows = lines.len().max(1) as f32;
     let words = word_ranges(&lines);
     Element::panel(
-        limn::CodeDiff::new(id, lines)
+        newen_components::code::diff(id, lines, path.as_ref())
             .word_ranges(words)
             .palette(palette)
             .font_size(12.0)
@@ -6913,6 +7054,14 @@ fn diff_box(id: &str, before: &str, after: &str, width: f32, palette: ComponentP
     .border(look::card_border(), 1.0)
     .radius(6.0)
     .size(Some(width), None)
+}
+
+/// The rows of diff `id`'s folds clicked open, in the order they were clicked.
+fn clicks(expanded: &[String], id: &str) -> Vec<usize> {
+    let prefix = format!("{id}:expand:");
+    (expanded.iter())
+        .filter_map(|k| k.strip_prefix(&prefix)?.parse().ok())
+        .collect()
 }
 
 /// A step Desktop sets on its own line: a proposed plan as "Proposed plan ▸",
@@ -7053,8 +7202,9 @@ fn permission(
     if let Some((before, after)) = change {
         rows.push(diff_box(
             &format!("perm-diff:{id}"),
-            before,
-            after,
+            input["file_path"].as_str().unwrap_or_default(),
+            (before, after),
+            &ui.expanded,
             inner,
             palette,
         ));
@@ -7836,13 +7986,13 @@ fn counting(key: &str, added: u32, removed: u32, size: f32) -> [Element; 2] {
             "added",
             added,
             |n| format!("+{}", thousands(n.round() as u32)),
-            look::added(),
+            look::diff_added(),
         ),
         figure(
             "removed",
             removed,
             |n| format!("\u{2212}{}", thousands(n.round() as u32)),
-            look::removed(),
+            look::diff_removed(),
         ),
     ]
 }
@@ -9355,11 +9505,11 @@ fn changes_card(
         vec![
             text(format!("+{added}"))
                 .font_size(SMALL)
-                .foreground(look::added())
+                .foreground(look::diff_added())
                 .centered_y(),
             text(format!("\u{2212}{removed}"))
                 .font_size(SMALL)
-                .foreground(look::removed())
+                .foreground(look::diff_removed())
                 .centered_y(),
         ]
     };
@@ -9457,6 +9607,11 @@ struct DiffRow {
     line: u32,
     /// Its patch while it is open; `None` folded.
     patch: Option<String>,
+    /// Its diff's id ([`pane_diff_id`]), the rows of its folds clicked open, and its new side
+    /// once the engine sent it.
+    diff: String,
+    opened: Vec<usize>,
+    text: Option<std::sync::Arc<str>>,
     /// Whether it has lines to show: a binary file has none, and its band does not open.
     body: bool,
     binary: bool,
@@ -9505,12 +9660,24 @@ fn diff_pane(
             let folded = large != toggled.contains(file.path.as_str());
             let open = body && !folded;
             let line = first_changed_line(&file.patch);
+            let diff = if open {
+                pane_diff_id(&file.path, &file.patch)
+            } else {
+                String::new()
+            };
+            let text = match ui.diff_texts.get(&diff) {
+                Some(crate::DiffText::Got(text)) => text.clone(),
+                _ => None,
+            };
             DiffRow {
                 path: file.path.clone(),
                 added: file.added,
                 removed: file.removed,
                 line,
                 patch: open.then(|| file.patch.clone()),
+                opened: clicks(&ui.expanded, &diff),
+                diff,
+                text,
                 body,
                 binary: !body
                     && (file.patch.contains("Binary files ")
@@ -9540,7 +9707,7 @@ fn diff_pane(
             keys[at].path.hash(&mut hasher);
             hasher.finish()
         },
-        move |at| diff_row(&rows[at], at, width, palette),
+        move |at| diff_row(&rows[at], width, palette),
     );
     pane.push(list.flex(1.0));
     Element::column(pane)
@@ -9548,18 +9715,36 @@ fn diff_pane(
         .size(Some(width), Some(height))
 }
 
+/// The diff pane's diffs: `{PANE_DIFF}{hash of the patch}:{path}`, a new id once the patch
+/// changes, so the folds clicked open and the text read are the old patch's.
+pub const PANE_DIFF: &str = "pane-diff:";
+
+/// The id of `path`'s diff in the diff pane while its patch is `patch`.
+pub fn pane_diff_id(path: &str, patch: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    patch.hash(&mut hasher);
+    format!("{PANE_DIFF}{:016x}:{path}", hasher.finish())
+}
+
 /// One file of the diff pane: its band, and its lines under it while it is open.
-fn diff_row(row: &DiffRow, at: usize, width: f32, palette: ComponentPalette) -> Element {
+fn diff_row(row: &DiffRow, width: f32, palette: ComponentPalette) -> Element {
     let band = diff_file_band(row, width, palette);
     let Some(patch) = &row.patch else {
         return band;
     };
-    let lines = parse_patch(patch);
+    let text: Vec<&str> = row
+        .text
+        .as_deref()
+        .map(|t| t.lines().collect())
+        .unwrap_or_default();
+    let parts = patch_parts(patch, row.text.as_ref().map(|_| text.as_slice()));
+    let lines = unfold(parts, &text, row.opened.iter().copied());
     let height = (lines.len().max(1) as f32 * 19.0 + 16.0).min(600.0);
     let words = word_ranges(&lines);
     Element::column(vec![
         band,
-        limn::CodeDiff::new(format!("diff:{at}"), lines)
+        newen_components::code::diff(row.diff.clone(), lines, row.path.as_ref())
             .word_ranges(words)
             .palette(palette)
             .font_size(12.0)
@@ -9663,7 +9848,9 @@ fn first_changed_line(patch: &str) -> u32 {
 /// a caret and the code mark, then its added and removed lines. A file with no lines to show
 /// (a binary one) keeps its band, dimmed caret and counts, and does not open.
 fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Element {
-    let name = row.path.rsplit('/').next().unwrap_or(&row.path).to_owned();
+    let (folder, name) = row
+        .path
+        .split_at(row.path.rfind('/').map_or(0, |at| at + 1));
     let dim = look::muted();
     let mut words = vec![
         if row.body {
@@ -9678,7 +9865,18 @@ fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Eleme
             .foreground(look::muted())
             .size(Some(14.0), Some(14.0))
             .centered_y(),
-        text(name).foreground(look::command_ink()).centered_y(),
+        // Its path as Desktop's band writes it: the folder muted, which gives way first so the
+        // name stays whole.
+        Element::row(vec![
+            Element::truncated_text(folder)
+                .font_family(limn::FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(dim)
+                .centered_y()
+                .shrink_to_fit(),
+            text(name).foreground(look::command_ink()).centered_y(),
+        ])
+        .shrink_to_fit(),
     ];
     // A file with no lines to show says why: a binary one, or one too long to show (a new
     // file past its limit keeps its count).
@@ -9687,10 +9885,13 @@ fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Eleme
     } else if !row.body && row.added + row.removed > 0 {
         words.push(muted("Too large to show").font_size(SMALL).centered_y());
     }
-    let words = Element::row(words).gap(6.0).size(None, Some(32.0));
+    let words = Element::row(words)
+        .gap(6.0)
+        .size(None, Some(32.0))
+        .shrink_to_fit();
     // The caret and the name fold the file's lines away and back, as Desktop's band does.
     let fold = if row.body {
-        Element::clickable(format!("{DIFF_FOLD}{}", row.path), words)
+        Element::clickable(format!("{DIFF_FOLD}{}", row.path), words).shrink_to_fit()
     } else {
         words
     };
@@ -9699,10 +9900,10 @@ fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Eleme
         fold,
         Element::spacer().flex(1.0),
         text(format!("+{}", row.added))
-            .foreground(look::added())
+            .foreground(look::diff_added())
             .centered_y(),
         text(format!("−{}", row.removed))
-            .foreground(look::removed())
+            .foreground(look::diff_removed())
             .centered_y(),
         (row.menu.clone()).unwrap_or_else(|| open_file_chip(&row.path, row.line, None, palette)),
         hgap(10.0),
@@ -9712,30 +9913,40 @@ fn diff_file_band(row: &DiffRow, width: f32, palette: ComponentPalette) -> Eleme
     .size(Some(width), Some(32.0))
 }
 
-/// Lines of a unified diff, numbered from its hunk headers.
-pub fn parse_patch(patch: &str) -> Vec<limn::CodeDiffLine> {
+/// A unified diff's rows, numbered from its hunk headers, with a gap for the unchanged lines
+/// before and between its hunks and, once `text` (its new side, by line) is at hand, after
+/// them. Without `text`, or when its lines are not the patch's, the gaps cannot open.
+pub fn patch_parts(patch: &str, text: Option<&[&str]>) -> Vec<DiffPart> {
     use limn::{CodeDiffLine, CodeDiffLineKind};
-    let (mut old, mut new) = (0usize, 0usize);
-    let mut lines = vec![];
+    let (mut old, mut new) = (1usize, 1usize);
+    let mut parts = vec![];
     let mut in_hunk = false;
+    let mut fits = text.is_some();
     for line in patch.lines() {
         if let Some(header) = line.strip_prefix("@@ ") {
-            // "@@ -a,b +c,d @@": the first line numbers of the hunk.
-            let mut parts = header.split_whitespace();
+            // "@@ -a,b +c,d @@": where each side's lines begin. An empty side (",0") names
+            // the line before it.
+            let mut sides = header.split_whitespace();
             let start = |p: Option<&str>| {
-                p.and_then(|p| p[1..].split(',').next())
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(1)
+                let mut range = p.and_then(|p| p.get(1..)).unwrap_or("").split(',');
+                let at = range.next().and_then(|n| n.parse().ok()).unwrap_or(1);
+                at + usize::from(range.next() == Some("0"))
             };
-            old = start(parts.next());
-            new = start(parts.next());
+            let (next_old, next) = (start(sides.next()), start(sides.next()));
+            if next > new {
+                parts.push(DiffPart::Gap {
+                    count: next - new,
+                    from: Some((old, new)),
+                });
+            }
+            (old, new) = (next_old, next);
             in_hunk = true;
             continue;
         }
         if !in_hunk || line.starts_with("\\ ") {
             continue;
         }
-        let (kind, text) = match line.chars().next() {
+        let (kind, body) = match line.chars().next() {
             Some('+') => (CodeDiffLineKind::Added, &line[1..]),
             Some('-') => (CodeDiffLineKind::Removed, &line[1..]),
             Some(' ') => (CodeDiffLineKind::Context, &line[1..]),
@@ -9744,23 +9955,32 @@ pub fn parse_patch(patch: &str) -> Vec<limn::CodeDiffLine> {
         let (old_line, new_line) = match kind {
             CodeDiffLineKind::Added => (None, Some(new)),
             CodeDiffLineKind::Removed => (Some(old), None),
-            // The parser makes no folded rows; they are the panel's own (plan Q5.5).
             CodeDiffLineKind::Context | CodeDiffLineKind::Folded => (Some(old), Some(new)),
         };
-        if old_line.is_some() {
-            old += 1;
-        }
-        if new_line.is_some() {
-            new += 1;
-        }
-        lines.push(CodeDiffLine {
+        // The text must be the one the patch was made from, line for line.
+        fits &= new_line.is_none() || text.and_then(|t| t.get(new - 1)) == Some(&body);
+        old += usize::from(old_line.is_some());
+        new += usize::from(new_line.is_some());
+        parts.push(DiffPart::Line(CodeDiffLine {
             kind,
             old_line,
             new_line,
-            text: text.to_owned(),
-        });
+            text: body.to_owned(),
+        }));
     }
-    lines
+    match text.filter(|_| fits) {
+        Some(text) if text.len() >= new => parts.push(DiffPart::Gap {
+            count: text.len() + 1 - new,
+            from: Some((old, new)),
+        }),
+        Some(_) => {}
+        None => parts.iter_mut().for_each(|part| {
+            if let DiffPart::Gap { from, .. } = part {
+                *from = None;
+            }
+        }),
+    }
+    parts
 }
 
 /// A question Claude asks, one at a time: a 480 px card with the

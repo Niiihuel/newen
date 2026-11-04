@@ -126,7 +126,6 @@ tones! {
     /// (light: inferred).
     mention = hex(0x1f63b8), hex(0x8ab4f0);
     mention_fill = hex(0xe8f0fb), hex(0x1d2d42);
-    added = hex(0x1e9e3c), hex(0x32d74b);
     /// A failed step's label (dark: inferred).
     failed = hex(0xa42528), hex(0xff6b6b);
     removed = hex(0xcd2054), hex(0xff2c56);
@@ -170,9 +169,30 @@ tones! {
     selected_hover = hex(0xd5d5d5), hex(0x383838);
     tool_hover = hex(0xe5e5e5), hex(0x303030);
     active_hover = hex(0xd8d8d8), hex(0x3a3a3a);
-    /// Keywords in code (`def`, the f of an f-string); functions take the cursor's
-    /// blue, strings the added green and f-string braces the removed red.
-    keyword = hex(0xc5621b), hex(0xf0a35c);
+    /// Code's inks, Newen's own and apart from the status colours: clay keywords, sage
+    /// strings, sand numbers, slate functions, plum types and teal properties over a warm ink,
+    /// with stone comments and beni interpolation braces. The editor, code blocks and diffs
+    /// draw with them.
+    code_text = hex(0x2b2722), hex(0xe8e3da);
+    code_comment = hex(0x8a8377), hex(0x8b857c);
+    code_keyword = hex(0xb04a2c), hex(0xe0876a);
+    code_string = hex(0x567532), hex(0xb3c48d);
+    code_number = hex(0xa0611a), hex(0xe6b673);
+    code_function = hex(0x2f6391), hex(0x9cbad6);
+    code_type = hex(0x7a4fa0), hex(0xc7a6dd);
+    code_property = hex(0x2d7468), hex(0x8cbfb3);
+    code_interpolation = hex(0xb5504c), hex(0xd77d78);
+    /// What a change adds, removes or changes, as crisp as the cursor's blue: green, red and
+    /// that blue, for the diff's markers and bar, the gutter's marks and every +N −N.
+    diff_added = hex(0x1e9e3c), hex(0x32d74b);
+    diff_removed = hex(0xcd2054), hex(0xff2c56);
+    diff_changed = hex(0x0073e6), hex(0x3b8eea);
+    /// A diff's rows: the tint across an added or removed one, and the stronger one behind
+    /// its changed words.
+    diff_add_row = Color::rgba(0x1e, 0x9e, 0x3c, 22), Color::rgba(0x32, 0xd7, 0x4b, 24);
+    diff_add_word = Color::rgba(0x1e, 0x9e, 0x3c, 60), Color::rgba(0x32, 0xd7, 0x4b, 64);
+    diff_del_row = Color::rgba(0xcd, 0x20, 0x54, 20), Color::rgba(0xff, 0x2c, 0x56, 24);
+    diff_del_word = Color::rgba(0xcd, 0x20, 0x54, 56), Color::rgba(0xff, 0x2c, 0x56, 64);
     /// The greeting's spark, Claude's orange.
     spark = hex(0xd97757), hex(0xd97757);
     /// The usage ring's track: Desktop's #E5E5E5 at rest, #CDCDCD under the pointer, met

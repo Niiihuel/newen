@@ -13,6 +13,8 @@ The dark tile has a slightly lighter rim (`#2c2722`) so it stays visible on a da
 
 Palette: sumi `#141413`, washi `#f2ebde`, beni `#c0605c`, dark tile `#1a1714`, rim `#2c2722`.
 
+newen-ide's icon is Newen's with one change: its horizon is hanada `#5c8bc0`, a light indigo with beni's lightness and saturation, so the editor reads as Newen's and still stands apart from it beside it.
+
 ## Files
 
 | File in `apps/newen/assets/icons/` | What it is | Used by |
@@ -25,6 +27,8 @@ Palette: sumi `#141413`, washi `#f2ebde`, beni `#c0605c`, dark tile `#1a1714`, r
 | `newen-mark.svg` | The bare mark (N and horizon) without the tile, all in `currentColor`, viewBox 1024 in the tile's own frame | `crates/newen-ui/src/account.rs` and `appearance.rs` (`icons::of(include_str!(...))`, tinted with the text's colour, 56 px) |
 | `newen-mark-letter.svg`, `newen-mark-horizon.svg` | The mark's two layers, the N and the horizon, each in `currentColor` in the same frame | `crates/newen-ui/src/welcome.rs`: the N in the text's colour, the horizon in beni, drawn left to right under it |
 
+| `apps/newen-ide/assets/icons/newen-ide.svg`, `newen-ide-dark.svg` and `newen-ide[-dark]-{same sizes}.png` | newen-ide's icon, both cuts, on a hanada horizon | `apps/newen-ide/src/main.rs` (`newen-ide[-dark]-256.png`, the window icon), `scripts/install-desktop.sh` (hicolor, when newen-ide is beside Newen) |
+
 limn swaps `currentColor` for white, rasterises the SVG with resvg into a coverage mask, contains the viewBox in the icon's square and tints the mask. So the marks have no fixed colours. A limn icon is at most 128 px, which is the welcome's size. The horizon is cut by the same rounded-tile clip as on the icon, so its left end matches the icon.
 
 ## Regenerating
@@ -34,7 +38,7 @@ node scripts/brand/generate.mjs            # writes every file above into apps/n
 node scripts/brand/generate.mjs <out dir>  # or into another folder
 ```
 
-It needs Node (no npm packages) and ImageMagick 7 (`magick`) with its librsvg SVG delegate. It reads `mincho-extrabold-glyphs.json` from beside itself. The output is deterministic: the ink and the brush use seeded random numbers, and the PNGs are written with `-strip`. A run with no change to the script leaves `git status` clean.
+It writes newen-ide's files to `apps/newen-ide/assets/icons` (into the given folder too when one is given). It needs Node (no npm packages) and ImageMagick 7 (`magick`) with its librsvg SVG delegate. It reads `mincho-extrabold-glyphs.json` from beside itself. The output is deterministic: the ink and the brush use seeded random numbers, and the PNGs are written with `-strip`. A run with no change to the script leaves `git status` clean with the ImageMagick the files were made with; another version may write other PNG bytes for the same pixels (`magick compare -metric AE` says 0), which are best left out of a commit.
 
 The layout is set by the constants at the top of each section of `generate.mjs`:
 
