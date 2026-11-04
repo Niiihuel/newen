@@ -14,7 +14,7 @@ limn = { workspace = true, features = ["syntax"] }
 limn-egui.workspace = true
 limn-editor.workspace = true
 # Tree-sitter's folds and declarations, for folding, sticky scopes and the symbols' path.
-limn-language = { path = "../../../limn-code-look/crates/limn-language" }
+limn-language = { path = "../../../limn-quill-integration/crates/limn-language" }
 eframe.workspace = true
 newen-components = { path = "../../crates/newen-components" }
 # The tree's listing and its file operations, as Newen's.

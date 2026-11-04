@@ -12,7 +12,8 @@ Newen follows it on the same versions.
 
 | PR | Branch | What Newen uses it for | State |
 |---|---|---|---|
-| — | — | nothing waiting: every limn change Newen uses is in `main` | — |
+| [#180](https://github.com/Niiihuel/limn/pull/180) | `feat/code-look` | newen-ide's look: a diff in the editor's syntax inks, fold chevrons shown over the gutter | open |
+| [#181](https://github.com/Niiihuel/limn/pull/181) | `feat/rust-1.99` | Rust 1.99.1, the toolchain Newen builds with | open |
 
 Keeping it so:
 
