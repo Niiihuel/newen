@@ -8988,21 +8988,34 @@ pub(crate) fn offered_models<'a>(
 }
 
 /// The models Desktop lists by number, the newest of each family, and the rest it keeps
-/// under "More models". The agent lists each family newest first.
+/// under "More models". The agent lists each family newest first. Each provider's models come
+/// together, the providers in the order the agent first names them.
 pub(crate) fn split_models(
     models: &[newen_model::ModelInfo],
 ) -> (Vec<&newen_model::ModelInfo>, Vec<&newen_model::ModelInfo>) {
-    let mut families: Vec<&str> = vec![];
+    let mut families: Vec<(Option<&str>, &str)> = vec![];
+    let mut providers: Vec<Option<&str>> = vec![];
     let (mut latest, mut more) = (vec![], vec![]);
     for model in models {
-        let family = model.name.split_whitespace().next().unwrap_or_default();
-        if family == "Default" || families.contains(&family) {
+        let provider = model.provider.as_deref();
+        if !providers.contains(&provider) {
+            providers.push(provider);
+        }
+        let family = (
+            provider,
+            model.name.split_whitespace().next().unwrap_or_default(),
+        );
+        if family.1 == "Default" || families.contains(&family) {
             more.push(model);
         } else {
             families.push(family);
             latest.push(model);
         }
     }
+    let rank =
+        |m: &&newen_model::ModelInfo| (providers.iter()).position(|p| *p == m.provider.as_deref());
+    latest.sort_by_key(rank);
+    more.sort_by_key(rank);
     (latest, more)
 }
 
@@ -9154,22 +9167,43 @@ fn model_menu(
     let mut entries = vec![];
     let (latest, more) = split_models(models);
     let item = |model: &newen_model::ModelInfo| {
-        limn::DropdownMenuItem::new(format!("model:{}", model.id), named(model))
-            .selected(current.is_some_and(|c| c.id == model.id))
+        let label = named(model);
+        let row = limn::DropdownMenuItem::new(format!("model:{}", model.id), label.clone())
+            .selected(current.is_some_and(|c| c.id == model.id));
+        // shortcut: a label this long may be cut at the menu's width, so it gets the whole name in
+        // a hint; a short one never does. Hint only cut labels once limn's menu can tell.
+        match label.chars().count() > 12 {
+            true => row.tooltip_with(limn::TooltipSpec::new(label)),
+            false => row,
+        }
     };
-    for (n, model) in latest.iter().enumerate() {
-        // The current model shows its check in place of its number.
-        let row = item(model);
-        let row = if current.is_some_and(|c| c.id == model.id) {
-            row
-        } else {
-            row.shortcut((n + 1).to_string())
-        };
-        entries.push(row.into());
-    }
+    // Each provider's models under its name, a divider before every provider but the first.
+    let grouped = |models: &[&newen_model::ModelInfo], numbered: bool| {
+        let mut entries = vec![];
+        let mut last = None;
+        for (n, model) in models.iter().enumerate() {
+            let provider = model.provider.as_deref();
+            if last != Some(provider) {
+                entries.push(match provider {
+                    Some(provider) => limn::DropdownMenuEntry::Heading(provider.into()),
+                    None => limn::DropdownMenuEntry::Separator,
+                });
+                last = Some(provider);
+            }
+            // The current model shows its check in place of its number.
+            let row = item(model);
+            let row = match numbered && !current.is_some_and(|c| c.id == model.id) {
+                true => row.shortcut((n + 1).to_string()),
+                false => row,
+            };
+            entries.push(row.into());
+        }
+        entries
+    };
+    entries.extend(grouped(&latest, true));
     if !more.is_empty() {
         entries.push(limn::DropdownMenuEntry::Separator);
-        let rest = more.iter().map(|m| item(m).into()).collect();
+        let rest = grouped(&more, false);
         entries.push(
             limn::DropdownMenuItem::new(format!("{MODEL_MENU}:more"), "More models")
                 .submenu(rest)

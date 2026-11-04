@@ -199,6 +199,10 @@ pub struct ModelInfo {
     /// The one the agent runs when none is chosen.
     #[serde(default)]
     pub default: bool,
+    /// The provider it comes through, for an agent that offers several: the model menu groups
+    /// by it, and `name` is then the model's own.
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 /// A command the agent runs itself when a message starts with `/name`.

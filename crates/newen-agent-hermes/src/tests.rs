@@ -52,6 +52,12 @@ fn a_session_opens_with_its_modes_and_a_turn_answers() {
         "its words cover every mode it offers"
     );
     assert_eq!(capabilities.models[0].id, "custom:fixture-model");
+    // `Custom endpoint · fixture-model`: its provider, and the model's own name.
+    assert_eq!(
+        capabilities.models[0].provider.as_deref(),
+        Some("Custom endpoint")
+    );
+    assert_eq!(capabilities.models[0].name, "fixture-model");
     assert!(capabilities.models[0].efforts.contains(&"high".to_owned()));
     assert!(capabilities.commands.iter().any(|c| c.name == "compress"));
     assert!(replayed

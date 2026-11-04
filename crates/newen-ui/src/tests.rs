@@ -3112,6 +3112,7 @@ fn the_effort_thumb_follows_a_drag_and_springs_to_the_level_let_go_at() {
             capabilities: newen_model::AgentCapabilities {
                 commands: vec![],
                 models: vec![newen_model::ModelInfo {
+                    provider: None,
                     id: "opus".into(),
                     name: "Opus 5.5".into(),
                     efforts: vec!["low".into(), "medium".into(), "high".into()],
@@ -4295,6 +4296,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
             capabilities: newen_model::AgentCapabilities {
                 commands: vec![],
                 models: vec![newen_model::ModelInfo {
+                    provider: None,
                     id: "haiku".into(),
                     name: "Haiku".into(),
                     efforts: vec!["low".into(), "high".into()],
@@ -4731,6 +4733,7 @@ fn the_model_menu_is_never_empty_and_leads_to_the_providers() {
     // Its models before any session, each with its efforts: the effort chip follows the model.
     ui.agent = "opencode".into();
     let model = |id: &str, efforts: &[&str], default: bool| newen_model::ModelInfo {
+        provider: None,
         id: id.into(),
         name: id.rsplit('/').next().unwrap().into(),
         efforts: efforts.iter().map(|e| e.to_string()).collect(),
@@ -4761,6 +4764,49 @@ fn the_model_menu_is_never_empty_and_leads_to_the_providers() {
     }));
     assert_eq!(ui.settings_page.as_deref(), Some("agent:opencode"));
     assert!(ui.adding_provider.is_some() && ui.open_menu.is_none());
+}
+
+/// An agent with several providers: each one's models under its name, the providers in the
+/// order the agent first names them, and the numbers in that order.
+#[test]
+fn the_model_menu_groups_each_providers_models_under_its_name() {
+    let store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    ui.agent = "opencode".into();
+    let model = |provider: &str, id: &str, name: &str| newen_model::ModelInfo {
+        id: format!("{provider}/{id}"),
+        name: name.into(),
+        provider: Some(provider.into()),
+        ..Default::default()
+    };
+    let models = vec![
+        model("openai", "gpt-5.5", "GPT-5.5"),
+        model("opencode", "big-pickle", "Big Pickle"),
+        model("openai", "o9", "o9"),
+    ];
+    let (latest, _) = view::split_models(&models);
+    let ids: Vec<&str> = latest.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["openai/gpt-5.5", "openai/o9", "opencode/big-pickle"]);
+    ui.applied(&Event::AgentModels {
+        agent: "opencode".into(),
+        models,
+    });
+    ui.open_menu = Some(view::MODEL_MENU);
+    assert_eq!(
+        view::menu_digit(&store, &ui, "3").as_deref(),
+        Some("model:opencode/big-pickle")
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let words = ["openai", "GPT-5.5", "o9", "opencode", "Big Pickle"];
+    let drawn: Vec<&str> = (frame.commands.iter())
+        .filter_map(|command| match command {
+            limn::DrawCommand::Text { text, .. } => words.iter().copied().find(|w| text == w),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(drawn, words);
 }
 
 /// An agent's providers in Settings: the connected ones with Disconnect, and "Add a provider",
@@ -5890,6 +5936,7 @@ fn with_models(store: &mut Store) {
             capabilities: newen_model::AgentCapabilities {
                 models: vec![
                     newen_model::ModelInfo {
+                        provider: None,
                         id: "opus".into(),
                         name: "Opus 5.5".into(),
                         efforts: vec!["low".into(), "medium".into(), "high".into()],
@@ -5897,6 +5944,7 @@ fn with_models(store: &mut Store) {
                         default: false,
                     },
                     newen_model::ModelInfo {
+                        provider: None,
                         id: "haiku".into(),
                         name: "Haiku".into(),
                         efforts: vec!["low".into(), "high".into()],
@@ -8598,6 +8646,7 @@ fn a_new_session_offers_the_models_its_agent_told_before_any_session() {
     ui.agent = "codex".into();
     assert!(view::offered_models(&store, None, &ui).is_empty());
     let model = newen_model::ModelInfo {
+        provider: None,
         id: "gpt-6-luna".into(),
         name: "GPT-6-Luna".into(),
         efforts: vec!["low".into()],

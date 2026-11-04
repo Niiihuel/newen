@@ -214,6 +214,12 @@ impl Flavor for Tools {
     fn quiet(&self, method: &str) -> bool {
         method.trim_start_matches('_') == "opencode/session/child_update"
     }
+
+    /// A session names its models `provider/Model` (`openai/GPT-5.5`).
+    fn provider(&self, name: &str) -> Option<(String, String)> {
+        let (provider, own) = name.split_once('/')?;
+        Some((provider.into(), own.into()))
+    }
 }
 
 /// The MCP tools a Code Mode script calls, as (server, tool, input): `tools.<server>.<tool>(<input>)`,
@@ -533,6 +539,7 @@ impl AgentAdapter for OpenCode {
                         .collect(),
                     modes: vec![],
                     default: default.as_deref() == Some(model.as_str()),
+                    provider: m["providerID"].as_str().map(str::to_owned),
                     id: model,
                 })
             })

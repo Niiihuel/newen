@@ -79,6 +79,12 @@ impl Flavor for Tools {
     fn resends_words(&self) -> bool {
         true
     }
+
+    /// It names its models `Provider · model` (`Custom endpoint · fixture-model`).
+    fn provider(&self, name: &str) -> Option<(String, String)> {
+        let (provider, own) = name.split_once(" · ")?;
+        Some((provider.into(), own.into()))
+    }
 }
 
 /// The server and tool of an MCP tool's name: `mcp__<server>__<tool>`, a server the session

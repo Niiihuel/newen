@@ -42,6 +42,12 @@ pub trait Flavor: Sync {
     fn resends_words(&self) -> bool {
         false
     }
+    /// The provider a model of the session's list comes through and the model's own name, when
+    /// its name says both; `None` keeps the name whole.
+    fn provider(&self, name: &str) -> Option<(String, String)> {
+        let _ = name;
+        None
+    }
 }
 
 /// A tool call as the agent has reported it so far.
@@ -417,16 +423,24 @@ impl Acp {
         // The efforts are the current model's: another's are told once it is chosen.
         let models = models
             .into_iter()
-            .map(|(id, name)| ModelInfo {
-                efforts: if id == current {
-                    efforts.clone()
-                } else {
-                    vec![]
-                },
-                default: id == current,
-                name: if name.is_empty() { id.clone() } else { name },
-                id,
-                modes: vec![],
+            .map(|(id, name)| {
+                let name = if name.is_empty() { id.clone() } else { name };
+                let (provider, name) = match self.flavor.provider(&name) {
+                    Some((provider, own)) => (Some(provider), own),
+                    None => (None, name),
+                };
+                ModelInfo {
+                    efforts: if id == current {
+                        efforts.clone()
+                    } else {
+                        vec![]
+                    },
+                    default: id == current,
+                    name,
+                    id,
+                    modes: vec![],
+                    provider,
+                }
             })
             .collect();
         AgentEvent::Ready {

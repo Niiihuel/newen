@@ -1634,6 +1634,7 @@ fn model(m: &Value, ultracode: bool) -> ModelInfo {
             vec![]
         },
         default: false,
+        provider: None,
     }
 }
 

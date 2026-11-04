@@ -51,6 +51,9 @@ fn a_session_opens_with_its_models_and_modes_and_a_turn_answers() {
     );
     let default = capabilities.models.iter().find(|m| m.default).unwrap();
     assert_eq!(default.id, "opencode/big-pickle");
+    // `opencode/Big Pickle`: its provider, and the model's own name.
+    assert_eq!(default.provider.as_deref(), Some("opencode"));
+    assert_eq!(default.name, "Big Pickle");
     assert!(capabilities.commands.iter().any(|c| c.name == "init"));
     assert!(capabilities.resume && capabilities.fork && !capabilities.steer);
     let turn = replayed.turns()[0];
@@ -521,6 +524,7 @@ fn models_come_with_their_efforts_and_the_default_before_a_session() {
     let by = |id: &str| models.iter().find(|m| m.id == id).unwrap();
     let pickle = by("opencode/big-pickle");
     assert!(pickle.default && pickle.efforts.is_empty());
+    assert_eq!(pickle.provider.as_deref(), Some("opencode"));
     assert_eq!(
         by("opencode/deepseek-v4.1-flash-free").efforts,
         ["low", "high", "max"]

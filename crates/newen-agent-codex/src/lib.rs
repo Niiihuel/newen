@@ -1779,6 +1779,7 @@ fn models(data: &Value) -> Vec<ModelInfo> {
             .collect(),
             modes: vec![],
             default: m["isDefault"] == true,
+            provider: None,
         })
         .collect()
 }

@@ -242,7 +242,7 @@ fn options(store: &Store, ui: &Ui, command: &str, query: &str) -> Vec<Row> {
                         format!("model:{}", m.id),
                         m.id.clone(),
                         m.name.clone(),
-                        String::new(),
+                        m.provider.clone().unwrap_or_default(),
                         in_use,
                     )
                 })
