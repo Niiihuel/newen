@@ -3252,7 +3252,7 @@ fn session_chip(store: &Store, id: newen_model::SessionId) -> Element {
                 .radius(2.5)
                 .size(Some(5.0), Some(5.0))
                 .centered_y(),
-            one_line(title.clone(), look::mention()),
+            one_line_cut(title.clone(), look::mention()),
             hgap(6.0),
         ])
         .gap(6.0)
@@ -3342,11 +3342,11 @@ fn started_card(store: &Store, session: &Session, input: &Value, column: f32) ->
             .radius(2.5)
             .size(Some(5.0), Some(5.0))
             .centered_y(),
-        one_line(title.to_owned(), look::palette().text),
+        one_line_cut(title.to_owned(), look::palette().text),
     ];
     if let Some(doing) = doing {
         row.push(
-            Element::faded_text(doing, FADE)
+            Element::truncated_text(doing)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
                 .foreground(look::muted())
@@ -3395,7 +3395,7 @@ fn waiting_cards(
             let mut lines = vec![text(session_title(child))];
             if let Some(asks) = asks(child, ui) {
                 lines.push(
-                    Element::faded_text(asks, FADE)
+                    Element::truncated_text(asks)
                         .font_family(FontFamily::Sans)
                         .font_size(SMALL)
                         .foreground(look::muted()),
@@ -3451,18 +3451,21 @@ fn wait_rows(
             });
             let agent = agent.unwrap_or_default();
             let words = match other.map(|o| &o.status) {
-                Some(SessionStatus::Running | SessionStatus::Starting) => working_words(
+                Some(SessionStatus::Running | SessionStatus::Starting) => working_words_cut(
                     &format!("wait-shimmer:{}:{}", session.id, wait.on),
                     format!("Waiting for \u{ab}{title}\u{bb}{agent}"),
                 ),
-                Some(SessionStatus::Awaiting) => one_line(
-                    format!("\u{ab}{title}\u{bb} is asking you something{agent}"),
-                    look::muted(),
-                ),
-                _ => one_line(
-                    format!("\u{ab}{title}\u{bb} stopped before its task was done{agent}"),
-                    look::muted(),
-                ),
+                // What it needs of the person stays whole; its name gives way, down to a little.
+                status => {
+                    let does = match status {
+                        Some(SessionStatus::Awaiting) => "is asking you something",
+                        _ => "stopped before its task was done",
+                    };
+                    Element::row(vec![
+                        one_line_cut(format!("\u{ab}{title}"), look::muted()).min_size(96.0, 0.0),
+                        one_line(format!("\u{bb} {does}{agent}"), look::muted()),
+                    ])
+                }
             };
             let cancel = keyed_button(
                 &format!("{WAIT_CANCEL}{}:{}", session.id, wait.on),
@@ -4169,6 +4172,25 @@ fn one_line(words: impl Into<String>, ink: Color) -> Element {
         .font_family(FontFamily::Sans)
         .font_size(chat())
         .foreground(ink)
+        .shrink_to_fit()
+}
+
+/// [`one_line`] cut with "…" where it does not fit, as the sidebar cuts a session's name: the
+/// name of a session, agent or workflow the conversation handed work to.
+fn one_line_cut(words: String, ink: Color) -> Element {
+    Element::truncated_text(words)
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
+        .foreground(ink)
+        .shrink_to_fit()
+}
+
+/// [`working_words`] cut with "…", for the same names while they work.
+fn working_words_cut(id: &str, words: String) -> Element {
+    Element::shimmer_truncated_text(id.to_owned(), words, look::palette().text)
+        .foreground(look::muted())
+        .font_family(FontFamily::Sans)
+        .font_size(chat())
         .shrink_to_fit()
 }
 
@@ -5809,10 +5831,14 @@ fn step_group(
         .filter_map(|s| s.result)
         .fold((0, 0), |(a, r), res| (a + res.added, r + res.removed));
     let summary = group_summary(steps);
-    let mut head = vec![if running {
-        working_words(&format!("{key}:shimmer"), summary)
-    } else {
-        one_line(summary, look::muted())
+    // A run that hands work to an agent or a workflow names it, cut with "…" as the sidebar
+    // cuts a session's name.
+    let delegates = (steps.iter()).any(|s| matches!(s.name, "Agent" | "Task" | "Workflow"));
+    let mut head = vec![match (running, delegates) {
+        (true, false) => working_words(&format!("{key}:shimmer"), summary),
+        (true, true) => working_words_cut(&format!("{key}:shimmer"), summary),
+        (false, false) => one_line(summary, look::muted()),
+        (false, true) => one_line_cut(summary, look::muted()),
     }];
     // A command left running in the background offers its output.
     if steps
@@ -6006,6 +6032,17 @@ fn step_row(
     let done = !step.running && step.result.is_some_and(|r| !r.stopped);
     let (verb, object) = step_label(step, done);
     let mut line = vec![hgap(10.0)];
+    // An agent or a workflow it hands work to is named as the sidebar names sessions: cut
+    // with "…", not faded.
+    let cut = agent || step.name == "Workflow";
+    let one_line = |words: String, ink| match cut {
+        true => one_line_cut(words, ink),
+        false => one_line(words, ink),
+    };
+    let working_words = |id: &str, words| match cut {
+        true => working_words_cut(id, words),
+        false => working_words(id, words),
+    };
     // A step still at work shimmers for as long as it runs, as the running line does.
     if step.running {
         let words = format!("{verb} {object}").trim_end().to_owned();
@@ -10087,7 +10124,7 @@ fn reports_block(
             };
             let from = match store.session(report.from) {
                 Some(_) => session_chip(store, report.from),
-                None => one_line(format!("\u{ab}{}\u{bb}", report.title), look::muted()),
+                None => one_line_cut(format!("\u{ab}{}\u{bb}", report.title), look::muted()),
             };
             let line = Element::row(vec![
                 lead.centered_y(),
