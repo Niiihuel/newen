@@ -51,6 +51,9 @@ libc = "0.2"
 bzip2 = "0.6"
 # The codec's digest, matched against the release limn-video loads (already in the tree).
 sha2 = "0.10"
+# The GitHub CLI's Linux release is a .tar.gz (gh_cli.rs); the same crates newen-update uses.
+flate2 = "1.1"
+tar = "0.4"
 
 [dev-dependencies]
 # The loopback feed (`serve`) the updates' tests check, download and stage from.

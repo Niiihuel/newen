@@ -544,8 +544,10 @@ pub struct LogoWanted {
 /// credentials (in the system's keychain): GitHub is the person's identity, not an agent.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GithubState {
-    /// `gh` is not installed; the text says how to install it on this system.
+    /// `gh` is not installed; the text says how the person can install it on this system.
     Missing(String),
+    /// Newen is downloading its own `gh`; the words say how far it got.
+    Installing(String),
     SignedOut,
     SignedIn {
         login: String,
@@ -862,6 +864,10 @@ pub enum Intent {
     },
     /// Ask `gh` who is signed in to GitHub; answered by `Event::Github`.
     CheckGithub,
+    /// Download the official GitHub CLI into Newen's tools folder, checked against the
+    /// release's checksums. Answered by `Event::Github` (`Installing`, then who is signed in)
+    /// or `Event::GithubFailed`.
+    InstallGithub,
     /// Sign in to GitHub through `gh`'s browser flow. Answered by `Event::GithubCode`, then
     /// `Event::Github` or `Event::GithubFailed`.
     ConnectGithub,

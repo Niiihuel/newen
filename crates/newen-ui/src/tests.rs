@@ -6777,10 +6777,40 @@ fn github_connects_with_a_code_that_can_be_copied_cancelled_or_fail() {
     // Signing in clears it.
     ui.applied(&Event::Github(github_in()));
     assert_eq!(ui.github.phase, crate::github::Phase::Idle);
-    // Without gh, Connect opens the Accounts page instead of starting anything.
+    // Without gh, Connect says what Newen can do before anything is downloaded.
     ui.github.state = Some(newen_model::GithubState::Missing("install gh".into()));
     assert!(click(&store, &mut ui, crate::github::CONNECT).is_empty());
-    assert_eq!(ui.settings_page.as_deref(), Some(view::SETTINGS_ACCOUNTS));
+    assert_eq!(ui.github.phase, crate::github::Phase::Offer);
+    assert!(drawn(&store, &ui, "Install and connect") && drawn(&store, &ui, "install gh"));
+    // Install and connect: the download, how far it got, then the sign-in on its own.
+    assert_eq!(
+        click(&store, &mut ui, crate::github::INSTALL),
+        [Intent::InstallGithub]
+    );
+    let words = "Downloading GitHub CLI 2.103.3\u{2026}";
+    ui.applied(&Event::Github(newen_model::GithubState::Installing(
+        words.into(),
+    )));
+    assert!(drawn(&store, &ui, words));
+    assert_eq!(
+        ui.applied(&Event::Github(newen_model::GithubState::SignedOut)),
+        [Intent::ConnectGithub]
+    );
+    assert_eq!(
+        ui.github.phase,
+        crate::github::Phase::Waiting { code: None }
+    );
+    // A failed download says why, and Try again offers it once more.
+    ui.github.phase = crate::github::Phase::Installing;
+    ui.applied(&Event::GithubFailed {
+        message: "Could not reach GitHub".into(),
+    });
+    ui.applied(&Event::Github(newen_model::GithubState::Missing(
+        "install gh".into(),
+    )));
+    assert!(drawn(&store, &ui, "Could not reach GitHub"));
+    click(&store, &mut ui, crate::github::CONNECT);
+    assert_eq!(ui.github.phase, crate::github::Phase::Offer);
 }
 
 #[test]
@@ -6869,7 +6899,12 @@ fn the_accounts_page_has_github_then_a_section_per_agent_with_its_usage() {
     ui.github.state = Some(newen_model::GithubState::Missing("install gh".into()));
     assert_eq!(
         titles(&crate::accounts::page(&store, &ui, palette), "GitHub"),
-        vec!["GitHub CLI not found"]
+        vec!["GitHub CLI not installed"]
+    );
+    ui.github.state = Some(newen_model::GithubState::Installing("Unpacking".into()));
+    assert_eq!(
+        titles(&crate::accounts::page(&store, &ui, palette), "GitHub"),
+        vec!["Installing GitHub CLI"]
     );
     ui.github.state = Some(newen_model::GithubState::SignedOut);
     assert_eq!(
