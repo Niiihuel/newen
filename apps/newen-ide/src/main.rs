@@ -266,7 +266,13 @@ impl eframe::App for App {
             .ide
             .editor_id()
             .and_then(|id| self.tree.code_editor_vim_mode(&id));
-        self.ide.tick();
+        // A save due after a delay, or on leaving the window, and the next time to look.
+        self.ide.window_focused = ctx.input(|i| i.focused);
+        let saves = self.ide.tick();
+        self.run(saves);
+        if let Some(due) = self.ide.next_due() {
+            ctx.request_repaint_after(due);
+        }
         self.ide.vim_mode = self
             .ide
             .editor_id()
@@ -566,7 +572,8 @@ impl eframe::App for App {
             self.send_to_newen();
             self.run(jobs);
         }
-        self.ide.tick();
+        let saves = self.ide.tick();
+        self.run(saves);
         self.sync_terminal(&ctx, window);
         let changed = match (&shown, &self.ide.terminal.screen) {
             (Some(before), Some(now)) => !Arc::ptr_eq(before, now),

@@ -193,6 +193,71 @@ pub struct Ask {
     pub kind: AskKind,
 }
 
+/// How a save came: asked for (Ctrl+S, or leaving the file or the window) or a second after
+/// the last edit, which neither formats nor trims the caret's line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Saving {
+    Asked,
+    Delayed,
+}
+
+/// How long after the last edit a file saves itself, and how long a save waits on the file's
+/// formatting before it goes without it.
+const AUTOSAVE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+const FORMAT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The edits that leave no spaces or tabs at the ends of `snapshot`'s lines (`trim`, all but
+/// `keep_row`) and a line break at its end (`final_newline`), in the file's own line ending.
+pub fn tidy_edits(
+    snapshot: &BufferSnapshot,
+    trim: bool,
+    final_newline: bool,
+    keep_row: Option<usize>,
+) -> Vec<limn_editor::TextEdit> {
+    let mut edits: Vec<limn_editor::TextEdit> = vec![];
+    if trim {
+        for row in (0..snapshot.line_count()).filter(|row| Some(*row) != keep_row) {
+            let Ok(range) = snapshot.line_range(row) else {
+                continue;
+            };
+            let Ok(line) = snapshot.slice(range.clone()) else {
+                continue;
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let kept = (chars.iter())
+                .rposition(|c| !matches!(c, ' ' | '\t'))
+                .map_or(0, |i| i + 1);
+            if kept < chars.len() {
+                edits.push(limn_editor::TextEdit {
+                    range: range.start + kept..range.end,
+                    replacement: String::new(),
+                });
+            }
+        }
+    }
+    let end = snapshot.char_count();
+    let last = (end > 0)
+        .then(|| {
+            snapshot
+                .slice(end - 1..end)
+                .ok()
+                .and_then(|s| s.chars().next())
+        })
+        .flatten();
+    if final_newline && last.is_some_and(|c| !matches!(c, '\n' | '\r')) {
+        let ending = snapshot.preferred_line_ending().as_str().to_owned();
+        // The spaces trimmed at the very end make way for it, in one edit.
+        match edits.last_mut().filter(|e| e.range.end == end) {
+            Some(trimmed) => trimmed.replacement = ending,
+            None => edits.push(limn_editor::TextEdit {
+                range: end..end,
+                replacement: ending,
+            }),
+        }
+    }
+    edits
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AskKind {
     Completion,
@@ -466,6 +531,15 @@ pub struct Ide {
     /// reads from limn while no popover hides it.
     pub completion: Option<Completion>,
     pub caret: Option<limn::Rect>,
+    /// Saves waiting on their file's formatting, since when; each file's revision and when it
+    /// last changed, and the revision a save after a delay last took.
+    pub formatting: Vec<(PathBuf, std::time::Instant)>,
+    pub edited: HashMap<PathBuf, (u64, std::time::Instant)>,
+    pub autosaved: HashMap<PathBuf, u64>,
+    /// Whether the window has the focus, as the host says, and the file shown, as the last tick
+    /// saw them: leaving either saves with "On focus change".
+    pub window_focused: bool,
+    pub seen: (bool, Option<PathBuf>),
 }
 
 #[derive(Default)]
@@ -559,6 +633,11 @@ impl Ide {
             open_url: None,
             completion: None,
             caret: None,
+            formatting: vec![],
+            edited: HashMap::new(),
+            autosaved: HashMap::new(),
+            window_focused: true,
+            seen: (true, None),
         };
         (ide, jobs)
     }
@@ -600,11 +679,10 @@ impl Ide {
 
     pub fn update(&mut self, action: &UiAction) -> Vec<Job> {
         if let UiAction::EditorSaveRequested { id, .. } = action {
-            let buffer = self.buffers.iter().find(|b| b.editor_id() == *id);
-            let snapshot = buffer.and_then(|b| Some((b, b.editor.as_ref()?.snapshot().ok()?)));
-            return snapshot
-                .map(|(b, s)| vec![Job::Write(b.path.clone(), Save(s))])
-                .unwrap_or_default();
+            let path = (self.buffers.iter())
+                .find(|b| b.editor_id() == *id)
+                .map(|b| b.path.clone());
+            return path.map_or_else(Vec::new, |p| self.save_file(&p, Saving::Asked));
         }
         if let UiAction::InputChanged { id, value } = action {
             if id == SETTINGS_SEARCH {
@@ -1497,8 +1575,174 @@ impl Ide {
         jobs
     }
 
-    /// Move what moves on its own: the tree's springs and its peek.
-    pub fn tick(&mut self) {
+    /// Save the open file at `path` as Settings ask: its text tidied first and, on a save asked
+    /// for, formatted by its language server when one is up, the write waiting for that.
+    pub fn save_file(&mut self, path: &Path, how: Saving) -> Vec<Job> {
+        self.tidy(path, how);
+        let language = limn_language::Language::from_path(&path.to_string_lossy());
+        let server_up =
+            (self.lsp_servers.get(&language)).is_some_and(|s| s.ready && s.failure.is_none());
+        if how == Saving::Asked && self.prefs.format_on_save && server_up {
+            let offset = (self.buffers.iter().find(|b| b.path == path))
+                .and_then(|b| b.editor.as_ref()?.snapshot().ok())
+                .map_or(0, |s| s.selection().head);
+            self.lsp_asks.push(Ask {
+                path: path.to_owned(),
+                offset,
+                kind: AskKind::Format,
+            });
+            self.formatting
+                .push((path.to_owned(), std::time::Instant::now()));
+            return vec![];
+        }
+        self.write_job(path).into_iter().collect()
+    }
+
+    /// The save that waited on `path`'s formatting, once the server formatted it or could not.
+    pub fn formatted(&mut self, path: &Path) -> Vec<Job> {
+        let waiting = self.formatting.len();
+        self.formatting.retain(|(p, _)| p != path);
+        if self.formatting.len() == waiting {
+            return vec![];
+        }
+        self.write_job(path).into_iter().collect()
+    }
+
+    fn write_job(&self, path: &Path) -> Option<Job> {
+        let buffer = self.buffers.iter().find(|b| b.path == path)?;
+        let snapshot = buffer.editor.as_ref()?.snapshot().ok()?;
+        Some(Job::Write(path.to_owned(), Save(snapshot)))
+    }
+
+    /// `path`'s text as Settings leave a save: its line endings, no spaces at the ends of its
+    /// lines (after a delay, not on the caret's) and a line break at its end, each one step to
+    /// undo, seen in the editor.
+    fn tidy(&mut self, path: &Path, how: Saving) {
+        let Some(editor) =
+            (self.buffers.iter().find(|b| b.path == path)).and_then(|b| b.editor.clone())
+        else {
+            return;
+        };
+        let shared = editor.shared_buffer();
+        let Ok(mut text) = shared.lock() else {
+            return;
+        };
+        let ending = match self.prefs.line_ending.as_str() {
+            "lf" => Some(limn_editor::LineEnding::Lf),
+            "crlf" => Some(limn_editor::LineEnding::CrLf),
+            _ => None,
+        };
+        if let Some(ending) = ending.filter(|e| *e != text.preferred_line_ending()) {
+            let _ = text.execute_command(limn_editor::EditorCommand::SetLineEnding(ending), 0);
+        }
+        let snapshot = text.snapshot();
+        let caret_row = (how == Saving::Delayed)
+            .then(|| snapshot.position_of(snapshot.selection().head).ok())
+            .flatten()
+            .map(|p| p.row);
+        let trim = self.prefs.trim_whitespace;
+        let edits = tidy_edits(&snapshot, trim, self.prefs.final_newline, caret_row);
+        if !edits.is_empty() {
+            let grown: isize = (edits.iter())
+                .map(|e| e.replacement.chars().count() as isize - e.range.len() as isize)
+                .sum();
+            let after = (snapshot.char_count() as isize + grown).max(0) as usize;
+            let head = snapshot.selection().head;
+            // The caret stays where it was, less what went before it.
+            let gone: usize = (edits.iter())
+                .filter(|e| e.range.end <= head)
+                .map(|e| e.range.len())
+                .sum();
+            let caret = Selection::caret((head - gone).min(after));
+            let _ = text.apply_transaction(&edits, caret, EditKind::Replace, 0);
+        }
+    }
+
+    /// When the host should look again, for a save due a second after an edit or a formatting
+    /// that is late.
+    pub fn next_due(&self) -> Option<std::time::Duration> {
+        let now = std::time::Instant::now();
+        let mut due = (self.formatting.iter())
+            .map(|(_, at)| FORMAT_WAIT.saturating_sub(now - *at))
+            .min();
+        if self.prefs.autosave == "delay" {
+            for buffer in self.buffers.iter().filter(|b| b.dirty()) {
+                if let Some((_, at)) = self.edited.get(&buffer.path) {
+                    let wait = AUTOSAVE_DELAY.saturating_sub(now - *at);
+                    due = Some(due.map_or(wait, |d| d.min(wait)));
+                }
+            }
+        }
+        due
+    }
+
+    /// The saves that are due: a second after the last edit, on leaving a file or the window,
+    /// and those whose formatting never came.
+    fn due_saves(&mut self) -> Vec<Job> {
+        let now = std::time::Instant::now();
+        let mut due: Vec<(PathBuf, Saving)> = vec![];
+        for buffer in &self.buffers {
+            let Some(revision) = (buffer.editor.as_ref())
+                .and_then(|e| e.snapshot().ok())
+                .map(|s| s.revision())
+            else {
+                continue;
+            };
+            let edited = self
+                .edited
+                .entry(buffer.path.clone())
+                .or_insert((revision, now));
+            if edited.0 != revision {
+                *edited = (revision, now);
+            }
+            let quiet = now - edited.1 >= AUTOSAVE_DELAY;
+            if self.prefs.autosave == "delay"
+                && buffer.dirty()
+                && quiet
+                && self.autosaved.get(&buffer.path) != Some(&revision)
+            {
+                self.autosaved.insert(buffer.path.clone(), revision);
+                due.push((buffer.path.clone(), Saving::Delayed));
+            }
+        }
+        let shown = self.active_buffer().map(|b| b.path.clone());
+        let (was_focused, was_shown) =
+            std::mem::replace(&mut self.seen, (self.window_focused, shown.clone()));
+        if self.prefs.autosave == "focus" {
+            let dirty = |path: &PathBuf| self.buffers.iter().any(|b| b.path == *path && b.dirty());
+            if was_focused && !self.window_focused {
+                due.extend(
+                    self.buffers
+                        .iter()
+                        .filter(|b| b.dirty())
+                        .map(|b| (b.path.clone(), Saving::Asked)),
+                );
+            } else if let Some(left) = was_shown.filter(|p| shown.as_ref() != Some(p) && dirty(p)) {
+                due.push((left, Saving::Asked));
+            }
+        }
+        let late: Vec<PathBuf> = (self.formatting.iter())
+            .filter(|(_, at)| now - *at >= FORMAT_WAIT)
+            .map(|(p, _)| p.clone())
+            .collect();
+        let mut jobs = vec![];
+        for path in late {
+            jobs.extend(self.formatted(&path));
+        }
+        for (path, how) in due {
+            jobs.extend(self.save_file(&path, how));
+        }
+        jobs
+    }
+
+    /// Move what moves on its own: the tree's springs and its peek, and the saves that are due.
+    pub fn tick(&mut self) -> Vec<Job> {
+        let jobs = self.due_saves();
+        self.tick_motion();
+        jobs
+    }
+
+    fn tick_motion(&mut self) {
         let now = std::time::Instant::now();
         // The pace of limn's own opening and closing slots, as Newen's.
         let motion = limn::SpringMotion::settling_in(std::time::Duration::from_millis(
@@ -2314,6 +2558,18 @@ fn editor(ide: &Ide, width: f32, height: f32) -> Element {
                 .vim_mode(ide.prefs.vim)
                 .soft_wrap(ide.prefs.wrap)
                 .minimap(ide.prefs.minimap)
+                .line_numbers(ide.prefs.line_numbers)
+                .highlight_current_line(ide.prefs.current_line)
+                .indent_guides(ide.prefs.indent_guides)
+                .show_whitespace(ide.prefs.whitespace)
+                .rulers((ide.prefs.ruler > 0).then_some(ide.prefs.ruler as usize))
+                .caret_style(match ide.prefs.caret.as_str() {
+                    "block" => limn::CaretStyle::Block,
+                    "underline" => limn::CaretStyle::Underline,
+                    _ => limn::CaretStyle::Line,
+                })
+                .caret_blink(ide.prefs.caret_blink)
+                .auto_pairs(ide.prefs.auto_pairs)
                 .vim_mode_label(false)
                 .context_actions(context_actions(ide.prefs.vim))
                 .change_marks(
@@ -3137,6 +3393,155 @@ mod tests {
 
     fn stamp(secs: u64) -> Stamp {
         Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn a_save_trims_line_ends_and_ends_in_a_line_break_in_one_edit() {
+        let tidied = |text: &str, trim, newline, keep| {
+            let snapshot = TextBuffer::new(text).unwrap().snapshot();
+            let mut text = text.to_owned();
+            let mut edits = tidy_edits(&snapshot, trim, newline, keep);
+            edits.sort_by_key(|e| std::cmp::Reverse(e.range.start));
+            for edit in edits {
+                let start = text
+                    .char_indices()
+                    .nth(edit.range.start)
+                    .map_or(text.len(), |(i, _)| i);
+                let end = text
+                    .char_indices()
+                    .nth(edit.range.end)
+                    .map_or(text.len(), |(i, _)| i);
+                text.replace_range(start..end, &edit.replacement);
+            }
+            text
+        };
+        assert_eq!(tidied("a  \n\tb\t\nc", true, false, None), "a\n\tb\nc");
+        assert_eq!(tidied("a  \nb  ", true, true, None), "a\nb\n");
+        assert_eq!(tidied("a  \nb  ", true, false, Some(1)), "a\nb  ");
+        assert_eq!(tidied("x\r\ny", false, true, None), "x\r\ny\r\n");
+        assert_eq!(tidied("done\n", true, true, None), "done\n");
+        assert_eq!(tidied("", true, true, None), "");
+    }
+
+    fn written(jobs: &[Job]) -> Option<String> {
+        jobs.iter().find_map(|job| match job {
+            Job::Write(_, Save(snapshot)) => Some(snapshot.chunks().collect()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_save_asked_for_tidies_the_text_and_can_be_undone() {
+        let mut ide = with_files();
+        (ide.prefs.trim_whitespace, ide.prefs.final_newline) = (true, true);
+        ide.prefs.line_ending = "crlf".into();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}   \nfn b() {}");
+        let id = ide.buffers[0].editor_id();
+        let jobs = ide.update(&UiAction::EditorSaveRequested {
+            id,
+            document_id: 0,
+            revision: 0,
+        });
+        assert_eq!(
+            written(&jobs).as_deref(),
+            Some("fn a() {}\r\nfn b() {}\r\n")
+        );
+        assert_eq!(text_of(&ide.buffers[0]), "fn a() {}\r\nfn b() {}\r\n");
+    }
+
+    #[test]
+    fn a_file_saves_itself_a_second_after_the_last_edit_but_not_the_line_being_written() {
+        let mut ide = with_files();
+        ide.prefs.autosave = "delay".into();
+        ide.prefs.trim_whitespace = true;
+        ide.prefs.format_on_save = true;
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}  \n");
+        type_in(&ide.buffers[0], 12, "let ");
+        assert!(ide.tick().is_empty(), "not yet: it was just written");
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        for edited in ide.edited.values_mut() {
+            edited.1 = past;
+        }
+        // The caret is at the end of "let ", on the second line: that line keeps its space.
+        assert_eq!(written(&ide.tick()).as_deref(), Some("fn a() {}\nlet "));
+        assert!(
+            ide.lsp_asks.is_empty(),
+            "no formatting on a save after a delay"
+        );
+        assert!(written(&ide.tick()).is_none(), "once for that edit");
+    }
+
+    #[test]
+    fn a_formatted_save_waits_for_the_server_but_not_forever() {
+        let mut ide = with_files();
+        ide.prefs.format_on_save = true;
+        ide.lsp_servers.insert(
+            limn_language::Language::Rust,
+            Server {
+                name: "rust-analyzer".into(),
+                ready: true,
+                failure: None,
+                hint: None,
+            },
+        );
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let id = ide.buffers[0].editor_id();
+        let save = UiAction::EditorSaveRequested {
+            id,
+            document_id: 0,
+            revision: 0,
+        };
+        assert!(
+            written(&ide.update(&save)).is_none(),
+            "it waits for the formatting"
+        );
+        assert!(matches!(
+            ide.lsp_asks.last(),
+            Some(Ask {
+                kind: AskKind::Format,
+                ..
+            })
+        ));
+        assert!(written(&ide.formatted(Path::new("/r/a.rs"))).is_some());
+        // A server that never answers: the save goes on without it.
+        ide.update(&save);
+        ide.formatting[0].1 -= std::time::Duration::from_secs(4);
+        assert!(written(&ide.tick()).is_some());
+        assert!(ide.formatting.is_empty());
+    }
+
+    #[test]
+    fn on_focus_change_leaving_the_window_saves_what_changed() {
+        let mut ide = with_files();
+        ide.prefs.autosave = "focus".into();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        ide.tick();
+        type_in(&ide.buffers[0], 0, "// ");
+        assert!(written(&ide.tick()).is_none());
+        ide.window_focused = false;
+        assert_eq!(written(&ide.tick()).as_deref(), Some("// fn a() {}\n"));
+    }
+
+    #[test]
+    fn the_editor_draws_as_settings_say() {
+        let mut ide = with_files();
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let window = Size::new(1200.0, 800.0);
+        let drawn = |ide: &Ide, words: &str| {
+            let frame = UiTree::new(view(ide, window)).layout(window);
+            (frame.commands.iter())
+                .any(|c| matches!(c, limn::DrawCommand::Text { text, .. } if text == words))
+        };
+        assert!(drawn(&ide, "1") && !drawn(&ide, "\u{b7}"));
+        ide.prefs.line_numbers = false;
+        ide.prefs.whitespace = true;
+        assert!(!drawn(&ide, "1"), "no line numbers");
+        assert!(drawn(&ide, "\u{b7}"), "a space marked");
     }
 
     #[test]

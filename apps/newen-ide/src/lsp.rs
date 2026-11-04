@@ -232,7 +232,11 @@ impl Lsp {
                     Ok(value) => value,
                     Err(error) => {
                         ide.lsp_note = Some(error.message);
-                        return vec![];
+                        // A save that waited on the formatting goes without it.
+                        return match kind {
+                            AskKind::Format => ide.formatted(&path),
+                            _ => vec![],
+                        };
                     }
                 };
                 return answered(ide, &path, document.revision, kind, &value);
@@ -336,6 +340,7 @@ fn answered(ide: &mut Ide, path: &Path, revision: u64, kind: AskKind, value: &Va
             if let Some(snapshot) = snapshot_at(ide, path, revision) {
                 apply(ide, path, &snapshot, value);
             }
+            return ide.formatted(path);
         }
         AskKind::Rename(_) => {
             let mut jobs = vec![];
