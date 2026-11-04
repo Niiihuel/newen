@@ -3,12 +3,14 @@
 //! `captures/<scenario>-<epoch>/session.jsonl`: one `{t_ms, dir, msg}` per line, `dir` being
 //! `out` (Newen → CLI), `in` (CLI → Newen) or `stderr`.
 //!
-//! Usage: newen-capture [--agent codex] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
+//! Usage: newen-capture [--agent codex|opencode|hermes] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
 //! todos, agent, think, workflow, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
-//! it). With `--agent codex`, see codex.rs.
+//! it). With `--agent codex`, see codex.rs; with `--agent opencode` or `hermes`, acp.rs.
 
+mod acp;
 mod codex;
+mod model;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -563,7 +565,37 @@ fn reply(cli: &mut Cli, msg: &Value, policy: Policy) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, server] = &args[..] {
+        if flag == "--mcp-stub" {
+            return acp::stub(server);
+        }
+    }
+    // The fake model alone, for trying an agent by hand (in the app, say): `--serve-model <port> <scenario>`.
+    if let [flag, port, scenario] = &args[..] {
+        if flag == "--serve-model" {
+            model::serve(port.parse().expect("a port"), scenario.clone());
+            loop {
+                std::thread::park();
+            }
+        }
+    }
     if let [flag, agent, name, ..] = &args[..] {
+        if flag == "--agent" && acp::is_acp(agent) {
+            let flag = |f: &str| {
+                (args.iter().position(|a| a == f))
+                    .and_then(|i| args.get(i + 1))
+                    .map(String::as_str)
+            };
+            let model = flag("--model");
+            if let Some(port) = flag("--fake-model").and_then(|p| p.parse().ok()) {
+                model::serve(port, name.clone());
+            }
+            if let Err(error) = acp::run(agent, name, model) {
+                eprintln!("newen-capture: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
         if flag == "--agent" && agent == "codex" {
             if let Err(error) = codex::run(name) {
                 eprintln!("newen-capture: {error}");

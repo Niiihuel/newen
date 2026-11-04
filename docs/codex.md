@@ -340,3 +340,14 @@ Captura `plan-mode.jsonl` (`codex-cli 0.163.0`, `gpt-6-luna`, esfuerzo `low`, 2 
 - **Verificación en pantalla** (agente falso, Xvfb 1408×844, oscuro):
   - `ask.jsonl`, que no bloquea: la tarjeta con Red / Blue / Other; al minuto "Skipped in 40s" junto a Skip; al vencer, la tarjeta se va y el turno sigue.
   - Una copia de `ask.jsonl`, fuera del repo, con una pregunta secreta de solo texto y otra sin "Other": el campo enmascarado ("•••"), Next habilitado al escribir, y la segunda página con Red / Blue sin Other.
+
+## Herramientas de Newen (2026-11-03)
+
+Verificado de punta a punta con el motor real (`Engine` y su router), `codex-cli` 0.163.0 y 0.166.0 (la última), y un modelo falso de la API Responses en un `CODEX_HOME` de prueba (`model_providers` con `wire_api = "responses"`), sin cuenta ni turnos pagos. La prueba fue un ejemplo temporal, no está en el repo.
+
+- **Las seis** (`start_session`, `dismiss_task`, `send_to_session`, `read_session`, `list_sessions`, `wait_for_session`) llegan al modelo y responden con lo del motor. `start_session` con `agent: "opencode"` abrió una sesión de OpenCode que trabajó y avisó de vuelta, y `wait_for_session` despertó a Codex con su informe.
+- **Reanudar y bifurcar las conservan.** Solo `thread/start` toma `dynamicTools`, pero Codex guarda las herramientas en la sesión del hilo y las recupera al reanudar o bifurcar (`codex-rs/core/src/session/mod.rs`: `get_dynamic_tools` de la historia). **Límite:** son las del momento en que se creó el hilo. Un hilo de Codex anterior a una herramienta nueva de Newen (`list_sessions` y `wait_for_session` son del 2026-11-01) no la tiene, aunque `developerInstructions` la nombre; ese hilo necesita una conversación nueva.
+- **Forma canónica.** `DynamicToolSpec` es un enum etiquetado por `type`. Newen mandaba `{name, description, inputSchema}`, que la 0.163.0 todavía acepta como formato "legacy" (`normalize_dynamic_tool_specs`). Ahora manda `type: "function"`.
+- **Ids como texto.** Un modelo que manda `session_id` como `"2"` recibía de `read_session` y `wait_for_session` "No such session" o "needs a session_id". Que un modelo real lo haga es inferido (la API Responses no obliga los tipos de un esquema que no es `strict`); se probó con el modelo guionado. El motor ahora acepta los dos (`session_arg`), para todos los agentes. Leer la propia sesión ahora lo dice ("That is this session…") en vez de "No such session".
+- **Navegador:** Codex sigue sin las herramientas del navegador (`BROWSER_TOOLS`), como estaba decidido; las tienen Claude, OpenCode y Hermes.
+

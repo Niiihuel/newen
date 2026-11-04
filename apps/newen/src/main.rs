@@ -1783,6 +1783,46 @@ fn open_url(url: &str) -> bool {
             .is_ok_and(|status| status.success())
 }
 
+/// `newen --mcp-host <server>`: one of Newen's MCP servers, for an agent that starts the
+/// servers it uses itself. Its stdio goes to Newen over the engine's bridge, with the session's
+/// key from the environment, and back.
+fn mcp_host(server: &str) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        let connect = || -> Option<std::os::unix::net::UnixStream> {
+            let socket = std::env::var_os("NEWEN_BROWSER_BRIDGE")?;
+            let key = std::env::var("NEWEN_BROWSER_KEY").ok()?;
+            let mut stream = std::os::unix::net::UnixStream::connect(socket).ok()?;
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({ "key": key, "mcp": server })
+            )
+            .ok()?;
+            Some(stream)
+        };
+        let Some((stream, mut back)) = connect().and_then(|s| Some((s.try_clone().ok()?, s)))
+        else {
+            eprintln!("newen --mcp-host: this session's Newen cannot be reached.");
+            return 1;
+        };
+        let answers = std::thread::spawn(move || std::io::copy(&mut back, &mut std::io::stdout()));
+        let _ = std::io::copy(&mut std::io::stdin(), &mut &stream);
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        let _ = answers.join();
+        0
+    }
+    #[cfg(not(unix))]
+    {
+        // shortcut: the bridge is a Unix socket; on Windows an agent that starts its own servers
+        // gets none of Newen's tools until newen-link's loopback transport carries them.
+        let _ = server;
+        eprintln!("newen --mcp-host: not available on this system.");
+        1
+    }
+}
+
 /// Show `path` of the folder `root`, or the folder, in `editor` at `line` when given: newen-ide
 /// in its window of that folder when one is open, else a new one; the others by their URL
 /// link, as Desktop opens them: `vscode://file/<path>:<line>`.
@@ -1906,6 +1946,11 @@ fn main() -> eframe::Result {
     if let [_, flag, url, ..] = args.as_slice() {
         if flag == "--open-url" {
             std::process::exit(if open_url(url) { 0 } else { 1 });
+        }
+    }
+    if let [_, flag, server] = args.as_slice() {
+        if flag == "--mcp-host" {
+            std::process::exit(mcp_host(server));
         }
     }
     if let [_, flag] = args.as_slice() {

@@ -332,6 +332,8 @@ impl AgentAdapter for Claude {
             sse: true,
             env_by_name: false,
             skills: true,
+            host: false,
+            inline_secrets: false,
         }
     }
 
