@@ -330,6 +330,8 @@ fn standing(provider: &Provider) -> String {
         "Connected".into()
     } else if let Some(variable) = &provider.env_set {
         format!("Connected by {variable}")
+    } else if provider.key && !provider.sign_ins.is_empty() {
+        "API key or sign-in".into()
     } else if provider.key {
         "API key".into()
     } else if provider.sign_ins.iter().any(|m| m.browser) {
@@ -758,6 +760,8 @@ mod tests {
             form: vec![],
         }];
         assert_eq!(standing(&browser), "Signs in in the browser");
+        browser.key = true;
+        assert_eq!(standing(&browser), "API key or sign-in");
     }
 
     /// A question asked only for one answer of another, and Continue only once each asked one

@@ -16,7 +16,8 @@ const LIMIT: u64 = 512 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The light and dark logo of `wanted` in `dir`: from disk when kept, else looked up and kept.
-/// `None` for a side with no logo; a lookup that finds none is kept as a marker.
+/// `None` for a side with no logo; a lookup that finds none is kept as a marker of where it
+/// looked, which stops only a lookup in the same places.
 pub fn logo(dir: &Path, wanted: &LogoWanted) -> (Option<PathBuf>, Option<PathBuf>) {
     let slug = slug(&wanted.key);
     let light = dir.join(format!("{slug}-light.png"));
@@ -26,10 +27,8 @@ pub fn logo(dir: &Path, wanted: &LogoWanted) -> (Option<PathBuf>, Option<PathBuf
         let dark = if dark.is_file() { dark } else { light.clone() };
         return (Some(light), Some(dark));
     }
-    let marked = std::fs::metadata(&none)
-        .and_then(|meta| meta.modified())
-        .is_ok_and(|written| fresh(written, SystemTime::now()));
-    if marked {
+    let source = wanted.url.as_deref().unwrap_or_default();
+    if marked(&none, source, SystemTime::now()) {
         return (None, None);
     }
     let _ = std::fs::create_dir_all(dir);
@@ -40,9 +39,18 @@ pub fn logo(dir: &Path, wanted: &LogoWanted) -> (Option<PathBuf>, Option<PathBuf
         let _ = std::fs::remove_file(&none);
         (Some(light), Some(dark))
     } else {
-        let _ = std::fs::write(&none, b"");
+        let _ = std::fs::write(&none, source.as_bytes());
         (None, None)
     }
+}
+
+/// Whether a marker at `none` stands for a lookup with `source` (the logo's own address, or a
+/// server's) at `now`: written for the same source, within the week. One written before the
+/// logo had a source to try (a catalogue's, since) does not.
+fn marked(none: &Path, source: &str, now: SystemTime) -> bool {
+    let tried = std::fs::read_to_string(none).ok();
+    let written = std::fs::metadata(none).and_then(|meta| meta.modified());
+    tried.as_deref() == Some(source) && written.is_ok_and(|written| fresh(written, now))
 }
 
 /// A file name for `key`: its letters and digits, lower case, and a dash for anything else.
@@ -304,6 +312,30 @@ mod tests {
         assert!(fresh(now - Duration::from_secs(60), now));
         assert!(fresh(now + Duration::from_secs(60), now));
         assert!(!fresh(now - RETRY_AFTER - Duration::from_secs(1), now));
+    }
+
+    #[test]
+    fn a_marker_stops_only_a_lookup_in_the_same_places() {
+        let dir = std::env::temp_dir().join(format!("newen-logos-marked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let none = dir.join("provider-modelscope.none");
+        let now = SystemTime::now();
+        // Written when only its name was looked up: a catalogue's address is tried still.
+        std::fs::write(&none, b"").unwrap();
+        assert!(marked(&none, "", now));
+        assert!(!marked(
+            &none,
+            "https://models.dev/logos/modelscope.svg",
+            now
+        ));
+        std::fs::write(&none, b"https://models.dev/logos/modelscope.svg").unwrap();
+        assert!(marked(
+            &none,
+            "https://models.dev/logos/modelscope.svg",
+            now
+        ));
+        assert!(!marked(&dir.join("other.none"), "", now));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
