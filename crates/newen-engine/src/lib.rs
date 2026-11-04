@@ -17,6 +17,7 @@ mod auth;
 mod bridge;
 mod chime;
 mod codec;
+mod gh_cli;
 mod github;
 mod global;
 mod images;
@@ -103,6 +104,9 @@ pub struct Config {
     pub pictures: Option<PathBuf>,
     /// Where the GitHub account's avatar is kept; `None` downloads none.
     pub avatars: Option<PathBuf>,
+    /// Where programs Newen downloads at the person's asking are kept (the GitHub CLI,
+    /// gh_cli.rs); `None` downloads none and runs the system's.
+    pub tools: Option<PathBuf>,
     /// The built-in browser's Chromium profile; `None` puts one in the temporary folder.
     pub browser: Option<PathBuf>,
     /// The "All agents" layer's `extensions.json`, with its `skills/` folder beside it; `None`
@@ -156,6 +160,7 @@ impl Config {
             logos: Some(data.join("logos")),
             pictures: Some(data.join("pictures")),
             avatars: Some(data.join("avatars")),
+            tools: Some(data.join("tools")),
             browser: Some(data.join("browser")),
             extensions: Some(config.join("extensions.json")),
             updates: true,
@@ -1172,6 +1177,7 @@ impl Router {
                 actor.queue_changed();
             }
             actor.shadow_root = self.config.snapshots.clone();
+            actor.tools = self.config.tools.clone();
             actor.pictures = self.config.pictures.clone();
             actor.route = Some(self.internal.clone());
             tokio::spawn(actor.run(rx));
@@ -1264,6 +1270,7 @@ impl Router {
         self.inject(&mut actor);
         self.share(&mut actor, own);
         actor.shadow_root = self.config.snapshots.clone();
+        actor.tools = self.config.tools.clone();
         actor.pictures = self.config.pictures.clone();
         actor.route = Some(self.internal.clone());
         actor.remote_at_start = self.settings.remote_new_sessions;
@@ -1866,12 +1873,21 @@ impl Router {
             }
             Intent::CheckGithub => {
                 let (ui, dir) = (self.ui.clone(), self.config.avatars.clone());
-                tokio::spawn(async move { github::check(dir, &ui).await });
+                let tools = self.config.tools.clone();
+                tokio::spawn(async move { github::check(tools, dir, &ui).await });
+                return;
+            }
+            Intent::InstallGithub => {
+                let (ui, dir) = (self.ui.clone(), self.config.avatars.clone());
+                if let Some(tools) = self.config.tools.clone() {
+                    tokio::spawn(github::install(tools, dir, ui));
+                }
                 return;
             }
             Intent::ConnectGithub => {
                 // A new sign-in replaces one under way: the old sender drops and cancels it.
                 self.github_login = Some(github::connect(
+                    self.config.tools.clone(),
                     self.config.avatars.clone(),
                     self.ui.clone(),
                     self.config.open_pages,
@@ -1886,12 +1902,14 @@ impl Router {
             }
             Intent::DisconnectGithub { login } => {
                 let (ui, dir) = (self.ui.clone(), self.config.avatars.clone());
-                tokio::spawn(async move { github::disconnect(login, dir, &ui).await });
+                let tools = self.config.tools.clone();
+                tokio::spawn(async move { github::disconnect(tools, login, dir, &ui).await });
                 return;
             }
             Intent::GithubContributions { login } => {
                 let ui = self.ui.clone();
-                tokio::spawn(async move { github::contributions(login, &ui).await });
+                let tools = self.config.tools.clone();
+                tokio::spawn(async move { github::contributions(tools, login, &ui).await });
                 return;
             }
             // The registry, asked with the computer's own `curl` (Linux, macOS, Windows 10 on).
@@ -3045,6 +3063,8 @@ struct Actor {
     busy: bool,
     /// Where this folder's shadow repository lives, and the shadow once opened.
     shadow_root: Option<PathBuf>,
+    /// Newen's tools folder, whose `gh` the agent gets on its PATH once Newen downloaded one.
+    tools: Option<PathBuf>,
     /// Where the pictures of every session are kept (`Config::pictures`).
     pictures: Option<PathBuf>,
     shadow: Option<Arc<newen_git::Shadow>>,
@@ -3123,6 +3143,7 @@ impl Actor {
             running: None,
             busy: false,
             shadow_root: None,
+            tools: None,
             pictures: None,
             shadow: None,
             sent: Default::default(),
@@ -3675,6 +3696,10 @@ impl Actor {
         }
         for key in &plan.env_remove {
             command.env_remove(key);
+        }
+        // Newen's own `gh` is the agent's too: Create PR asks the agent to run it.
+        if let Some(path) = (self.tools.as_deref()).and_then(gh_cli::on_path) {
+            command.env("PATH", path);
         }
         command.envs(self.env.iter().map(|(k, v)| (k, v)));
         let mut child = command

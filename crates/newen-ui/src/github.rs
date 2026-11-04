@@ -21,6 +21,8 @@ pub const CANCEL: &str = "github:cancel";
 const CLOSE: &str = "github:close";
 /// Asks `gh` again who is signed in.
 pub const CHECK: &str = "github:check";
+/// Downloads Newen's own `gh`, then signs in.
+pub const INSTALL: &str = "github:install";
 /// Reloads the calendar.
 pub const REFRESH: &str = "github:refresh";
 /// The profile's link; the host opens it on the computer.
@@ -31,6 +33,10 @@ pub const PROFILE_PREFIX: &str = "https://github.com/";
 pub enum Phase {
     #[default]
     Idle,
+    /// `gh` is missing: what Newen can do about it, before anything is downloaded.
+    Offer,
+    /// Newen is downloading `gh`; the sign-in follows once it is there.
+    Installing,
     /// `gh` was started; the code once it printed it.
     Waiting {
         code: Option<String>,
@@ -116,6 +122,11 @@ pub(crate) fn heard(ui: &mut Ui, event: &Event) -> Vec<Intent> {
             if changed {
                 ui.github.calendar = Calendar::Idle;
             }
+            // `gh` arrived and nobody is signed in to it: the sign-in the person asked for.
+            if ui.github.phase == Phase::Installing && *state == GithubState::SignedOut {
+                ui.github.phase = Phase::Waiting { code: None };
+                return vec![Intent::ConnectGithub];
+            }
             want_calendar(ui)
         }
         Event::GithubCode { code, .. } => {
@@ -144,13 +155,17 @@ pub(crate) fn clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     Some(match id {
         CONNECT => {
             ui.account_menu = false;
-            // Without `gh` there is nothing to start: Settings says how to install it.
+            // Without `gh` there is nothing to start yet: first, what Newen can do about it.
             if matches!(ui.github.state, Some(GithubState::Missing(_))) {
-                ui.settings_page = Some(crate::view::SETTINGS_ACCOUNTS.into());
+                ui.github.phase = Phase::Offer;
                 return Some(vec![]);
             }
             ui.github.phase = Phase::Waiting { code: None };
             vec![Intent::ConnectGithub]
+        }
+        INSTALL => {
+            ui.github.phase = Phase::Installing;
+            vec![Intent::InstallGithub]
         }
         DISCONNECT => {
             ui.account_menu = false;
@@ -218,6 +233,7 @@ pub(crate) fn menu_header(ui: &Ui) -> limn::DropdownMenuEntry {
             None => vec![text(format!("@{login}"))],
         },
         (Some(GithubState::Missing(_)), _) => vec![muted("GitHub CLI not installed")],
+        (Some(GithubState::Installing(_)), _) => vec![muted("Installing GitHub CLI\u{2026}")],
         (Some(GithubState::SignedOut), _) => vec![muted("GitHub not connected")],
         (Some(GithubState::Unknown(_)), _) => vec![muted("GitHub unavailable")],
         _ => vec![muted("GitHub")],
@@ -261,8 +277,48 @@ pub(crate) fn dialogs(ui: &Ui, base: Element) -> Element {
         DISCONNECT_YES,
         DISCONNECT_NO,
     );
+    let button = |id, label, primary| keyed_button(id, label, "", primary, true, palette);
     let (title, about, body, footer): (&str, String, Element, Element) = match &ui.github.phase {
         Phase::Idle => return base,
+        Phase::Offer => (
+            "Connect GitHub",
+            "Newen signs in to GitHub through the GitHub CLI (gh), which is not on this \
+             computer. Newen can download the official release from github.com/cli/cli, check \
+             it against the release's checksums and keep it in its own folder, with no \
+             administrator rights."
+                .into(),
+            match &ui.github.state {
+                Some(GithubState::Missing(hint)) => muted(hint.clone()),
+                _ => hgap(0.0),
+            },
+            Element::row(vec![
+                Element::spacer().flex(1.0),
+                button(CLOSE, "Cancel", false),
+                button(INSTALL, "Install and connect", true),
+            ])
+            .gap(8.0),
+        ),
+        Phase::Installing => (
+            "Connect GitHub",
+            "Then you will sign in with a one-time code.".into(),
+            Element::row(vec![
+                limn::Spinner::new("github:installing", look::muted()).render(),
+                muted(match &ui.github.state {
+                    Some(GithubState::Installing(words)) => words.clone(),
+                    _ => "Starting\u{2026}".into(),
+                })
+                .centered_y(),
+            ])
+            .gap(8.0)
+            .padding(12.0)
+            .background(look::chart_tint())
+            .radius(8.0),
+            // The download goes on; closing only leaves the sign-in for later.
+            Element::row(vec![
+                Element::spacer().flex(1.0),
+                button(CLOSE, "Close", false),
+            ]),
+        ),
         Phase::Waiting { code } => {
             let shown = match code {
                 Some(code) => Element::row(vec![

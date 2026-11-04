@@ -2936,6 +2936,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bzip2",
+ "flate2",
  "image",
  "keyring",
  "libc",
@@ -2952,6 +2953,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "ureq",

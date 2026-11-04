@@ -184,10 +184,20 @@ fn github_rows(ui: &Ui, palette: ComponentPalette) -> Vec<Setting> {
             ]
         }
         (Some(GithubState::Missing(hint)), _) => vec![setting(
-            "GitHub CLI not found",
-            hint,
-            buttons(&[(github::CHECK, "Check again")]),
+            "GitHub CLI not installed",
+            &format!(
+                "Newen signs in to GitHub through the GitHub CLI. It can download the official \
+                 release, check it and keep it in its own folder, with no administrator \
+                 rights. {hint}"
+            ),
+            buttons(&[
+                (github::INSTALL, "Install and connect"),
+                (github::CHECK, "Check again"),
+            ]),
         )],
+        (Some(GithubState::Installing(words)), _) => {
+            vec![setting("Installing GitHub CLI", words, hgap(0.0))]
+        }
         (Some(GithubState::SignedOut), _) => vec![setting(
             "GitHub",
             "Connect your account to show who you are in Newen and your activity here. \

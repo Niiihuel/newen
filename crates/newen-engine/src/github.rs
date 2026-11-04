@@ -30,16 +30,15 @@ const CALENDAR_QUERY: &str = "query newenContributions { viewer { login contribu
 contributionCalendar { totalContributions weeks { contributionDays { date weekday \
 contributionCount contributionLevel } } } } } }";
 
-/// How to get `gh` on this system, shown where it is missing.
+/// How the person can get `gh` on this system themselves, beside Newen's own download.
 pub(crate) fn install_hint() -> String {
     if cfg!(windows) {
-        "GitHub CLI (gh) is not installed. Install it with: winget install GitHub.cli".into()
+        "Or install it yourself: winget install GitHub.cli".into()
     } else if cfg!(target_os = "macos") {
-        "GitHub CLI (gh) is not installed. Install it with: brew install gh".into()
+        "Or install it yourself: brew install gh".into()
     } else {
-        "GitHub CLI (gh) is not installed. Install it with your package manager \
-         (for example apt install gh, dnf install gh, pacman -S github-cli), \
-         or see cli.github.com."
+        "Or install it yourself with your package manager (apt install gh, dnf install gh, \
+         pacman -S github-cli) or from cli.github.com."
             .into()
     }
 }
@@ -69,8 +68,9 @@ impl Ran {
     }
 }
 
-fn gh(args: &[&str]) -> Command {
-    let mut command = Command::from(newen_files::command("gh"));
+/// `gh` with `args`: Newen's own under `tools` when it downloaded one, else the system's.
+fn gh(tools: Option<&Path>, args: &[&str]) -> Command {
+    let mut command = Command::from(newen_files::command(crate::gh_cli::program(tools)));
     command
         .args(args)
         .stdin(Stdio::null())
@@ -194,8 +194,9 @@ fn avatar(dir: &Path, login: &str, url: &str) -> Option<PathBuf> {
 }
 
 /// Ask `gh` who is signed in and tell the UI; the avatar follows once downloaded.
-pub(crate) async fn check(avatars: Option<PathBuf>, ui: &Sink) {
-    let status = run(gh(&["auth", "status", "--hostname", HOST]), 30).await;
+pub(crate) async fn check(tools: Option<PathBuf>, avatars: Option<PathBuf>, ui: &Sink) {
+    let tools = tools.as_deref();
+    let status = run(gh(tools, &["auth", "status", "--hostname", HOST]), 30).await;
     let status = match status {
         Ok(Some(ran)) => ran,
         Ok(None) => return ui(Event::Github(GithubState::Missing(install_hint()))),
@@ -211,7 +212,7 @@ pub(crate) async fn check(avatars: Option<PathBuf>, ui: &Sink) {
         };
         return ui(Event::Github(state));
     }
-    let user = match run(gh(&["api", "user"]), 30).await {
+    let user = match run(gh(tools, &["api", "user"]), 30).await {
         Ok(Some(ran)) if ran.exit == 0 => parse_user(&ran.stdout),
         Ok(Some(ran)) => Err(ran.said()),
         Ok(None) => return ui(Event::Github(GithubState::Missing(install_hint()))),
@@ -260,19 +261,27 @@ fn parse_code(line: &str) -> Option<String> {
 
 /// Run `gh auth login --web`: report the code (and open the page), then ask who is signed in,
 /// or say why not. The returned sender cancels (a message or a drop kills the process).
-pub(crate) fn connect(avatars: Option<PathBuf>, ui: Sink, open_page: bool) -> UnboundedSender<()> {
+pub(crate) fn connect(
+    tools: Option<PathBuf>,
+    avatars: Option<PathBuf>,
+    ui: Sink,
+    open_page: bool,
+) -> UnboundedSender<()> {
     let (cancel, mut cancelled) = unbounded_channel::<()>();
-    let mut command = gh(&[
-        "auth",
-        "login",
-        "--web",
-        "--hostname",
-        HOST,
-        "--git-protocol",
-        "https",
-        "--scopes",
-        "read:user",
-    ]);
+    let mut command = gh(
+        tools.as_deref(),
+        &[
+            "auth",
+            "login",
+            "--web",
+            "--hostname",
+            HOST,
+            "--git-protocol",
+            "https",
+            "--scopes",
+            "read:user",
+        ],
+    );
     // Newen opens the page itself.
     command.env("GH_BROWSER", "true").env("BROWSER", "true");
     tokio::spawn(async move {
@@ -336,7 +345,7 @@ pub(crate) fn connect(avatars: Option<PathBuf>, ui: Sink, open_page: bool) -> Un
             }
         }
         if child.wait().await.is_ok_and(|s| s.success()) {
-            return check(avatars, &ui).await;
+            return check(tools, avatars, &ui).await;
         }
         failed(if last.trim().is_empty() {
             "Sign-in failed".into()
@@ -348,12 +357,20 @@ pub(crate) fn connect(avatars: Option<PathBuf>, ui: Sink, open_page: bool) -> Un
 }
 
 /// Sign `login` out of `gh`, then ask who is signed in (another account may take its place).
-pub(crate) async fn disconnect(login: String, avatars: Option<PathBuf>, ui: &Sink) {
+pub(crate) async fn disconnect(
+    tools: Option<PathBuf>,
+    login: String,
+    avatars: Option<PathBuf>,
+    ui: &Sink,
+) {
     if !valid_login(&login) {
         return;
     }
     let ran = run(
-        gh(&["auth", "logout", "--hostname", HOST, "--user", &login]),
+        gh(
+            tools.as_deref(),
+            &["auth", "logout", "--hostname", HOST, "--user", &login],
+        ),
         30,
     )
     .await;
@@ -364,18 +381,38 @@ pub(crate) async fn disconnect(login: String, avatars: Option<PathBuf>, ui: &Sin
             });
         }
     }
-    check(avatars, ui).await;
+    check(tools, avatars, ui).await;
+}
+
+/// Download Newen's own `gh` into `tools`, saying how far it got, then ask who is signed in:
+/// no one yet, which the UI takes as the cue to sign in.
+pub(crate) async fn install(tools: PathBuf, avatars: Option<PathBuf>, ui: Sink) {
+    let step = |words: String| ui(Event::Github(GithubState::Installing(words)));
+    step("Looking for the latest GitHub CLI\u{2026}".into());
+    let (into, told) = (tools.clone(), ui.clone());
+    let fetched = tokio::task::spawn_blocking(move || {
+        crate::gh_cli::fetch(&into, |words| {
+            told(Event::Github(GithubState::Installing(words)))
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|fetched| fetched);
+    if let Err(message) = fetched {
+        ui(Event::GithubFailed { message });
+    }
+    check(Some(tools), avatars, &ui).await;
 }
 
 /// Fetch and validate the calendar of `login`.
-pub(crate) async fn contributions(login: String, ui: &Sink) {
-    let result = load(&login).await;
+pub(crate) async fn contributions(tools: Option<PathBuf>, login: String, ui: &Sink) {
+    let result = load(tools.as_deref(), &login).await;
     ui(Event::GithubContributions(result));
 }
 
-async fn load(login: &str) -> Result<ContributionCalendar, String> {
+async fn load(tools: Option<&Path>, login: &str) -> Result<ContributionCalendar, String> {
     let query = format!("query={CALENDAR_QUERY}");
-    let ran = run(gh(&["api", "graphql", "-f", &query]), 30)
+    let ran = run(gh(tools, &["api", "graphql", "-f", &query]), 30)
         .await?
         .ok_or_else(install_hint)?;
     if ran.exit != 0 {
