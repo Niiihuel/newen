@@ -257,6 +257,8 @@ Regla del gallery de limn: un test falla si dos controles comparten ID (§6).
 
 El punto azul aparece cuando un turno termina mientras la persona mira otra sesión, y se va al abrirla (en la lista o desde el banner). "Mark as unread" (menú "···", tecla U) lo vuelve a poner; "Mark as read" lo quita. Cada punto dice qué es a un lector de pantalla ("Unread response", "Needs your input", "Failed"). Desktop muestra en la fila un punto azul para la respuesta sin leer, ámbar (o una mano) para lo que espera a la persona, gris que late mientras trabaja y un aro gris tenue para lo terminado; lo que Newen no copia: que el punto mismo se pueda pulsar para marcar leída o no leída. Que el punto vaya al final de la fila, y su tamaño, son inferidos.
 
+**Nombre:** una sesión nueva se muestra con la primera línea de su primer mensaje (60 caracteres) y, en cuanto el agente responde aparte, con un título de 3 a 7 palabras en el idioma del mensaje. Ese título lo escribe el mismo modelo de la sesión, en una corrida de un solo turno sin herramientas ni sesión guardada (`AgentAdapter::ask_run`, en Claude `claude -p --no-session-persistence --tools ""`). Un nombre que la persona puso, antes o después, no se reemplaza, ni tampoco el de una sesión que inició otra. Codex todavía no tiene esa corrida y conserva la primera línea.
+
 **Interacciones:** clic abre `/session/{sid}`; clic derecho → `ContextMenu` (renombrar, fijar, archivar); `b` oculta; arrastre del borde.
 
 | Usar de limn | Crear |

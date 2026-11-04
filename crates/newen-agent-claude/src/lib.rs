@@ -546,6 +546,30 @@ impl AgentAdapter for Claude {
         })
     }
 
+    fn ask_run(&self, prompt: &str, model: Option<&str>) -> Option<ProgramRun> {
+        // Print mode with no tools, skills or saved session: one answer, then it exits.
+        let mut args: Vec<String> = [
+            "-p",
+            "--no-session-persistence",
+            "--output-format",
+            "text",
+            "--tools",
+            "",
+            "--disable-slash-commands",
+        ]
+        .map(String::from)
+        .into();
+        if let Some(model) = model {
+            args.extend(["--model".into(), model.into()]);
+        }
+        Some(ProgramRun {
+            args,
+            stdin: Some(prompt.to_owned()),
+            timeout: 60,
+            until: None,
+        })
+    }
+
     fn plugins_query(&self) -> Option<Vec<String>> {
         Some(
             ["plugin", "list", "--json", "--available"]
