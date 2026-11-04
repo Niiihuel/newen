@@ -5837,36 +5837,46 @@ fn sign_ins_heard(mcp: &mut McpDialog, event: &AgentEvent) -> Vec<Intent> {
 pub struct CardDrag {
     pub card: String,
     pub order: Vec<String>,
-    /// The card last under the pointer, which it took the place of.
-    pub over: Option<String>,
+    /// How far down the pointer was when the card last moved, or the drag began.
+    pub from_y: f32,
 }
 
-/// A right panel's card dragged by its grip ([`view::PANEL_MOVE`]): it takes the place of each
-/// card whose head the pointer comes over, and the panel keeps that order once it is dropped
-/// (Settings); Escape puts it back. A card gliding aside under the pointer is not taken again.
+/// How far the pointer goes toward a card before the dragged one takes its place: a hand's
+/// tremor, or a card gliding aside under a still pointer, moves nothing.
+const CARD_PLAY: f32 = 4.0;
+
+/// A right panel's card dragged by its grip ([`view::PANEL_MOVE`]): it takes the place of a card
+/// whose head the pointer is over while the pointer goes toward it (up to one above, down to one
+/// below) past [`CARD_PLAY`], and the panel keeps that order once it is dropped (Settings);
+/// Escape puts it back. A pause changes nothing: the person carries on either way.
 fn card_moved(ui: &mut Ui, action: &limn::UiAction) -> Option<Vec<Intent>> {
     use limn::UiAction;
     match action {
-        UiAction::DragStarted { id, .. } => {
+        UiAction::DragStarted { id, position } => {
             let card = id.strip_prefix(view::PANEL_MOVE)?.to_owned();
             let order = view::panel_order(ui);
             ui.card_drag = Some(CardDrag {
                 card,
                 order,
-                over: None,
+                from_y: position.y,
             });
         }
-        UiAction::DragMoved { id, over, .. } => {
+        UiAction::DragMoved { id, position, over } => {
             id.strip_prefix(view::PANEL_MOVE)?;
             let drag = ui.card_drag.as_mut()?;
-            let target = over.as_ref().filter(|o| drag.order.contains(o));
-            if target != drag.over.as_ref() {
-                drag.over = target.cloned();
-                if let Some(target) = target {
-                    let to = drag.order.iter().position(|c| c == target)?;
-                    drag.order.retain(|c| *c != drag.card);
-                    drag.order.insert(to, drag.card.clone());
-                }
+            let place = |card: &str| drag.order.iter().position(|c| c == card);
+            let (Some(at), Some(to)) = (place(&drag.card), over.as_deref().and_then(place)) else {
+                return Some(vec![]);
+            };
+            let toward = match to.cmp(&at) {
+                std::cmp::Ordering::Less => position.y < drag.from_y - CARD_PLAY,
+                std::cmp::Ordering::Greater => position.y > drag.from_y + CARD_PLAY,
+                std::cmp::Ordering::Equal => false,
+            };
+            if toward {
+                let card = drag.order.remove(at);
+                drag.order.insert(to, card);
+                drag.from_y = position.y;
             }
         }
         UiAction::Dropped { id, .. } => {

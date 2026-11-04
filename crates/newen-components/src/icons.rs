@@ -168,6 +168,11 @@ pub const PAPERCLIP: &str = icon!(
 pub const PLUG: &str = icon!(
     "<path d='M7.25 2.5v3.75M12.75 2.5v3.75M4.75 6.25h10.5v2.5a5.25 5.25 0 0 1-10.5 0zM10 14v3.5'/>"
 );
+/// Six dots in two columns: the grip a card is dragged by, as Desktop's rail draws it.
+pub const GRIP: &str = icon!(
+    "<g fill='currentColor' stroke='none'><circle cx='7.5' cy='5' r='1.25'/><circle cx='12.5' cy='5' r='1.25'/><circle cx='7.5' cy='10' r='1.25'/><circle cx='12.5' cy='10' r='1.25'/><circle cx='7.5' cy='15' r='1.25'/><circle cx='12.5' cy='15' r='1.25'/></g>"
+);
+
 pub const CONNECTORS: &str = icon!(
     "<rect x='2.5' y='2.5' width='6' height='6' rx='1.5'/><rect x='11.5' y='2.5' width='6' height='6' rx='1.5'/><rect x='2.5' y='11.5' width='6' height='6' rx='1.5'/><path d='M14.5 11.5v6M11.5 14.5h6'/>"
 );
@@ -336,6 +341,7 @@ pub const ALL: &[(&str, &str)] = &[
     ("paperclip", PAPERCLIP),
     ("plug", PLUG),
     ("connectors", CONNECTORS),
+    ("grip", GRIP),
     ("cursor", CURSOR),
     ("settings", SETTINGS),
     ("list", LIST),

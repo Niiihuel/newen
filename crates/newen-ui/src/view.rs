@@ -10205,6 +10205,7 @@ fn panel_card<'a>(
     head.push(Element::spacer().flex(1.0));
     head.extend(trailing);
     let grip = limn::DragHandle::new(format!("{PANEL_MOVE}{id}"), look::palette())
+        .icon(icons::of(icons::GRIP))
         .on_hover(true)
         .dragging(ui.card_drag.as_ref().is_some_and(|d| d.card == id))
         .size(20.0)

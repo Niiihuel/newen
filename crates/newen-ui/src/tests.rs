@@ -4551,19 +4551,19 @@ fn a_panel_card_is_dragged_by_its_grip_to_another_place_and_kept_there() {
     assert!(top(&store, &ui, environment) < top(&store, &ui, context));
     let grip = format!("{}{context}", view::PANEL_MOVE);
     let act = |ui: &mut Ui, action: UiAction| update(&store, ui, &action);
-    let at = limn::Point::new(0.0, 0.0);
+    let at = |y: f32| limn::Point::new(1200.0, y);
     act(
         &mut ui,
         UiAction::DragStarted {
             id: grip.clone(),
-            position: at,
+            position: at(450.0),
         },
     );
     act(
         &mut ui,
         UiAction::DragMoved {
             id: grip.clone(),
-            position: at,
+            position: at(120.0),
             over: Some(environment.into()),
         },
     );
@@ -4576,7 +4576,7 @@ fn a_panel_card_is_dragged_by_its_grip_to_another_place_and_kept_there() {
         &mut ui,
         UiAction::DragMoved {
             id: grip.clone(),
-            position: at,
+            position: at(120.0),
             over: Some(environment.into()),
         },
     );
@@ -4585,7 +4585,7 @@ fn a_panel_card_is_dragged_by_its_grip_to_another_place_and_kept_there() {
         &mut ui,
         UiAction::Dropped {
             id: grip.clone(),
-            position: at,
+            position: at(120.0),
             target: None,
         },
     );
@@ -4603,19 +4603,74 @@ fn a_panel_card_is_dragged_by_its_grip_to_another_place_and_kept_there() {
         &mut ui,
         UiAction::DragStarted {
             id: grip.clone(),
-            position: at,
+            position: at(120.0),
         },
     );
     act(
         &mut ui,
         UiAction::DragMoved {
             id: grip.clone(),
-            position: at,
+            position: at(700.0),
             over: Some("panel:changes".into()),
         },
     );
+    assert_ne!(view::panel_order(&ui), order, "it moved");
     act(&mut ui, UiAction::DragCancelled { id: grip });
     assert_eq!(view::panel_order(&ui), order);
+}
+
+/// A dragged card moves toward the card under the pointer only while the pointer goes toward it:
+/// a card that glides aside under a still pointer is not taken back, and after a pause the
+/// person carries on either way, back over the same card too.
+#[test]
+fn a_dragged_card_follows_the_pointer_back_and_forth_after_a_pause() {
+    let (store, mut ui) = store_with_session();
+    let (environment, context) = ("panel:environment", view::CONTEXT_CARD);
+    let grip = format!("{}{context}", view::PANEL_MOVE);
+    let first = |ui: &Ui| {
+        let order = view::panel_order(ui);
+        let at = |card: &str| order.iter().position(|c| c == card);
+        if at(context) < at(environment) {
+            context
+        } else {
+            environment
+        }
+    };
+    let moved = |ui: &mut Ui, y: f32, over: &str| {
+        let position = limn::Point::new(1200.0, y);
+        let over = Some(over.to_owned());
+        update(
+            &store,
+            ui,
+            &UiAction::DragMoved {
+                id: grip.clone(),
+                position,
+                over,
+            },
+        );
+    };
+    let position = limn::Point::new(1200.0, 450.0);
+    update(
+        &store,
+        &mut ui,
+        &UiAction::DragStarted {
+            id: grip.clone(),
+            position,
+        },
+    );
+    // Up over Environment's head: Context takes its place.
+    moved(&mut ui, 120.0, environment);
+    assert_eq!(first(&ui), context);
+    // Environment glides down under the still pointer, and a hand's tremor: nothing moves back.
+    moved(&mut ui, 120.0, environment);
+    moved(&mut ui, 122.0, environment);
+    assert_eq!(first(&ui), context);
+    // After the pause, down over Environment again: Context goes back under it.
+    moved(&mut ui, 260.0, environment);
+    assert_eq!(first(&ui), environment);
+    // And up once more.
+    moved(&mut ui, 110.0, environment);
+    assert_eq!(first(&ui), context);
 }
 
 #[test]
