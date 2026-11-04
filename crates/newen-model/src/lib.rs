@@ -7,9 +7,9 @@ pub use newen_agent::{
     apply_task_tool, AgentCapabilities, AgentEvent, AgentOption, AgentSlashCommand, AuthState,
     ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
     ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
-    ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
-    TaskAgent, TaskPhase, TaskState, TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage,
-    UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
+    ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Provider, Skill,
+    Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, Todo, ToolContent, ToolPolicy,
+    ToolRule, Usage, UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
@@ -524,6 +524,9 @@ pub struct AgentInfo {
     /// The command that installs its program, as its adapter says it.
     #[serde(default)]
     pub install: String,
+    /// It uses model providers the person connects in Newen (`Intent::Providers`).
+    #[serde(default)]
+    pub providers: bool,
 }
 
 /// Where a message sent while a turn runs goes.
@@ -909,6 +912,24 @@ pub enum Intent {
     /// `Event::GithubContributions`.
     GithubContributions {
         login: String,
+    },
+    /// The model providers an agent can use and which are connected; answered by
+    /// `Event::Providers`.
+    Providers {
+        agent: String,
+    },
+    /// Connect one of an agent's providers with a key the person pasted, which goes nowhere
+    /// but the agent's program; answered by `Event::Providers`, then `Event::AgentModels`.
+    ConnectProvider {
+        agent: String,
+        provider: String,
+        key: String,
+    },
+    /// Take a provider's credentials away from an agent; answered as connecting is.
+    DisconnectProvider {
+        agent: String,
+        provider: String,
+        credentials: Vec<String>,
     },
     /// Servers the public MCP registry lists for `query`; answered by `Event::ServersFound`.
     FindServers {
@@ -1626,6 +1647,12 @@ pub enum Event {
     },
     /// The contribution calendar, or why it could not be had.
     GithubContributions(Result<ContributionCalendar, String>),
+    /// An agent's model providers, or why they could not be listed or one not connected.
+    Providers {
+        agent: String,
+        providers: Vec<Provider>,
+        error: Option<String>,
+    },
     /// What the MCP registry lists for `query`, or why it could not be asked.
     ServersFound {
         query: String,
@@ -1753,6 +1780,7 @@ impl Event {
             | Event::ServerTools { .. }
             | Event::Servers { .. }
             | Event::ServersFound { .. }
+            | Event::Providers { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }

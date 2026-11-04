@@ -48,6 +48,8 @@ pub const STOP: &str = "stop";
 pub const REWIND_UNDO: &str = "rewind:undo";
 pub const MODE_MENU: &str = "mode-menu";
 pub const MODEL_MENU: &str = "model-menu";
+/// "Add a provider…" at the model menu's end: `{MODEL_PROVIDERS}{agent}`.
+pub const MODEL_PROVIDERS: &str = "model-providers:";
 pub const DIFF_TOGGLE: &str = "diff:toggle";
 /// The Changes card's counts: they show the diff, as the top bar's button does, and are a
 /// control of their own, heard as the figures they show.
@@ -643,6 +645,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
     let root = crate::licenses::dialog(ui, root, window, palette);
     let root = crate::account::dialogs(ui, root);
     let root = crate::github::dialogs(ui, root);
+    let root = crate::providers::dialog(ui, root, window);
     let root = removing_dialog(ui, root);
     let root = image_viewer(ui, root, window, palette);
     let root = annotator(ui, root, window, palette);
@@ -7966,7 +7969,7 @@ pub(crate) fn logo_picture<'a>(ui: &'a Ui, key: &str) -> Option<&'a limn::Raster
 }
 
 /// A logo on a square tile of the item's colour, as the Connectors rows show one.
-fn logo_tile(logo: &limn::RasterImage, side: f32) -> Element {
+pub(crate) fn logo_tile(logo: &limn::RasterImage, side: f32) -> Element {
     Element::row(vec![Element::raster_image(logo.clone())
         .size(Some(side * 0.75), Some(side * 0.75))
         .centered()
@@ -9171,6 +9174,39 @@ fn model_menu(
             limn::DropdownMenuItem::new(format!("{MODEL_MENU}:more"), "More models")
                 .submenu(rest)
                 .into(),
+        );
+    }
+    // Never an empty menu: the models on their way, or why there are none and where they come
+    // from.
+    let agent = session.map_or(ui.agent.as_str(), |s| s.agent.as_str());
+    let info = ui.agents.iter().find(|a| a.id == agent);
+    let providers = info.is_some_and(|a| a.providers);
+    if entries.is_empty() {
+        let known =
+            ui.agent_models.contains_key(agent) || agent_capabilities(store, session, ui).is_some();
+        let name = info.map_or("The agent", |a| a.name.as_str());
+        entries.push(match (known, providers) {
+            (false, _) => limn::DropdownMenuEntry::Loading {
+                id: format!("{MODEL_MENU}:loading"),
+                rows: 3,
+            },
+            (true, true) => limn::DropdownMenuEntry::Message(format!(
+                "{name} offers no models yet. Connect a provider to use its models."
+            )),
+            (true, false) => limn::DropdownMenuEntry::Message(format!(
+                "{name} lists its models once a session starts. Send a message, then pick one here."
+            )),
+        });
+    }
+    if providers {
+        entries.push(limn::DropdownMenuEntry::Separator);
+        entries.push(
+            limn::DropdownMenuItem::new(
+                format!("{MODEL_PROVIDERS}{agent}"),
+                "Add a provider\u{2026}",
+            )
+            .icon(icons::of(icons::ADD))
+            .into(),
         );
     }
     menu(
@@ -13250,6 +13286,15 @@ fn agent_page(
         .radius(8.0),
     ));
     groups.push(("Sessions".to_owned(), own));
+    if agent.providers {
+        groups.insert(
+            1,
+            (
+                "Providers".to_owned(),
+                vec![crate::providers::setting(ui, agent)],
+            ),
+        );
+    }
     SettingsPage {
         key: format!("agent:{mine}"),
         title: agent.name.clone(),

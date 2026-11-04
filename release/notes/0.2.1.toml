@@ -9,6 +9,8 @@ new = [
     "With no agent installed, Newen shows how to install each one.",
     "The editor saves as Settings say: trimmed line ends, a final line break, autosave and format on save.",
     "Drag a card of the right panel by its grip to put it where you want it; Newen keeps that order.",
+    "Connect OpenCode's model providers with a key, from its page in Settings or the model menu.",
+    "OpenCode's models and their efforts show before a session starts.",
 ]
 improved = [
     "The editor takes Newen's look, with a footer of chips and its own icon, and comes installed beside Newen.",
@@ -18,4 +20,5 @@ fixed = [
     "The Connectors button waits for its lists before it fills.",
     "A card left open by an interrupted turn no longer keeps the agent waiting.",
     "The carets of the Context card's lists line up with their names.",
+    "The model menu never opens empty: it says when models are loading, and why there are none.",
 ]

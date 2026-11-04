@@ -1,0 +1,170 @@
+{
+ "location": {
+  "directory": "/home/person"
+ },
+ "data": [
+  {
+   "id": "amazon-bedrock",
+   "name": "Amazon Bedrock",
+   "methods": [
+    {
+     "type": "key",
+     "label": "Bedrock API key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "AWS_BEARER_TOKEN_BEDROCK"
+     ]
+    },
+    {
+     "id": "aws-profile",
+     "type": "external",
+     "label": "AWS profile (SSO or named profile)",
+     "form": [
+      {
+       "key": "profile",
+       "title": "AWS profile",
+       "description": "No profiles found in your AWS configuration.",
+       "required": true,
+       "type": "string",
+       "minLength": 1,
+       "pattern": "\\S",
+       "placeholder": "Profile name",
+       "options": [],
+       "custom": true
+      }
+     ]
+    }
+   ],
+   "connections": []
+  },
+  {
+   "id": "anthropic",
+   "name": "Anthropic",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "ANTHROPIC_API_KEY"
+     ]
+    }
+   ],
+   "connections": [
+    {
+     "type": "env",
+     "name": "ANTHROPIC_API_KEY"
+    }
+   ]
+  },
+  {
+   "id": "github-copilot",
+   "name": "GitHub Copilot",
+   "methods": [
+    {
+     "type": "env",
+     "names": [
+      "GITHUB_TOKEN"
+     ]
+    },
+    {
+     "id": "device",
+     "type": "oauth",
+     "label": "Login with GitHub Copilot",
+     "form": [
+      {
+       "key": "deploymentType",
+       "title": "Select GitHub deployment type",
+       "required": true,
+       "type": "string",
+       "options": [
+        {
+         "value": "github.com",
+         "label": "GitHub.com",
+         "description": "Public"
+        },
+        {
+         "value": "enterprise",
+         "label": "GitHub Enterprise",
+         "description": "Data residency or self-hosted"
+        }
+       ]
+      },
+      {
+       "key": "enterpriseUrl",
+       "title": "Enter your GitHub Enterprise URL or domain",
+       "required": true,
+       "when": [
+        {
+         "key": "deploymentType",
+         "op": "eq",
+         "value": "enterprise"
+        }
+       ],
+       "type": "string",
+       "placeholder": "company.ghe.com or https://company.ghe.com"
+      }
+     ]
+    }
+   ],
+   "connections": []
+  },
+  {
+   "id": "groq",
+   "name": "Groq",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "GROQ_API_KEY"
+     ]
+    }
+   ],
+   "connections": [
+    {
+     "type": "credential",
+     "id": "newen-groq",
+     "label": "Newen",
+     "method": "key"
+    }
+   ]
+  },
+  {
+   "id": "openai",
+   "name": "OpenAI",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "OPENAI_API_KEY"
+     ]
+    },
+    {
+     "id": "chatgpt-token-sharing",
+     "type": "oauth",
+     "label": "Sign in with ChatGPT"
+    },
+    {
+     "id": "chatgpt-browser",
+     "type": "oauth",
+     "label": "Codex browser (legacy)"
+    },
+    {
+     "id": "chatgpt-headless",
+     "type": "oauth",
+     "label": "Codex device code (legacy)"
+    }
+   ],
+   "connections": []
+  }
+ ]
+}

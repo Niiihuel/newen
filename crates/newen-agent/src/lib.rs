@@ -486,6 +486,25 @@ pub struct ProgramRun {
     pub until: Option<String>,
 }
 
+/// A model provider the agent can use (an API whose account gives it models), as its program
+/// lists it: whether the person connected it, and how it is connected.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Provider {
+    pub id: String,
+    pub name: String,
+    /// The program's ids of the credentials it holds for it; empty while it is not connected.
+    pub connected: Vec<String>,
+    /// It connects with a key the person pastes ([`AgentAdapter::provider_connect_run`]).
+    pub key: bool,
+    /// The environment variables it reads its key from, set before Newen starts.
+    pub env: Vec<String>,
+    /// The one of those it is connected by, set where Newen runs.
+    pub env_set: Option<String>,
+    /// Its other ways in (a sign-in in the browser, a profile), which only the program's own
+    /// terminal walks through: the command to type there.
+    pub terminal: Option<String>,
+}
+
 /// Where a server's definition came from: the person's own settings, the project's, the
 /// person's for this project only, the organization's, a plugin, the person's account, the
 /// app running the agent (Newen's own tools), or somewhere else.
@@ -1088,6 +1107,34 @@ pub trait AgentAdapter: Send {
         None
     }
     /// Why `op` failed, in what its run printed although it exited well.
+    /// A run that lists the model providers the agent can use and which are connected, read
+    /// by [`providers`](Self::providers); `None` when its program has none of its own.
+    fn providers_run(&self) -> Option<ProgramRun> {
+        None
+    }
+    /// The providers in what [`providers_run`](Self::providers_run) printed.
+    fn providers(&self, _stdout: &str) -> Vec<Provider> {
+        vec![]
+    }
+    /// A run that connects `provider` with `key`, which goes on its stdin, never in its
+    /// arguments.
+    fn provider_connect_run(&self, _provider: &str, _key: &str) -> Option<ProgramRun> {
+        None
+    }
+    /// The runs that take `provider`'s credentials `ids` away.
+    fn provider_disconnect_runs(&self, _provider: &str, _ids: &[String]) -> Vec<ProgramRun> {
+        vec![]
+    }
+    /// Runs apart from any session that tell which models the agent offers, read together by
+    /// [`models_listed`](Self::models_listed): for a program whose sessions alone say it
+    /// otherwise ([`models_query`](Self::models_query) is the other way).
+    fn models_runs(&self) -> Vec<ProgramRun> {
+        vec![]
+    }
+    /// The models in what [`models_runs`](Self::models_runs) printed, in their order.
+    fn models_listed(&self, _outputs: &[String]) -> Vec<ModelInfo> {
+        vec![]
+    }
     fn extension_failed(&self, _stdout: &str) -> Option<String> {
         None
     }

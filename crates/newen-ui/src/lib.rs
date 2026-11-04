@@ -14,6 +14,7 @@ mod licenses;
 mod mention;
 pub mod no_agent;
 mod pixels;
+mod providers;
 pub mod remote;
 mod slash;
 mod terminals;
@@ -675,6 +676,7 @@ impl Store {
             | Event::Global(_)
             | Event::ServerTools { .. }
             | Event::ServersFound { .. }
+            | Event::Providers { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }
@@ -1364,6 +1366,10 @@ pub struct Ui {
     pub mcp: Option<McpDialog>,
     /// The right panel's card being dragged by its grip, while it is.
     pub card_drag: Option<CardDrag>,
+    /// Each agent's model providers, once asked for (Settings).
+    pub providers: std::collections::HashMap<String, providers::Providers>,
+    /// "Add a provider", while open.
+    pub adding_provider: Option<providers::Adding>,
     /// Each session's card of connectors that could help, while its turn waits on it.
     pub suggested: std::collections::HashMap<SessionId, Suggested>,
     /// Sessions whose branch bar the person closed.
@@ -2187,6 +2193,8 @@ impl Ui {
             mcp: None,
             suggested: std::collections::HashMap::new(),
             card_drag: None,
+            providers: std::collections::HashMap::new(),
+            adding_provider: None,
             bar_closed: vec![],
             queue_expanded: vec![],
             queue_menu: None,
@@ -2448,6 +2456,28 @@ impl Ui {
                     url: Some(format!("https://{site}")),
                 });
             }
+        }
+        // Providers' logos where an agent's page or "Add a provider" shows them: the connected
+        // ones, and the first a search finds rather than every one the agent lists.
+        let adding = self.adding_provider.as_ref();
+        let agent = (adding.map(|a| a.agent.as_str()))
+            .or_else(|| (self.settings_page.as_deref()).and_then(|p| p.strip_prefix("agent:")));
+        let listed = agent.and_then(|a| self.providers.get(a)?.list.as_ref());
+        let query = adding
+            .map(|a| a.query.trim().to_lowercase())
+            .unwrap_or_default();
+        for provider in (listed.into_iter().flatten())
+            .filter(|p| match adding {
+                Some(_) => query.is_empty() || p.name.to_lowercase().contains(&query),
+                None => !p.connected.is_empty() || p.env_set.is_some(),
+            })
+            .take(30)
+        {
+            wanted.push(LogoWanted {
+                key: providers::logo_key(provider),
+                name: provider.name.clone(),
+                url: None,
+            });
         }
         wanted.retain(|w| self.logo_asked.insert(w.key.clone()));
         if wanted.is_empty() {
@@ -2807,6 +2837,7 @@ impl Ui {
     /// and send what they wrote while it was being made.
     pub fn applied(&mut self, event: &Event) -> Vec<Intent> {
         mention::heard(self, event);
+        providers::heard(self, event);
         updates::heard(self, event);
         whats_new::heard(self, event);
         tour::heard(self, event);
@@ -3349,6 +3380,13 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
                 }
             }
             vec![]
+        }
+        UiAction::InputChanged { id, value } if id.starts_with("prov:") => {
+            providers::input(ui, id, value);
+            vec![]
+        }
+        UiAction::Submitted { id, .. } if id == providers::KEY => {
+            providers::clicked(ui, providers::CONNECT_ID).unwrap_or_default()
         }
         UiAction::InputChanged { id, value } if id.starts_with(account::CODE) => {
             ui.account.code = value.clone();
@@ -4034,6 +4072,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if let Some(intents) = github::clicked(ui, id) {
         return intents;
     }
+    if let Some(intents) = providers::clicked(ui, id) {
+        return intents;
+    }
     if let Some(intents) = remote::clicked(store, ui, id) {
         return intents;
     }
@@ -4303,6 +4344,14 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
                 }]
             })
             .unwrap_or_default();
+    }
+    // "Add a provider…": the agent's page in Settings, with the dialog open over it.
+    if let Some(agent) = id.strip_prefix(view::MODEL_PROVIDERS) {
+        ui.open_menu = None;
+        ui.settings_page = Some(format!("agent:{agent}"));
+        ui.settings_query.clear();
+        providers::wanted(ui);
+        return providers::clicked(ui, &providers::add_id(agent)).unwrap_or_default();
     }
     if let Some(model) = id.strip_prefix("model:") {
         ui.open_menu = None;
@@ -5990,6 +6039,11 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     if let Some(page) = id.strip_prefix("settings:page:") {
         ui.settings_page = Some(page.to_owned());
         ui.settings_query.clear();
+        // An agent's page lists its providers, asked for the first time it shows.
+        let providers = providers::wanted(ui);
+        if !providers.is_empty() {
+            return Some(providers);
+        }
         // The Accounts page shows the contributions, read when it opens.
         if page == view::SETTINGS_ACCOUNTS {
             return Some(github::want_calendar(ui));

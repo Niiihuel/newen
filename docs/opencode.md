@@ -66,6 +66,19 @@ Los modos de OpenCode son sus agentes primarios, en la opción de config `mode` 
 
 **Cuenta:** no se declara. OpenCode funciona sin cuenta (modelos gratuitos), y una pantalla de "Sign in" taparía la ventana; agregar una clave pide terminal (`opencode auth login`). Una sesión cuyo proveedor rechaza las credenciales responde `-32000` y Newen muestra `AuthRequired`.
 
+## Proveedores
+
+OpenCode usa los modelos de los proveedores (integraciones) que la persona conecta. Newen los muestra en Settings › OpenCode › Providers (ui.md, "Proveedores") con lo que el propio servidor de OpenCode dice. Cada corrida usa un servidor privado (`--standalone`), como `debug config`, así que no depende del servicio de fondo ni lo deja corriendo (verificado con 2.2.5, 2026-11-04):
+
+| Qué | Cómo | Notas |
+|---|---|---|
+| Listar | `opencode --standalone api GET /api/integration` | `{data: [{id, name, methods: [{type: key|env|oauth|external, …}], connections: [{type: credential, id}|{type: env, name}]}]}`; 239 en 2.2.5. Con `key`, se conecta con clave; con `env`, las variables que lee; con `oauth`/`external` (un inicio de sesión en el navegador, un perfil de AWS), solo su terminal lo hace (`opencode auth login <id>`) |
+| Conectar con clave | `opencode --standalone auth import`, con `[{id: "newen-<id>", integrationID, label: "Newen", active: true, value: {type: "key", key}}]` en stdin | `auth login --method key` pide la clave solo en una terminal ("API key input requires an interactive terminal") y `api POST …/connect/key` la llevaría en un argumento; `auth import` la lee de stdin, así que nunca está en la lista de procesos |
+| Desconectar | `opencode --standalone auth logout <id> <credencial>` | Sin la credencial abre un selector que pide terminal. Las credenciales salen de `connections` |
+| Modelos antes de una sesión | `opencode --standalone api GET /api/model` y `/api/model/default` | Cada modelo como `proveedor/modelo` (el id que toma `session/set_config_option` `model`), con sus `variants` como esfuerzos (los `thought_level` de la sesión) y el de por defecto marcado. La sesión dice solo los esfuerzos de su modelo actual |
+
+El OAuth de OpenCode (`POST /api/integration/<id>/connect/oauth` con `methodID`, que da `{attemptID, url, instructions, mode: auto|code}`) no se usa todavía: no se pudo verificar sin una cuenta. Esos proveedores dicen el comando de la terminal.
+
 ## Customize
 
 - **Conectores:** la lista sale de `opencode debug config --standalone`, las capas de su config con su archivo (fixture `debug-config.json`): un servidor es el de la última capa que lo define; la del directorio global es "user", el resto "project"; `disabled: true` es Off. No conecta a nadie (`checked: false`). `mcp list` y `api mcp.list` con `--standalone` responden vacío porque no esperan a los plugins (observado).

@@ -4673,6 +4673,207 @@ fn a_dragged_card_follows_the_pointer_back_and_forth_after_a_pause() {
     assert_eq!(first(&ui), context);
 }
 
+/// The model menu is never an empty box: while the agent's models are on their way it shows
+/// them loading; with none, why and where they come from; for an agent with providers, "Add a
+/// provider…" at its end opens them in Settings.
+#[test]
+fn the_model_menu_is_never_empty_and_leads_to_the_providers() {
+    let mut store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    let agent = |id: &str, name: &str, providers: bool| newen_model::AgentInfo {
+        id: id.into(),
+        name: name.into(),
+        providers,
+        ..Default::default()
+    };
+    ui.agents = vec![
+        agent("opencode", "OpenCode", true),
+        agent("hermes", "Hermes", false),
+    ];
+    ui.agent = "opencode".into();
+    ui.open_menu = Some(view::MODEL_MENU);
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = |store: &Store, ui: &Ui| UiTree::new(view(store, ui, window)).layout(window);
+    let shows = |store: &Store, ui: &Ui, words: &str| {
+        frame(store, ui).commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    let loading = |store: &Store, ui: &Ui| {
+        frame(store, ui)
+            .regions
+            .iter()
+            .any(|r| r.id.starts_with("model-menu:loading"))
+    };
+    // Not answered yet: loading rows, and the way to its providers.
+    assert!(shows(&store, &ui, "Add a provider"));
+    assert!(loading(&store, &ui) || !shows(&store, &ui, "offers no models"));
+    // Answered with none.
+    store.apply(Event::AgentModels {
+        agent: "opencode".into(),
+        models: vec![],
+    });
+    ui.applied(&Event::AgentModels {
+        agent: "opencode".into(),
+        models: vec![],
+    });
+    // The menu's width wraps it: its first line.
+    assert!(shows(&store, &ui, "OpenCode offers no"));
+    // An agent whose sessions alone say them, and with no providers of its own.
+    ui.agent = "hermes".into();
+    ui.applied(&Event::AgentModels {
+        agent: "hermes".into(),
+        models: vec![],
+    });
+    assert!(shows(&store, &ui, "Hermes lists its"));
+    assert!(!shows(&store, &ui, "Add a provider"));
+    // Its models before any session, each with its efforts: the effort chip follows the model.
+    ui.agent = "opencode".into();
+    let model = |id: &str, efforts: &[&str], default: bool| newen_model::ModelInfo {
+        id: id.into(),
+        name: id.rsplit('/').next().unwrap().into(),
+        efforts: efforts.iter().map(|e| e.to_string()).collect(),
+        modes: vec![],
+        default,
+    };
+    let models = vec![
+        model("opencode/big-pickle", &[], true),
+        model("opencode/deepseek", &["low", "high", "max"], false),
+    ];
+    ui.applied(&Event::AgentModels {
+        agent: "opencode".into(),
+        models,
+    });
+    assert!(shows(&store, &ui, "big-pickle") && shows(&store, &ui, "Add a provider"));
+    assert!(view::efforts(&store, &ui).is_empty());
+    click(&store, &mut ui, "model:opencode/deepseek");
+    assert_eq!(view::efforts(&store, &ui), ["low", "high", "max"]);
+    // "Add a provider…": the agent's page, its providers asked for, the dialog open.
+    ui.open_menu = Some(view::MODEL_MENU);
+    let asked = click(
+        &store,
+        &mut ui,
+        &format!("{}opencode", view::MODEL_PROVIDERS),
+    );
+    assert!(asked.contains(&Intent::Providers {
+        agent: "opencode".into()
+    }));
+    assert_eq!(ui.settings_page.as_deref(), Some("agent:opencode"));
+    assert!(ui.adding_provider.is_some() && ui.open_menu.is_none());
+}
+
+/// An agent's providers in Settings: the connected ones with Disconnect, and "Add a provider",
+/// which finds one, takes its key (to the agent's program alone) and closes once it is
+/// connected; one that signs in elsewhere says how.
+#[test]
+fn a_provider_is_found_connected_with_a_key_and_disconnected() {
+    let store = Store::default();
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    ui.agents = vec![newen_model::AgentInfo {
+        id: "opencode".into(),
+        name: "OpenCode".into(),
+        providers: true,
+        ..Default::default()
+    }];
+    ui.settings_page = Some(view::SETTINGS_FIRST.into());
+    let asked = click(&store, &mut ui, "settings:page:agent:opencode");
+    assert_eq!(
+        asked,
+        vec![Intent::Providers {
+            agent: "opencode".into()
+        }]
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let shows = |ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        frame.commands.iter().any(|command| {
+            matches!(command, limn::DrawCommand::Text { text, .. } if text.contains(words))
+        })
+    };
+    assert!(shows(&ui, "Looking for its providers"));
+    let provider = |id: &str, name: &str, connected: &[&str]| newen_model::Provider {
+        id: id.into(),
+        name: name.into(),
+        connected: connected.iter().map(|c| c.to_string()).collect(),
+        key: id != "copilot",
+        env: vec![format!("{}_API_KEY", id.to_uppercase())],
+        terminal: (id == "copilot").then(|| "x auth login copilot".into()),
+        ..Default::default()
+    };
+    let listed = |groq: &[&str]| Event::Providers {
+        agent: "opencode".into(),
+        providers: vec![
+            provider("copilot", "GitHub Copilot", &[]),
+            provider("groq", "Groq", groq),
+            provider("openrouter", "OpenRouter", &["newen-openrouter"]),
+        ],
+        error: None,
+    };
+    ui.applied(&listed(&[]));
+    assert!(shows(&ui, "OpenRouter") && shows(&ui, "Connected") && shows(&ui, "Add a provider"));
+    // Add: search, pick, key, connect.
+    click(&store, &mut ui, "prov:add:opencode");
+    update(
+        &store,
+        &mut ui,
+        &UiAction::InputChanged {
+            id: "prov:search".into(),
+            value: "gro".into(),
+        },
+    );
+    assert!(shows(&ui, "Groq") && !shows(&ui, "GitHub Copilot"));
+    click(&store, &mut ui, "prov:pick:groq");
+    assert!(shows(&ui, "Connect Groq") && shows(&ui, "Or set GROQ_API_KEY"));
+    update(
+        &store,
+        &mut ui,
+        &UiAction::InputChanged {
+            id: "prov:key".into(),
+            value: " gsk-secret ".into(),
+        },
+    );
+    assert!(!shows(&ui, "gsk-secret"), "the key is not shown");
+    let sent = update(
+        &store,
+        &mut ui,
+        &UiAction::Submitted {
+            id: "prov:key".into(),
+            value: String::new(),
+        },
+    );
+    assert_eq!(
+        sent,
+        vec![Intent::ConnectProvider {
+            agent: "opencode".into(),
+            provider: "groq".into(),
+            key: "gsk-secret".into()
+        }]
+    );
+    assert!(shows(&ui, "Connecting"));
+    // Not connected after all: the dialog stays, saying so; connected, it closes.
+    ui.applied(&listed(&[]));
+    assert!(ui.adding_provider.is_some() && shows(&ui, "check the key"));
+    click(&store, &mut ui, "prov:connect");
+    ui.applied(&listed(&["newen-groq"]));
+    assert!(ui.adding_provider.is_none());
+    // One that signs in elsewhere says how, and offers no key.
+    click(&store, &mut ui, "prov:add:opencode");
+    click(&store, &mut ui, "prov:pick:copilot");
+    assert!(shows(&ui, "x auth login copilot") && !shows(&ui, "API key"));
+    click(&store, &mut ui, "prov:close");
+    // Disconnect takes its credentials away.
+    assert_eq!(
+        click(&store, &mut ui, "prov:disconnect:opencode:openrouter"),
+        vec![Intent::DisconnectProvider {
+            agent: "opencode".into(),
+            provider: "openrouter".into(),
+            credentials: vec!["newen-openrouter".into()]
+        }]
+    );
+}
+
 #[test]
 fn token_counts_read_as_desktop_writes_them() {
     let counts: Vec<String> = [254, 999, 15_812, 999_960, 1_000_000, 1_250_000]

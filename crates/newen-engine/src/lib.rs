@@ -277,6 +277,8 @@ enum Internal {
     Power,
     /// Time to ask the pull requests whether they were merged.
     PullRequests,
+    /// An agent's providers changed: its models are asked for again.
+    AskModels(String),
     /// A session's pull request was merged.
     Merged { session: SessionId },
     /// A step may have changed files in the session's folder.
@@ -726,6 +728,7 @@ impl Router {
                         .unwrap_or_else(|| a.launch(&SessionSpec::default()).program),
                 ),
                 install: a.install().to_owned(),
+                providers: a.providers_run().is_some(),
             })
             .collect();
         (self.ui)(Event::Settings {
@@ -793,17 +796,81 @@ impl Router {
         });
     }
 
+    /// An agent's providers, listed after `change` ran (connecting or disconnecting one):
+    /// `Event::Providers`, with the first error; after a change its models are asked again,
+    /// which the providers decide.
+    fn providers(&self, agent: String, change: Option<Vec<newen_agent::ProgramRun>>) {
+        let Some(adapter) = adapter(&agent) else {
+            return;
+        };
+        let Some(list) = adapter.providers_run() else {
+            return;
+        };
+        let program = (self.program(&agent))
+            .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+        let (ui, internal) = (self.ui.clone(), self.internal.clone());
+        tokio::spawn(async move {
+            let home = newen_files::home_dir().unwrap_or_else(std::env::temp_dir);
+            let changed = change.is_some();
+            let mut error = None;
+            for run in change.into_iter().flatten() {
+                if let Err(e) = run_program(&program, &run, &home).await {
+                    error = Some(e);
+                    break;
+                }
+            }
+            let providers = match run_program(&program, &list, &home).await {
+                Ok(out) => adapter.providers(&out),
+                Err(e) => {
+                    error.get_or_insert(e);
+                    vec![]
+                }
+            };
+            ui(Event::Providers {
+                agent: agent.clone(),
+                providers,
+                error,
+            });
+            if changed {
+                let _ = internal.send(Internal::AskModels(agent));
+            }
+        });
+    }
+
     /// Ask an agent's program which models it offers, with no session; answered by
     /// `Event::AgentModels` when its adapter knows how to ask.
     fn ask_models(&self, agent: String) {
         let Some(adapter) = adapter(&agent) else {
             return;
         };
+        let ui = self.ui.clone();
+        // A program that lists them apart from any session (its catalogue, with each model's
+        // efforts).
+        let runs = adapter.models_runs();
+        if !runs.is_empty() {
+            let program = (self.program(&agent))
+                .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+            tokio::spawn(async move {
+                let home = newen_files::home_dir().unwrap_or_else(std::env::temp_dir);
+                let mut outputs = vec![];
+                for run in &runs {
+                    outputs.push(run_program(&program, run, &home).await.unwrap_or_default());
+                }
+                let models = adapter.models_listed(&outputs);
+                ui(Event::AgentModels { agent, models });
+            });
+            return;
+        }
         let plan = adapter.launch(&SessionSpec::default());
         let (Some(lines), Some(mut command)) = (
             adapter.models_query(),
             self.account_command(&agent, &plan.args),
         ) else {
+            // Its sessions alone say its models: the menu says so rather than waiting.
+            ui(Event::AgentModels {
+                agent,
+                models: vec![],
+            });
             return;
         };
         command
@@ -811,15 +878,20 @@ impl Router {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let ui = self.ui.clone();
         // The adapter is `Send`, not `Sync`: shared across awaits only behind a lock.
         let adapter = std::sync::Mutex::new(adapter);
         tokio::spawn(async move {
+            let none = |ui: &crate::Sink, agent| {
+                ui(Event::AgentModels {
+                    agent,
+                    models: vec![],
+                })
+            };
             let Ok(mut child) = command.spawn() else {
-                return;
+                return none(&ui, agent);
             };
             let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-                return;
+                return none(&ui, agent);
             };
             // The program answers only while its stdin is open: it stays so until the answer.
             let asked = async {
@@ -835,11 +907,13 @@ impl Router {
                 }
                 None
             };
-            if let Ok(Some(models)) =
-                tokio::time::timeout(std::time::Duration::from_secs(20), asked).await
+            // One that did not answer has none to offer before a session: the menu says so.
+            let models = match tokio::time::timeout(std::time::Duration::from_secs(20), asked).await
             {
-                ui(Event::AgentModels { agent, models });
-            }
+                Ok(Some(models)) => models,
+                _ => vec![],
+            };
+            ui(Event::AgentModels { agent, models });
             // Dropping the child kills it.
         });
     }
@@ -2038,6 +2112,30 @@ impl Router {
                 return;
             }
             // The registry, asked with the computer's own `curl` (Linux, macOS, Windows 10 on).
+            Intent::Providers { agent } => {
+                self.providers(agent, None);
+                return;
+            }
+            Intent::ConnectProvider {
+                agent,
+                provider,
+                key,
+            } => {
+                let run = adapter(&agent).and_then(|a| a.provider_connect_run(&provider, &key));
+                self.providers(agent, Some(run.into_iter().collect()));
+                return;
+            }
+            Intent::DisconnectProvider {
+                agent,
+                provider,
+                credentials,
+            } => {
+                let runs = adapter(&agent)
+                    .map(|a| a.provider_disconnect_runs(&provider, &credentials))
+                    .unwrap_or_default();
+                self.providers(agent, Some(runs));
+                return;
+            }
             Intent::FindServers { query } => {
                 let ui = self.ui.clone();
                 tokio::spawn(async move {
@@ -2496,6 +2594,7 @@ impl Router {
                 }
             }
             Internal::PullRequests => {}
+            Internal::AskModels(agent) => self.ask_models(agent),
             // A session that went back to work keeps on; it is asked again in 5 minutes.
             Internal::Merged { session } => {
                 if self.settings.archive_on_merge

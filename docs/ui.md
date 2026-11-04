@@ -763,6 +763,16 @@ Es la tarjeta de Desktop "Connectors that could help", bajo el turno que la pidi
 - **Connect en una fila del registro** lo agrega a la sesión en marcha y a la configuración del agente (alcance user), ver [agents.md](agents.md). Si no se pudo agregar o iniciar sesión, la tarjeta lo dice en una línea al pie.
 - **Sigue sola:** cuando todos los servidores de la tarjeta están conectados, la UI la responde (`Decide` Allow) y el turno continúa con sus herramientas. La cruz la responde con Deny y el turno continúa sin ellos. Respondida, la tarjeta se va y queda la fila "Offered connectors {nombres}".
 
+### 2.11d Proveedores de modelos y el menú de modelos
+
+**El menú de modelos nunca está vacío.** Mientras el agente no dijo sus modelos, muestra filas de carga. Si no tiene ninguno, lo dice: "{agente} offers no models yet. Connect a provider to use its models." para uno con proveedores, y "{agente} lists its models once a session starts. Send a message, then pick one here." para uno cuyos modelos solo dice una sesión (Hermes). El motor contesta siempre `Event::AgentModels`, vacío si no puede preguntar o falla, para que la UI no espere en vano. Un agente que lista su catálogo aparte de una sesión (`AgentAdapter::models_runs`, OpenCode) lo trae con los esfuerzos de cada modelo: el chip de esfuerzo sigue al modelo elegido antes de empezar.
+
+**Proveedores.** Un agente que usa proveedores que la persona conecta (`AgentInfo::providers`, de `AgentAdapter::providers_run`) muestra en Settings, en su página, la fila **Providers**: el botón **Add a provider** y, debajo, los conectados (logo, nombre, "Connected" o "Connected by {VARIABLE}") con **Disconnect** cuando Newen puede sacarlos. Al final del menú de modelos, **Add a provider…** lleva ahí con el diálogo abierto.
+
+- **El diálogo** (560): "Add a provider to {agente}", un buscador y la lista de lo que el agente ofrece (logo, nombre, cómo se conecta). Al elegir uno: "Connect {proveedor}", la clave en un campo oculto, "Or set {VARIABLE} where Newen starts…" si lee una variable, y el comando de su terminal si se conecta de otra forma (un inicio de sesión en el navegador). **Connect** (o Enter) manda `Intent::ConnectProvider`; la clave va solo al programa del agente (ver opencode.md). Conectado, el diálogo se cierra; si no tomó, queda abierto con "It did not connect: check the key.". Después el motor vuelve a pedir los modelos.
+- **Logos:** los de los proveedores se buscan como los de los conectores (`provider:{nombre}`), solo los conectados y los primeros 30 que muestra la búsqueda.
+- Nada de esto nombra un agente ni un proveedor: lo que hay y cómo se conecta lo dice el adaptador.
+
 ### 2.12 Atajos del MVP (tabla única, en `newen_ui::keybinds`, editable como en RUNE)
 
 | Atajo | Acción | Origen |

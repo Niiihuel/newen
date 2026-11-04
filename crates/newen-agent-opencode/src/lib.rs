@@ -4,14 +4,34 @@
 
 use newen_agent::{
     AgentAdapter, AgentCommand, AgentId, AgentOption, Choices, ConfiguredServer, Decoded,
-    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun, SessionExtras,
-    SessionSpec,
+    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ModelInfo, ProgramRun,
+    Provider, SessionExtras, SessionSpec,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Value};
 
 #[cfg(test)]
 mod tests;
+
+/// A request to OpenCode's own server, a private one for this run (`--standalone`).
+fn api(path: &str) -> ProgramRun {
+    ProgramRun {
+        args: ["--standalone", "api", "GET", path]
+            .map(String::from)
+            .into(),
+        stdin: None,
+        timeout: 60,
+        until: None,
+    }
+}
+
+/// The JSON a run printed first: `api` follows a failed request's body with its HTTP status.
+fn first_json(stdout: &str) -> Option<Value> {
+    serde_json::Deserializer::from_str(stdout)
+        .into_iter::<Value>()
+        .next()?
+        .ok()
+}
 
 /// The modes as `opencode acp` offers them: its primary agents (`build` first), and Newen's
 /// own `ask`, an agent the session's config adds (`launch`).
@@ -287,6 +307,113 @@ impl AgentAdapter for OpenCode {
                 description: (*description).into(),
                 choices: vec![],
                 default: "true".into(),
+            })
+            .collect()
+    }
+
+    /// Its integrations, the model providers it can use, as its server lists them
+    /// (docs/opencode.md "Proveedores"), on a private server of its own as `debug config` is.
+    fn providers_run(&self) -> Option<ProgramRun> {
+        Some(api("/api/integration"))
+    }
+
+    fn providers(&self, stdout: &str) -> Vec<Provider> {
+        let Some(body) = first_json(stdout) else {
+            return vec![];
+        };
+        let mut providers: Vec<Provider> = (body["data"].as_array().into_iter().flatten())
+            .filter_map(|integration| {
+                let id = integration["id"].as_str()?.to_owned();
+                let methods: Vec<&Value> =
+                    (integration["methods"].as_array().into_iter().flatten()).collect();
+                let has = |kind: &str| methods.iter().any(|m| m["type"] == kind);
+                let mut connections = integration["connections"].as_array().into_iter().flatten();
+                Some(Provider {
+                    name: integration["name"].as_str().unwrap_or(&id).to_owned(),
+                    connected: (connections.clone())
+                        .filter(|c| c["type"] == "credential")
+                        .filter_map(|c| c["id"].as_str().map(str::to_owned))
+                        .collect(),
+                    key: has("key"),
+                    env: (methods.iter())
+                        .filter(|m| m["type"] == "env")
+                        .flat_map(|m| m["names"].as_array().into_iter().flatten())
+                        .filter_map(|n| n.as_str().map(str::to_owned))
+                        .collect(),
+                    env_set: (connections)
+                        .find(|c| c["type"] == "env")
+                        .and_then(|c| c["name"].as_str().map(str::to_owned)),
+                    // A sign-in in the browser or a profile: OpenCode's own terminal asks for it.
+                    terminal: (has("oauth") || has("external"))
+                        .then(|| format!("opencode auth login {id}")),
+                    id,
+                })
+            })
+            .collect();
+        providers.sort_by_key(|p| p.name.to_lowercase());
+        providers
+    }
+
+    /// The key goes in as a credential `auth import` reads on stdin: its `auth login` asks for
+    /// a key only in a terminal, and the server's `connect/key` takes it in an argument.
+    fn provider_connect_run(&self, provider: &str, key: &str) -> Option<ProgramRun> {
+        let credential = json!([{
+            "id": format!("newen-{provider}"), "integrationID": provider, "label": "Newen",
+            "active": true, "value": { "type": "key", "key": key },
+        }]);
+        Some(ProgramRun {
+            args: ["--standalone", "auth", "import"].map(String::from).into(),
+            stdin: Some(credential.to_string()),
+            timeout: 60,
+            until: None,
+        })
+    }
+
+    fn provider_disconnect_runs(&self, provider: &str, ids: &[String]) -> Vec<ProgramRun> {
+        (ids.iter())
+            .map(|id| ProgramRun {
+                args: ["--standalone", "auth", "logout", provider, id]
+                    .map(String::from)
+                    .into(),
+                stdin: None,
+                timeout: 60,
+                until: None,
+            })
+            .collect()
+    }
+
+    /// Its catalogue of the models its providers give, and the one it runs by default: a
+    /// session's own list has the efforts of its current model alone.
+    fn models_runs(&self) -> Vec<ProgramRun> {
+        vec![api("/api/model"), api("/api/model/default")]
+    }
+
+    fn models_listed(&self, outputs: &[String]) -> Vec<ModelInfo> {
+        let id = |m: &Value| -> Option<String> {
+            Some(format!(
+                "{}/{}",
+                m["providerID"].as_str()?,
+                m["id"].as_str()?
+            ))
+        };
+        let default = (outputs.get(1).and_then(|o| first_json(o))).and_then(|d| id(&d["data"]));
+        let Some(list) = outputs.first().and_then(|o| first_json(o)) else {
+            return vec![];
+        };
+        (list["data"].as_array().into_iter().flatten())
+            .filter(|m| m["enabled"] != false)
+            .filter_map(|m| {
+                let model = id(m)?;
+                Some(ModelInfo {
+                    name: m["name"].as_str().unwrap_or(&model).to_owned(),
+                    // Its variants are its efforts, the session's `thought_level` choices.
+                    efforts: (m["variants"].as_array().into_iter().flatten())
+                        .filter_map(|v| v.as_str().or(v["id"].as_str()).map(str::to_owned))
+                        .collect(),
+                    modes: vec![],
+                    default: default.as_deref() == Some(model.as_str()),
+                    id: model,
+                })
             })
             .collect()
     }

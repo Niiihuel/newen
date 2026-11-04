@@ -424,3 +424,87 @@ fn newens_ask_mode_asks_before_an_edit() {
         ("Write", &json!("/work/asked.txt"))
     );
 }
+
+fn fixture(name: &str) -> String {
+    let path = format!("{}/fixtures/2.2.5/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// Its integrations as its server lists them (2.2.5, trimmed): connected by a credential Newen
+/// imported or by a variable, by a key or only through its own terminal.
+#[test]
+fn providers_say_how_each_connects_and_which_are_connected() {
+    let providers = OpenCode::new().providers(&fixture("integrations.json"));
+    let by = |id: &str| providers.iter().find(|p| p.id == id).unwrap();
+    let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_by_key(|n| n.to_lowercase());
+    assert_eq!(names, sorted, "by name");
+    let groq = by("groq");
+    assert_eq!(
+        (groq.connected.as_slice(), groq.key),
+        (["newen-groq".to_owned()].as_slice(), true)
+    );
+    assert_eq!(groq.env, ["GROQ_API_KEY"]);
+    assert_eq!(groq.terminal, None);
+    let anthropic = by("anthropic");
+    assert!(anthropic.connected.is_empty());
+    assert_eq!(anthropic.env_set.as_deref(), Some("ANTHROPIC_API_KEY"));
+    let copilot = by("github-copilot");
+    assert!(!copilot.key);
+    assert_eq!(
+        copilot.terminal.as_deref(),
+        Some("opencode auth login github-copilot")
+    );
+    assert!(by("openai").key && by("openai").terminal.is_some());
+    assert!(by("amazon-bedrock").terminal.is_some());
+    // A failed request's body comes before its status line: nothing is made up of it.
+    assert!(OpenCode::new()
+        .providers("{\"_tag\":\"Error\"}\nHTTP 500 Internal Server Error")
+        .is_empty());
+}
+
+/// A key reaches OpenCode on stdin, as a credential `auth import` reads: never an argument.
+#[test]
+fn a_key_goes_on_stdin_and_a_disconnect_names_each_credential() {
+    let opencode = OpenCode::new();
+    let run = opencode.provider_connect_run("groq", "sk-secret").unwrap();
+    assert_eq!(run.args, ["--standalone", "auth", "import"]);
+    assert!(run.args.iter().all(|a| !a.contains("sk-secret")));
+    let credential: Value = serde_json::from_str(run.stdin.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        credential,
+        json!([{ "id": "newen-groq", "integrationID": "groq", "label": "Newen", "active": true,
+            "value": { "type": "key", "key": "sk-secret" } }])
+    );
+    let runs = opencode.provider_disconnect_runs("groq", &["newen-groq".into(), "other".into()]);
+    let args: Vec<Vec<String>> = runs.into_iter().map(|r| r.args).collect();
+    assert_eq!(
+        args,
+        [
+            ["--standalone", "auth", "logout", "groq", "newen-groq"],
+            ["--standalone", "auth", "logout", "groq", "other"]
+        ]
+    );
+}
+
+/// Its catalogue before any session: each model by the id a session takes
+/// (`provider/model`), its variants as its efforts, and the one it runs by default.
+#[test]
+fn models_come_with_their_efforts_and_the_default_before_a_session() {
+    let models =
+        OpenCode::new().models_listed(&[fixture("models.json"), fixture("model-default.json")]);
+    assert_eq!(models.len(), 10);
+    let by = |id: &str| models.iter().find(|m| m.id == id).unwrap();
+    let pickle = by("opencode/big-pickle");
+    assert!(pickle.default && pickle.efforts.is_empty());
+    assert_eq!(
+        by("opencode/deepseek-v4.1-flash-free").efforts,
+        ["low", "high", "max"]
+    );
+    assert_eq!(models.iter().filter(|m| m.default).count(), 1);
+    // Without the default's answer, none is marked; without the list, there are none.
+    let bare = OpenCode::new().models_listed(&[fixture("models.json"), String::new()]);
+    assert!(bare.iter().all(|m| !m.default));
+    assert!(OpenCode::new().models_listed(&[String::new()]).is_empty());
+}
