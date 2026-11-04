@@ -4496,6 +4496,43 @@ fn the_context_breakdown_is_asked_for_while_its_card_is_open_and_after_each_turn
         .contains(&Intent::ContextUsage { session: 1 }));
 }
 
+/// The context card's lists (MCP tools, Memory files…) open from a row whose caret sits on the
+/// row's middle, as its name does.
+#[test]
+fn a_context_lists_caret_is_centered_on_its_row() {
+    let (mut store, ui) = store_with_session();
+    agent(
+        &mut store,
+        AgentEvent::ContextUsage(newen_model::ContextUsage {
+            used: 1_000,
+            max: 200_000,
+            categories: vec![],
+            groups: vec![("Memory files".into(), vec![("~/CLAUDE.md".into(), 1_000)])],
+        }),
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let shown = UiTree::new(view(&store, &ui, window)).layout(window);
+    let row = (shown.regions.iter())
+        .find(|r| r.id == format!("{}:Memory files", view::CONTEXT_CARD))
+        .expect("the list's row")
+        .rect;
+    let caret = (shown.commands.iter())
+        .find_map(|c| match c {
+            limn::DrawCommand::Icon { rect, .. }
+                if rect.x >= row.x && rect.x < row.x + 20.0 && rect.y >= row.y - 1.0 =>
+            {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .expect("its caret");
+    let middle = |r: limn::Rect| r.y + r.height / 2.0;
+    assert!(
+        (middle(caret) - middle(row)).abs() < 0.5,
+        "caret at {caret:?} in row {row:?}"
+    );
+}
+
 #[test]
 fn token_counts_read_as_desktop_writes_them() {
     let counts: Vec<String> = [254, 999, 15_812, 999_960, 1_000_000, 1_250_000]

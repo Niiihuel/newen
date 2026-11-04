@@ -6713,13 +6713,19 @@ fn thinking_block(
 /// The small triangle after a group or a step: right while folded, down while open.
 /// Open or closed: a chevron, as the button menus draw theirs.
 fn caret(open: bool) -> Element {
+    caret_of(open, 12.0)
+}
+
+/// [`caret`] at `side` px, sized before it is centered: a size given after `centered_y` is the
+/// wrapper's, which then sits at the top of its row.
+fn caret_of(open: bool, side: f32) -> Element {
     Element::icon(icons::of(if open {
         icons::CARET_DOWN
     } else {
         icons::CARET_RIGHT
     }))
     .foreground(look::muted())
-    .size(Some(12.0), Some(12.0))
+    .size(Some(side), Some(side))
     .centered_y()
 }
 
@@ -10655,7 +10661,7 @@ fn context_breakdown(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
         let toggle = Element::clickable(
             id.clone(),
             Element::row(vec![
-                caret(open).size(Some(10.0), Some(12.0)),
+                caret_of(open, 10.0),
                 text(name.clone()).font_size(SMALL).centered_y(),
                 Element::spacer().flex(1.0),
                 to_right(muted(compact(tokens)).font_size(SMALL), 44.0),
