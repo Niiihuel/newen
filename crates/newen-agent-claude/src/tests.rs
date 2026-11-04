@@ -1665,3 +1665,15 @@ fn a_servers_oauth_client_secret_goes_to_stdin_not_the_arguments() {
     assert_eq!(run.stdin.as_deref(), Some("s3cret\n"));
     assert!(!run.args.iter().any(|a| a.contains("s3cret")));
 }
+
+#[test]
+fn a_question_is_asked_once_on_the_sessions_model_with_no_tools_or_trace() {
+    let run = Claude::default().ask_run("Name it.", Some("opus")).unwrap();
+    assert_eq!(run.stdin.as_deref(), Some("Name it."));
+    let args = run.args.join(" ");
+    for wanted in ["-p", "--no-session-persistence", "--tools ", "--model opus"] {
+        assert!(args.contains(wanted), "{args}");
+    }
+    let run = Claude::default().ask_run("Name it.", None).unwrap();
+    assert!(!run.args.iter().any(|a| a == "--model"));
+}

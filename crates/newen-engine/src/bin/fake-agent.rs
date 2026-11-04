@@ -26,6 +26,16 @@ fn main() {
     if std::env::var_os("NEWEN_FAKE_APP_SERVER").is_some() {
         return app_server();
     }
+    // Asked once with no session (`-p`), as Newen names a session: a title, quoted and ended
+    // as a model might give it, that says which model answered.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--no-session-persistence") {
+        let mut prompt = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut prompt);
+        let model = (args.iter().skip_while(|a| *a != "--model").nth(1)).map_or("none", |m| m);
+        println!("\"Named on {model}.\"");
+        return;
+    }
     let stdin = std::io::stdin();
     let mut input = stdin.lock().lines();
     let Ok(path) = std::fs::read_to_string(".fake-agent") else {

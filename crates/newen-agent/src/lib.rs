@@ -1131,6 +1131,12 @@ pub trait AgentAdapter: Send {
     fn logout_run(&self) -> Option<ProgramRun> {
         None
     }
+    /// A run of the program that answers `prompt` (on stdin) once, in plain text, on `model`
+    /// when one is given, keeping no session and using no tool: how Newen asks a session's own
+    /// model for the session's name. `None` when the agent has no such run.
+    fn ask_run(&self, _prompt: &str, _model: Option<&str>) -> Option<ProgramRun> {
+        None
+    }
     /// Lines for `command`. Commands the agent answers get an id, reported back as [`AgentEvent::Reply`].
     fn encode(&mut self, command: AgentCommand) -> Vec<String>;
     fn decode(&mut self, line: &str) -> Decoded;

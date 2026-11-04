@@ -224,6 +224,61 @@ fn a_tool_s_pictures_are_on_disk_and_stored_before_the_ui_hears_of_them() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A first message names its session: the agent answers on the session's own model, unless
+/// the person named it first.
+#[test]
+fn a_first_message_names_the_session_on_its_model_unless_the_person_did() {
+    let (engine, rx) = engine();
+    for (session, renamed) in [(1, false), (2, true)] {
+        engine.send(Intent::NewSession(NewSession {
+            agent: "claude".into(),
+            cwd: workdir("simple"),
+            model: Some("opus".into()),
+            effort: None,
+            mode: None,
+        }));
+        until(
+            &rx,
+            |e| matches!(e, Event::SessionCreated { session: s, .. } if *s == session),
+        );
+        engine.send(Intent::Send {
+            session,
+            text: "Reply with exactly the word: ok".into(),
+            mentions: vec![],
+            images: vec![],
+            lane: Lane::Steer,
+        });
+        if renamed {
+            engine.send(Intent::Rename {
+                session,
+                title: "Mine".into(),
+            });
+            until(
+                &rx,
+                |e| matches!(e, Event::Agent { session: s, event: AgentEvent::TurnFinished { .. }, .. } if *s == session),
+            );
+            // What the agent answers meanwhile does not replace the person's name.
+            let late: Vec<Event> =
+                std::iter::from_fn(|| rx.recv_timeout(Duration::from_secs(1)).ok()).collect();
+            assert!(
+                !late
+                    .iter()
+                    .any(|e| matches!(e, Event::Renamed { session: s, .. } if *s == session)),
+                "{late:#?}"
+            );
+        } else {
+            let seen = until(
+                &rx,
+                |e| matches!(e, Event::Renamed { session: s, .. } if *s == session),
+            );
+            assert!(
+                matches!(seen.last(), Some(Event::Renamed { title, .. }) if title == "Named on opus"),
+                "{seen:#?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn sessions_stream_turns_and_wait_for_decisions() {
     let (engine, rx) = engine();

@@ -276,6 +276,8 @@ enum Internal {
     Merged { session: SessionId },
     /// A step may have changed files in the session's folder.
     FilesChanged { session: SessionId },
+    /// The session's agent named it after its first message.
+    Titled { session: SessionId, title: String },
 }
 
 /// How long a folder is left to settle before it is read: the writes of a step, or of
@@ -420,6 +422,8 @@ struct Router {
     parents: HashMap<SessionId, SessionId>,
     /// A started session's name, for its reports.
     titles: HashMap<SessionId, String>,
+    /// Sessions whose agent was asked for a name, once each.
+    titling: std::collections::HashSet<SessionId>,
     /// Each session's pull request, as its agent last gave its address.
     pull_requests: HashMap<SessionId, String>,
     /// Sessions archived, which are not asked about their pull request.
@@ -665,6 +669,7 @@ impl Router {
             next: 0,
             parents: HashMap::new(),
             titles: HashMap::new(),
+            titling: Default::default(),
             pull_requests: HashMap::new(),
             archived: Default::default(),
             proposals: HashMap::new(),
@@ -748,6 +753,34 @@ impl Router {
         }
         command.envs(env_pairs(&self.settings.agent(agent).env));
         Some(command)
+    }
+
+    /// The person's first message to a session with no name: ask its agent, on the session's
+    /// own model, for a short title, which replaces the first line it shows meanwhile.
+    fn name_from(&mut self, session: SessionId, text: &str) {
+        let named =
+            self.titles.contains_key(&session) || self.names.lock().unwrap().contains_key(&session);
+        if named || !self.titling.insert(session) {
+            return;
+        }
+        let Some(new) = self.started.get(&session) else {
+            return;
+        };
+        let Some(run) =
+            adapter(&new.agent).and_then(|a| a.ask_run(&title_prompt(text), new.model.as_deref()))
+        else {
+            return;
+        };
+        let Some(command) = self.account_command(&new.agent, &run.args) else {
+            return;
+        };
+        let internal = self.internal.clone();
+        tokio::spawn(async move {
+            let answer = run_command(command, &run, "the agent").await;
+            if let Some(title) = answer.ok().as_deref().and_then(title_from) {
+                let _ = internal.send(Internal::Titled { session, title });
+            }
+        });
     }
 
     /// Ask an agent's program which models it offers, with no session; answered by
@@ -1541,7 +1574,10 @@ impl Router {
                 mentions,
                 images,
                 lane,
-            } => (session, Input::Send(text, mentions, images, lane)),
+            } => {
+                self.name_from(session, &text);
+                (session, Input::Send(text, mentions, images, lane))
+            }
             Intent::QueueRemove { session, id } => (session, Input::QueueRemove(id)),
             Intent::QueueClear { session } => (session, Input::QueueClear),
             Intent::QueueSendNow { session, id } => (session, Input::QueueSendNow(id)),
@@ -2418,6 +2454,14 @@ impl Router {
             }
             // What is uncommitted follows the work as it happens, the branch bar's counts with it.
             Internal::FilesChanged { session } => self.read_tree(session),
+            // A name the person gave it meanwhile stays.
+            Internal::Titled { session, title } => {
+                if let std::collections::hash_map::Entry::Vacant(name) = self.titles.entry(session)
+                {
+                    name.insert(title.clone());
+                    (self.sink)(Event::Renamed { session, title });
+                }
+            }
             Internal::TurnEnded {
                 session,
                 text,
@@ -2798,6 +2842,28 @@ fn same_project(here: Option<PathBuf>, rows: Vec<(SessionId, PathBuf, String)>) 
         return "No other session works in this project.".into();
     }
     lines.join("\n")
+}
+
+/// What a session's agent is asked for its name: a few words in the message's language.
+fn title_prompt(text: &str) -> String {
+    let message: String = text.chars().take(2000).collect();
+    format!(
+        "Write a title of 3 to 7 words for a conversation that starts with the message below. \
+         Use the language of the message. Reply with the title alone: no quotes, no period.\n\n\
+         <message>\n{message}\n</message>"
+    )
+}
+
+/// The title in an agent's answer: its first line, without quotes or a closing period, as
+/// long as a name from a first line is. `None` when it says nothing.
+fn title_from(answer: &str) -> Option<String> {
+    let line = answer.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let quotes = [
+        '"', '\'', '`', '*', '\u{201c}', '\u{201d}', '\u{ab}', '\u{bb}',
+    ];
+    let title = line.trim_matches(&quotes[..]).trim_end_matches('.').trim();
+    let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty()).then(|| title.chars().take(60).collect())
 }
 
 /// The first line of a message, as long as a session's name from it is.
@@ -4360,9 +4426,18 @@ async fn run_program(
     run: &newen_agent::ProgramRun,
     cwd: &std::path::Path,
 ) -> Result<String, String> {
-    let mut child = Command::from(newen_files::command(program))
-        .args(&run.args)
-        .current_dir(cwd)
+    let mut command = Command::from(newen_files::command(program));
+    command.args(&run.args).current_dir(cwd);
+    run_command(command, run, program).await
+}
+
+/// [`run_program`] for a command already made, `program` naming it in what goes wrong.
+async fn run_command(
+    mut command: Command,
+    run: &newen_agent::ProgramRun,
+    program: &str,
+) -> Result<String, String> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4857,6 +4932,25 @@ mod tests {
     /// whose quill data was not moved yet, in quill's `quill/quill.db` and `quill/`, so nothing
     /// starts empty beside them; once moved (with `quill/` left as a link or not at all), and
     /// once the database is renamed, in Newen's.
+    #[test]
+    fn a_title_is_the_answers_first_line_without_its_quotes_or_period() {
+        assert_eq!(
+            title_from("\n  \"Fix the parser.\"\nmore").as_deref(),
+            Some("Fix the parser")
+        );
+        assert_eq!(
+            title_from("**Arreglar   el  parser**").as_deref(),
+            Some("Arreglar el parser")
+        );
+        assert_eq!(title_from("\u{ab}Hola\u{bb}").as_deref(), Some("Hola"));
+        assert_eq!(title_from(" \n \"\" \n"), None);
+        assert_eq!(
+            title_from(&"a".repeat(90)).map(|t| t.chars().count()),
+            Some(60)
+        );
+        assert!(title_prompt(&"x".repeat(5000)).len() < 2300);
+    }
+
     #[test]
     fn the_folders_and_the_database_are_newen_s_or_quill_s_until_moved() {
         let base = tempfile::tempdir().unwrap();
