@@ -1,0 +1,19 @@
+# The notes of 0.2.1 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Mention a connector that isn't connected and the agent offers it on a card, then waits: connect it and the same reply goes on using it.",
+    "OpenCode and Hermes Agent join Claude Code and Codex as agents, with Newen's own tools.",
+    "A new session names itself from your first message.",
+    "A session shows its steps and how far along it is, and live cards follow the sessions and workflows it starts.",
+    "No GitHub CLI? Connect GitHub downloads the official one, checks it and keeps it in Newen's folder, without admin rights.",
+    "With no agent installed, Newen shows how to install each one.",
+    "The editor saves as Settings say: trimmed line ends, a final line break, autosave and format on save.",
+]
+improved = [
+    "The editor takes Newen's look, with a footer of chips and its own icon, and comes installed beside Newen.",
+]
+fixed = [
+    "Long names of delegated agents and waits end in an ellipsis instead of fading out.",
+    "The Connectors button waits for its lists before it fills.",
+    "A card left open by an interrupted turn no longer keeps the agent waiting.",
+]
