@@ -814,6 +814,384 @@ fn result(store: &mut Store, call: &str, output: &str) {
     );
 }
 
+/// The agent's task list as Desktop's rail shows it: the bar's "Step 2 of 3", and a Progress
+/// card first in the rail whose step under way carries the accent's dot; it stays once the turn
+/// ends, and the chip shows and hides the rail with that card open.
+#[test]
+fn the_rail_shows_the_steps_and_the_bar_where_the_agent_is() {
+    let (mut store, mut ui) = store_with_session();
+    for (call, subject) in [
+        ("c1", "Read the code"),
+        ("c2", "Fix the bug"),
+        ("c3", "Add a test"),
+    ] {
+        tool(
+            &mut store,
+            call,
+            "TaskCreate",
+            serde_json::json!({ "subject": subject }),
+            None,
+        );
+        result(&mut store, call, &format!("Task #{} created", &call[1..]));
+    }
+    let update = |store: &mut Store, call: &str, id: &str, status: &str| {
+        let input = serde_json::json!({ "taskId": id, "status": status });
+        tool(store, call, "TaskUpdate", input, None);
+        result(store, call, "Updated");
+    };
+    update(&mut store, "u1", "1", "completed");
+    update(&mut store, "u2", "2", "in_progress");
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = |store: &Store, ui: &Ui| UiTree::new(view(store, ui, window)).layout(window);
+    let shown = frame(&store, &ui);
+    let words = text_spans(&shown);
+    assert!(words.iter().any(|w| w.0 == "Step 2 of 3"));
+    let card = shown
+        .regions
+        .iter()
+        .find(|r| r.id == view::PROGRESS_CARD)
+        .expect("Progress");
+    for step in ["Read the code", "Fix the bug", "Add a test"] {
+        assert!(
+            words.iter().any(|w| w.0 == step && w.1 > card.rect.x),
+            "{step} in the rail"
+        );
+    }
+    // The step under way has the accent's dot, beside its words.
+    let fix = (words.iter())
+        .find(|w| w.0 == "Fix the bug" && w.1 > card.rect.x)
+        .unwrap();
+    assert!(shown.commands.iter().any(|c| matches!(c,
+        limn::DrawCommand::FillRect { rect, color, .. }
+            if *color == look::spark() && rect.width == 6.0 && (rect.y - fix.2).abs() < 20.0)));
+    // Done, the steps stay in the rail and the chip says so.
+    update(&mut store, "u3", "2", "completed");
+    update(&mut store, "u4", "3", "completed");
+    store.apply(Event::Status {
+        session: 1,
+        status: SessionStatus::Idle,
+    });
+    let words = text_spans(&frame(&store, &ui));
+    assert!(
+        words.iter().any(|w| w.0 == "3 of 3 done") && words.iter().any(|w| w.0 == "Add a test")
+    );
+    // The chip hides the rail, and shows it again with the card open.
+    click(&store, &mut ui, view::PROGRESS_CHIP);
+    assert!(!ui.panel_open);
+    ui.expanded.push(view::PROGRESS_CARD.into());
+    click(&store, &mut ui, view::PROGRESS_CHIP);
+    assert!(ui.panel_open && !ui.expanded.iter().any(|k| k == view::PROGRESS_CARD));
+}
+
+/// "Used in this session": each connector by the name the person knows (from the agent's
+/// spelling of it) with its calls, Newen's own tools left out, and the web's searches, once
+/// each, and the sites read with their pages; a card of them while the pointer is on a row,
+/// and their logos asked for.
+#[test]
+fn the_rail_says_what_the_session_used_beyond_its_folder() {
+    let (mut store, mut ui) = store_with_session();
+    let calls = [
+        (
+            "m1",
+            "mcp__claude_ai_Figma__get_screenshot",
+            serde_json::json!({}),
+        ),
+        (
+            "m2",
+            "mcp__claude_ai_Figma__get_metadata",
+            serde_json::json!({}),
+        ),
+        ("m3", "mcp__context7__query-docs", serde_json::json!({})),
+        ("m4", "mcp__sessions__list_sessions", serde_json::json!({})),
+        (
+            "w1",
+            "WebSearch",
+            serde_json::json!({ "query": "Store policy Windows" }),
+        ),
+        (
+            "w2",
+            "WebSearch",
+            serde_json::json!({ "query": "Store policy Windows" }),
+        ),
+        (
+            "f1",
+            "WebFetch",
+            serde_json::json!({ "url": "https://learn.microsoft.com/a" }),
+        ),
+        (
+            "f2",
+            "WebFetch",
+            serde_json::json!({ "url": "https://www.learn.microsoft.com/b?x=1" }),
+        ),
+    ];
+    for (call, name, input) in calls {
+        tool(&mut store, call, name, input, None);
+        result(&mut store, call, "ok");
+    }
+    store.session_mut(1).unwrap().mcp = Some(vec![newen_model::McpServer {
+        name: "claude.ai Figma".into(),
+        label: "claude.ai Figma".into(),
+        status: newen_model::McpStatus::Connected,
+        source: newen_model::McpSource::Other,
+        plugin: None,
+        error: None,
+        tools: vec![],
+        sign_in: false,
+    }]);
+    let session = store.session(1).unwrap();
+    assert_eq!(
+        view::used(session),
+        view::Used {
+            connectors: vec![("claude_ai_Figma".into(), 2), ("context7".into(), 1)],
+            searches: vec!["Store policy Windows".into()],
+            sites: vec![("learn.microsoft.com".into(), 2)],
+        }
+    );
+    assert_eq!(
+        view::connector(&ui, session, "claude_ai_Figma").0,
+        "claude.ai Figma"
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let mut tree = UiTree::new(view(&store, &ui, window));
+    let frame = tree.layout(window);
+    let words = text_spans(&frame);
+    for row in ["Used in this session", "Connectors", "Web search"] {
+        assert!(words.iter().any(|w| w.0 == row), "{row}");
+    }
+    assert!(
+        !words.iter().any(|w| w.0 == "2 calls"),
+        "the card waits for the pointer"
+    );
+    let row = frame
+        .regions
+        .iter()
+        .find(|r| r.id == "used:connectors")
+        .unwrap()
+        .rect;
+    tree.handle_event(limn::UiEvent::PointerMove(limn::Point::new(
+        row.x + 20.0,
+        row.y + 10.0,
+    )));
+    let words = text_spans(&tree.layout(window));
+    for said in ["claude.ai Figma", "2 calls", "context7", "1 call"] {
+        assert!(words.iter().any(|w| w.0 == said), "{said}");
+    }
+    // Their logos are asked for, the sites' too.
+    let asked = format!("{:?}", ui.logos_due(&store));
+    for key in [
+        "mcp:claude.ai Figma",
+        "mcp:context7",
+        "site:learn.microsoft.com",
+    ] {
+        assert!(asked.contains(key), "{key}: {asked}");
+    }
+}
+
+/// A session the agent started at the person's asking follows it as a monitor card: "Starting"
+/// until it exists, then its agent and model, how it stands, the step it is on, its task list
+/// as a bar and "1/2", Stop while it works (which stops its turn) and Open.
+#[test]
+fn a_started_session_is_followed_by_a_monitor_card() {
+    let (mut store, mut ui) = store_with_session();
+    let input = serde_json::json!({ "initiation": "user_asked", "title": "Release notes", "prompt": "Write them." });
+    tool(
+        &mut store,
+        "s1",
+        "mcp__sessions__start_session",
+        input,
+        None,
+    );
+    result(&mut store, "s1", "Started.");
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = |store: &Store, ui: &Ui| UiTree::new(view(store, ui, window)).layout(window);
+    let said = |store: &Store, ui: &Ui, words: &str| {
+        text_spans(&frame(store, ui)).iter().any(|w| w.0 == words)
+    };
+    assert!(said(&store, &ui, "Release notes") && said(&store, &ui, "Starting"));
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "claude".into(),
+        cwd: "/work".into(),
+    });
+    store.apply(Event::Linked {
+        session: 2,
+        parent: 1,
+        side: false,
+    });
+    store.apply(Event::Renamed {
+        session: 2,
+        title: "Release notes".into(),
+    });
+    store.apply(Event::ModelChosen {
+        session: 2,
+        model: "opus".into(),
+    });
+    store.apply(Event::Status {
+        session: 2,
+        status: SessionStatus::Running,
+    });
+    let child = |store: &mut Store, event: AgentEvent| {
+        store.apply(Event::Agent {
+            session: 2,
+            request: None,
+            event,
+        })
+    };
+    let use_tool = |store: &mut Store, call: &str, name: &str, input: serde_json::Value| {
+        child(
+            store,
+            AgentEvent::ToolUse {
+                call: call.into(),
+                name: name.into(),
+                input,
+                parent: None,
+            },
+        )
+    };
+    let answer = |store: &mut Store, call: &str, output: &str| {
+        child(
+            store,
+            AgentEvent::ToolResult {
+                call: call.into(),
+                output: output.into(),
+                is_error: false,
+                files: vec![],
+                command: None,
+                web: None,
+                images: vec![],
+                inline: vec![],
+            },
+        )
+    };
+    for (call, subject) in [("t1", "Collect the issues"), ("t2", "Write the notes")] {
+        use_tool(
+            &mut store,
+            call,
+            "TaskCreate",
+            serde_json::json!({ "subject": subject }),
+        );
+        answer(&mut store, call, &format!("Task #{} created", &call[1..]));
+    }
+    use_tool(
+        &mut store,
+        "u1",
+        "TaskUpdate",
+        serde_json::json!({ "taskId": "1", "status": "completed" }),
+    );
+    answer(&mut store, "u1", "Updated");
+    use_tool(
+        &mut store,
+        "b1",
+        "Bash",
+        serde_json::json!({ "command": "git log", "description": "Read the log" }),
+    );
+    let shown = frame(&store, &ui);
+    let words = text_spans(&shown);
+    for expected in ["Release notes", "Running", "1/2", "Stop", "Open"] {
+        assert!(
+            words.iter().any(|w| w.0 == expected),
+            "{expected}: {words:?}"
+        );
+    }
+    assert!(
+        words.iter().any(|w| w.0.ends_with("opus")),
+        "its agent and model"
+    );
+    assert!(
+        shown.regions.iter().any(|r| r.id == "thread:2"),
+        "Open shows it beside"
+    );
+    assert_eq!(
+        click(&store, &mut ui, &format!("{}2", view::MONITOR_STOP)),
+        [Intent::Interrupt { session: 2 }]
+    );
+    // Waiting on the person, then done: no Stop once it is.
+    store.apply(Event::Status {
+        session: 2,
+        status: SessionStatus::Awaiting,
+    });
+    assert!(said(&store, &ui, "Needs you"));
+    store.apply(Event::Status {
+        session: 2,
+        status: SessionStatus::Idle,
+    });
+    assert!(said(&store, &ui, "Done") && !said(&store, &ui, "Stop"));
+}
+
+/// A workflow the agent runs follows it as a monitor card where its step was: its name and
+/// phase, how it stands, the phase's agents at work, its phases done, Stop and Open.
+#[test]
+fn a_workflow_is_followed_by_a_monitor_card_where_its_step_was() {
+    use newen_model::{TaskAgent, TaskPhase, TaskState};
+    let (mut store, mut ui) = store_with_session();
+    tool(
+        &mut store,
+        "wf1",
+        "Workflow",
+        serde_json::json!({ "script": "…" }),
+        None,
+    );
+    agent(
+        &mut store,
+        AgentEvent::TaskStarted {
+            id: "w1".into(),
+            call: Some("wf1".into()),
+            description: "Read and sum up".into(),
+            kind: "workflow".into(),
+        },
+    );
+    let worker = |label: &str, state| TaskAgent {
+        label: label.into(),
+        state,
+        doing: None,
+    };
+    agent(
+        &mut store,
+        AgentEvent::TaskPhases {
+            id: "w1".into(),
+            name: Some("file-words".into()),
+            phases: vec![
+                TaskPhase {
+                    title: "Read".into(),
+                    agents: vec![
+                        worker("read README.md", TaskState::Done),
+                        worker("ls files", TaskState::Running),
+                    ],
+                },
+                TaskPhase {
+                    title: "Sum up".into(),
+                    agents: vec![],
+                },
+            ],
+        },
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let shown = UiTree::new(view(&store, &ui, window)).layout(window);
+    let words = text_spans(&shown);
+    for expected in [
+        "file-words",
+        "Workflow \u{b7} Read",
+        "Running",
+        "1 agent at work",
+        "0/2",
+        "Stop",
+        "Open",
+    ] {
+        assert!(
+            words.iter().any(|w| w.0 == expected),
+            "{expected}: {words:?}"
+        );
+    }
+    assert!(shown.regions.iter().any(|r| r.id == view::TASKS_OPEN));
+    assert_eq!(
+        click(&store, &mut ui, "task:stop:w1"),
+        [Intent::StopTask {
+            session: 1,
+            task: "w1".into()
+        }]
+    );
+}
+
 #[test]
 fn a_delegated_agents_long_name_is_cut_with_an_ellipsis_not_faded() {
     let (mut store, ui) = store_with_session();
@@ -9446,19 +9824,24 @@ fn transcript_rows_keep_to_their_column_at_any_width() {
                 eprintln!("{s:?}");
             }
         }
-        for drawn in [
-            "New",
-            "Running agent",
-            "Failed",
-            "Find usages",
-            "Searching",
-            "Open",
-        ] {
+        for drawn in ["New", "Running agent", "Failed", "Searching", "Open"] {
             assert!(
                 spans.iter().any(|s| s.0.starts_with(drawn)),
                 "{width}: no {drawn}"
             );
         }
+        // The task list is the rail's Progress card where the rail shows, else the column's.
+        let rail = frame.regions.iter().any(|r| r.id == view::PROGRESS_CARD);
+        let task = |s: &(String, f32, f32, f32, f32)| s.0.starts_with("Find usages");
+        assert_eq!(
+            spans.iter().any(task),
+            !rail,
+            "{width}: Find usages in the column"
+        );
+        assert!(
+            text_spans(&frame).iter().any(task),
+            "{width}: no Find usages"
+        );
         for s in &spans {
             assert!(s.3 <= right + 0.5, "{width}: {s:?} runs past {right}");
         }

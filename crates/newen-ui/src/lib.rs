@@ -2418,6 +2418,25 @@ impl Ui {
                 });
             }
         }
+        // What the session on screen used: its connectors' logos and the sites' own.
+        if let Some(session) = self.selected.and_then(|id| store.session(id)) {
+            let used = view::used(session);
+            for (server, _) in &used.connectors {
+                let (name, key) = view::connector(self, session, server);
+                let url = (self.connectors.listed.values())
+                    .flat_map(|l| l.servers.iter().flatten())
+                    .find(|c| c.name == name || c.label == name)
+                    .and_then(|c| https_address(&c.target));
+                wanted.push(LogoWanted { key, name, url });
+            }
+            for (site, _) in &used.sites {
+                wanted.push(LogoWanted {
+                    key: format!("site:{site}"),
+                    name: site.clone(),
+                    url: Some(format!("https://{site}")),
+                });
+            }
+        }
         wanted.retain(|w| self.logo_asked.insert(w.key.clone()));
         if wanted.is_empty() {
             vec![]
@@ -4011,6 +4030,21 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
             ui.collapsed.remove(at);
         } else {
             ui.collapsed.push(folder);
+        }
+        return vec![];
+    }
+    // A monitor card's Stop: the session it follows stops its turn.
+    if let Some(child) = (id.strip_prefix(view::MONITOR_STOP)).and_then(|c| c.parse().ok()) {
+        return vec![Intent::Interrupt { session: child }];
+    }
+    // "Step 3 of 5": the rail with its Progress card open, or, when that is what shows, away.
+    if id == view::PROGRESS_CHIP {
+        let progress_open = !ui.expanded.iter().any(|k| k == view::PROGRESS_CARD);
+        if ui.panel_open && ui.panes.is_empty() && progress_open {
+            ui.panel_open = false;
+        } else {
+            ui.panel_open = true;
+            ui.expanded.retain(|k| k != view::PROGRESS_CARD);
         }
         return vec![];
     }
