@@ -721,6 +721,11 @@ impl Router {
                     tool_policies: a.tool_policies(),
                     oauth_client: a.server_oauth_client(),
                 },
+                missing: !newen_files::installed(
+                    self.program(a.id())
+                        .unwrap_or_else(|| a.launch(&SessionSpec::default()).program),
+                ),
+                install: a.install().to_owned(),
             })
             .collect();
         (self.ui)(Event::Settings {

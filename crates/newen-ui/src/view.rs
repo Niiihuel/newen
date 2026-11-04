@@ -469,6 +469,9 @@ fn pad(child: Element, x: f32, y: f32) -> Element {
 }
 
 pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
+    if crate::no_agent::showing(ui) {
+        return crate::no_agent::view(ui, window);
+    }
     if crate::welcoming(ui) {
         return crate::welcome::view(ui, window);
     }

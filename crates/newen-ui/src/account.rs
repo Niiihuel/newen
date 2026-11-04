@@ -8,8 +8,8 @@
 
 use crate::Ui;
 use limn::{Component, Element, Size};
+use newen_components::look;
 use newen_components::pieces::{confirm, hgap, keyed_button, muted, text};
-use newen_components::{icons, look};
 use newen_model::{AuthState, Event, Intent};
 use std::collections::HashMap;
 
@@ -91,6 +91,7 @@ pub(crate) fn heard(ui: &mut Ui, event: &Event) -> Vec<Intent> {
     match event {
         Event::Settings { agents, .. } if ui.agents.is_empty() => agents
             .iter()
+            .filter(|a| !a.missing)
             .map(|a| Intent::CheckSignIn {
                 agent: a.id.clone(),
             })
@@ -238,7 +239,7 @@ pub(crate) fn dialogs(ui: &Ui, base: Element) -> Element {
 }
 
 /// A wide button of the screen: filled when `primary`, outlined otherwise.
-fn wide(id: &str, label: &str, primary: bool) -> Element {
+pub(crate) fn wide(id: &str, label: &str, primary: bool) -> Element {
     let ink = if primary {
         look::theme().background
     } else {
@@ -283,13 +284,7 @@ pub fn screen(ui: &Ui, window: Size) -> Element {
         .unwrap_or_default();
     let centered = |e: Element| e.centered_x();
     let mut column = vec![
-        centered(
-            Element::icon(icons::of(include_str!(
-                "../../../apps/newen/assets/icons/newen-mark.svg"
-            )))
-            .foreground(look::palette().text)
-            .large_icon(56.0),
-        ),
+        centered(crate::welcome::mark(56.0)),
         Element::spacer().size(None, Some(20.0)),
     ];
     match &ui.account.phase {
@@ -358,7 +353,7 @@ pub fn screen(ui: &Ui, window: Size) -> Element {
                     .gap(8.0)
                     .centered_x(),
                 ));
-                return finish(column, window);
+                return finish(column, 360.0, window);
             }
             // One action leads, as on the first screen: the code's field over a 320 px
             // Continue that fills once there is a code; the ways out sit small beneath.
@@ -391,16 +386,16 @@ pub fn screen(ui: &Ui, window: Size) -> Element {
             ));
         }
     }
-    finish(column, window)
+    finish(column, 360.0, window)
 }
 
-/// The steps, centered in the window.
-fn finish(column: Vec<Element>, window: Size) -> Element {
+/// The steps, in a column `width` wide centered in the window.
+pub(crate) fn finish(column: Vec<Element>, width: f32, window: Size) -> Element {
     Element::column(vec![
         Element::spacer().flex(1.0),
         Element::row(vec![
             hgap(0.0),
-            Element::column(column).size(Some(360.0), None),
+            Element::column(column).size(Some(width), None),
         ])
         .centered_x(),
         Element::spacer().flex(1.2),

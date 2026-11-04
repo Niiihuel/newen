@@ -651,6 +651,15 @@ impl AgentAdapter for Claude {
         Some(include_str!("../assets/claude.svg"))
     }
 
+    // Claude Code's native installer, which puts `claude` in ~/.local/bin.
+    fn install(&self) -> &'static str {
+        if cfg!(windows) {
+            "irm https://claude.ai/install.ps1 | iex"
+        } else {
+            "curl -fsSL https://claude.ai/install.sh | bash"
+        }
+    }
+
     fn servers(&self, stdout: &str) -> Vec<newen_agent::ConfiguredServer> {
         stdout.lines().filter_map(configured_server).collect()
     }

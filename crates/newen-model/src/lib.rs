@@ -503,6 +503,12 @@ pub struct AgentInfo {
     pub default_mode: String,
     #[serde(default)]
     pub customize: CustomizeSupport,
+    /// Its program was not found, so it cannot run (the UI offers only the others).
+    #[serde(default)]
+    pub missing: bool,
+    /// The command that installs its program, as its adapter says it.
+    #[serde(default)]
+    pub install: String,
 }
 
 /// Where a message sent while a turn runs goes.
