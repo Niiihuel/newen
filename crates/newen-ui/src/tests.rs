@@ -4923,6 +4923,38 @@ fn a_provider_is_found_connected_with_a_key_and_disconnected() {
         code: false,
     }));
     assert!(shows(&ui, "Enter code: 8787-8C73") && shows(&ui, "Cancel sign-in"));
+    assert!(shows(&ui, "Copy code"));
+    // A browser sign-in's page can be a paragraph long: one line of it, and its words plain.
+    let long = format!(
+        "https://auth.example.com/authorize?{}",
+        "state=abc&".repeat(40)
+    );
+    ui.applied(&signing(newen_model::ProviderSignIn::Waiting {
+        url: Some(long),
+        instructions: Some("Complete authorization in your browser.".into()),
+        code: false,
+    }));
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let lines: Vec<(f32, f32)> = (frame.commands.iter())
+        .filter_map(|c| match c {
+            limn::DrawCommand::Text {
+                text,
+                position,
+                font_size,
+                ..
+            } if text.contains("auth.example.com") || text.contains("state=abc") => {
+                Some((position.y, *font_size))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 1, "one line: {lines:?}");
+    assert!(!shows(&ui, "Copy code"), "no code to copy");
+    let big = (frame.commands.iter()).any(|c| {
+        matches!(c, limn::DrawCommand::Text { text, font_size, .. }
+            if text.contains("Complete authorization") && *font_size > 16.0)
+    });
+    assert!(!big, "its words at the body's size");
     // Cancelling takes the attempt away; trying again and finishing closes the dialog.
     assert_eq!(
         click(&store, &mut ui, "prov:stop"),

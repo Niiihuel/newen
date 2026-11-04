@@ -421,7 +421,7 @@ pub(crate) fn setting(
         palette,
     );
     newen_components::settings::setting(
-        "Providers",
+        "Connected providers",
         &format!(
             "The model providers {} uses. Connecting one adds its models to the model menu.",
             agent.name
@@ -625,9 +625,10 @@ pub(crate) fn dialog(ui: &Ui, base: Element, window: limn::Size) -> Element {
         .render()
 }
 
-/// What to do on the sign-in's page: its instructions (a code to enter, large), and that the
-/// page opened in the browser.
+/// What to do on the sign-in's page: its instructions, a device code in them large with a way
+/// to copy it, and the page's address on one line, which opens it again.
 fn signing_panel(url: &Option<String>, instructions: &Option<String>, inner: f32) -> Element {
+    let palette = look::palette();
     let mut rows = vec![Element::row(vec![
         limn::Spinner::new("prov:signing", look::muted())
             .size(14.0)
@@ -636,20 +637,61 @@ fn signing_panel(url: &Option<String>, instructions: &Option<String>, inner: f32
     ])
     .gap(8.0)];
     if let Some(instructions) = instructions {
-        rows.push(
-            text(instructions.clone())
-                .font_family(limn::FontFamily::MonospaceBold)
-                .font_size(20.0),
-        );
+        rows.push(text(instructions.clone()).size(Some(inner - 28.0), None));
+        if let Some(code) = device_code(instructions) {
+            rows.push(
+                Element::row(vec![
+                    text(code.to_owned())
+                        .font_family(limn::FontFamily::MonospaceBold)
+                        .font_size(22.0)
+                        .centered_y(),
+                    Element::spacer().flex(1.0),
+                    keyed_button(
+                        &format!("{}{code}", crate::view::COPY_CODE),
+                        "Copy code",
+                        "",
+                        false,
+                        true,
+                        palette,
+                    )
+                    .centered_y(),
+                ])
+                .gap(12.0),
+            );
+        }
     }
     if let Some(url) = url {
-        rows.push(muted(url.clone()).font_size(look::SMALL));
+        // The address can run to a paragraph: one line, the rest cut, and it opens the page.
+        let link = Element::truncated_text(url.clone())
+            .font_family(limn::FontFamily::Sans)
+            .font_size(look::SMALL)
+            .foreground(look::muted())
+            .max_width(inner - 28.0);
+        rows.push(
+            Element::clickable(format!("{}{url}", crate::view::LINK_EXTERNAL), link)
+                .accessibility_label("Open the sign-in page again"),
+        );
     }
     Element::panel(Element::column(rows).gap(10.0))
         .background(look::chart_tint())
         .radius(8.0)
         .padding(14.0)
         .size(Some(inner), None)
+}
+
+/// The code a device sign-in's instructions give to enter ("Enter code: 8787-8C73"): a word of
+/// capitals and digits in two parts around a dash.
+fn device_code(instructions: &str) -> Option<&str> {
+    (instructions.split_whitespace())
+        .map(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+        .find(|word| {
+            let parts: Vec<&str> = word.split('-').collect();
+            parts.len() == 2
+                && (parts.iter()).all(|part| {
+                    (3..=8).contains(&part.len())
+                        && (part.chars()).all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                })
+        })
 }
 
 /// A provider's ways in other than a key: a button for each, and under the chosen one its
@@ -762,6 +804,23 @@ mod tests {
         assert_eq!(standing(&browser), "Signs in in the browser");
         browser.key = true;
         assert_eq!(standing(&browser), "API key or sign-in");
+    }
+
+    #[test]
+    fn a_device_code_is_found_in_its_instructions() {
+        assert_eq!(device_code("Enter code: 8787-8C73"), Some("8787-8C73"));
+        assert_eq!(
+            device_code("Enter ABCD-EFGH at the page."),
+            Some("ABCD-EFGH")
+        );
+        let browser =
+            "Complete authorization in your browser. This window will close automatically.";
+        assert_eq!(device_code(browser), None);
+        assert_eq!(
+            device_code("Use a well-known flow"),
+            None,
+            "lower case is a word"
+        );
     }
 
     /// A question asked only for one answer of another, and Continue only once each asked one
