@@ -4533,6 +4533,91 @@ fn a_context_lists_caret_is_centered_on_its_row() {
     );
 }
 
+/// The right panel's cards move by their grip, as Desktop's: a card dragged over another's head
+/// takes its place as the pointer goes, the panel keeps the order once it is dropped (Settings),
+/// and Escape puts it back.
+#[test]
+fn a_panel_card_is_dragged_by_its_grip_to_another_place_and_kept_there() {
+    let (store, mut ui) = store_with_session();
+    let window = limn::Size::new(1408.0, 844.0);
+    let top = |store: &Store, ui: &Ui, card: &str| {
+        let shown = UiTree::new(view(store, ui, window)).layout(window);
+        (shown.regions.iter())
+            .find(|r| r.id == card)
+            .map(|r| r.rect.y)
+            .unwrap_or_else(|| panic!("{card}'s head"))
+    };
+    let (environment, context) = ("panel:environment", view::CONTEXT_CARD);
+    assert!(top(&store, &ui, environment) < top(&store, &ui, context));
+    let grip = format!("{}{context}", view::PANEL_MOVE);
+    let act = |ui: &mut Ui, action: UiAction| update(&store, ui, &action);
+    let at = limn::Point::new(0.0, 0.0);
+    act(
+        &mut ui,
+        UiAction::DragStarted {
+            id: grip.clone(),
+            position: at,
+        },
+    );
+    act(
+        &mut ui,
+        UiAction::DragMoved {
+            id: grip.clone(),
+            position: at,
+            over: Some(environment.into()),
+        },
+    );
+    assert!(
+        top(&store, &ui, context) < top(&store, &ui, environment),
+        "it took its place"
+    );
+    // Still over the head it took the place of, as that card glides aside: nothing moves back.
+    act(
+        &mut ui,
+        UiAction::DragMoved {
+            id: grip.clone(),
+            position: at,
+            over: Some(environment.into()),
+        },
+    );
+    assert!(top(&store, &ui, context) < top(&store, &ui, environment));
+    let saved = act(
+        &mut ui,
+        UiAction::Dropped {
+            id: grip.clone(),
+            position: at,
+            target: None,
+        },
+    );
+    let [Intent::SaveSettings(settings)] = saved.as_slice() else {
+        panic!("{saved:?}");
+    };
+    let order: Vec<&str> = settings.panel_order.iter().map(String::as_str).collect();
+    assert_eq!(order, view::panel_order(&ui));
+    assert!(
+        order.iter().position(|c| *c == context) < order.iter().position(|c| *c == environment)
+    );
+    assert!(ui.card_drag.is_none() && top(&store, &ui, context) < top(&store, &ui, environment));
+    // Escape puts a drag's order back.
+    act(
+        &mut ui,
+        UiAction::DragStarted {
+            id: grip.clone(),
+            position: at,
+        },
+    );
+    act(
+        &mut ui,
+        UiAction::DragMoved {
+            id: grip.clone(),
+            position: at,
+            over: Some("panel:changes".into()),
+        },
+    );
+    act(&mut ui, UiAction::DragCancelled { id: grip });
+    assert_eq!(view::panel_order(&ui), order);
+}
+
 #[test]
 fn token_counts_read_as_desktop_writes_them() {
     let counts: Vec<String> = [254, 999, 15_812, 999_960, 1_000_000, 1_250_000]

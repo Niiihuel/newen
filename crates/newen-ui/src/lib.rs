@@ -1362,6 +1362,8 @@ pub struct Ui {
     pub search: Option<String>,
     /// The session's MCP servers' dialog (`/mcp`), while open.
     pub mcp: Option<McpDialog>,
+    /// The right panel's card being dragged by its grip, while it is.
+    pub card_drag: Option<CardDrag>,
     /// Each session's card of connectors that could help, while its turn waits on it.
     pub suggested: std::collections::HashMap<SessionId, Suggested>,
     /// Sessions whose branch bar the person closed.
@@ -2184,6 +2186,7 @@ impl Ui {
             search: None,
             mcp: None,
             suggested: std::collections::HashMap::new(),
+            card_drag: None,
             bar_closed: vec![],
             queue_expanded: vec![],
             queue_menu: None,
@@ -3294,7 +3297,7 @@ pub fn update(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Intent
     let shown = ui.selected;
     let mut intents = match files::action(store, ui, action) {
         Some(intents) => intents,
-        None => update_action(store, ui, action),
+        None => card_moved(ui, action).unwrap_or_else(|| update_action(store, ui, action)),
     };
     intents.extend(files::shown(store, ui));
     if ui.menu_from_palette && ui.open_menu.is_none() {
@@ -5827,6 +5830,62 @@ fn sign_ins_heard(mcp: &mut McpDialog, event: &AgentEvent) -> Vec<Intent> {
         _ => {}
     }
     vec![]
+}
+
+/// A right panel's card dragged by its grip: which, and the order the panel shows meanwhile.
+#[derive(Clone, Debug)]
+pub struct CardDrag {
+    pub card: String,
+    pub order: Vec<String>,
+    /// The card last under the pointer, which it took the place of.
+    pub over: Option<String>,
+}
+
+/// A right panel's card dragged by its grip ([`view::PANEL_MOVE`]): it takes the place of each
+/// card whose head the pointer comes over, and the panel keeps that order once it is dropped
+/// (Settings); Escape puts it back. A card gliding aside under the pointer is not taken again.
+fn card_moved(ui: &mut Ui, action: &limn::UiAction) -> Option<Vec<Intent>> {
+    use limn::UiAction;
+    match action {
+        UiAction::DragStarted { id, .. } => {
+            let card = id.strip_prefix(view::PANEL_MOVE)?.to_owned();
+            let order = view::panel_order(ui);
+            ui.card_drag = Some(CardDrag {
+                card,
+                order,
+                over: None,
+            });
+        }
+        UiAction::DragMoved { id, over, .. } => {
+            id.strip_prefix(view::PANEL_MOVE)?;
+            let drag = ui.card_drag.as_mut()?;
+            let target = over.as_ref().filter(|o| drag.order.contains(o));
+            if target != drag.over.as_ref() {
+                drag.over = target.cloned();
+                if let Some(target) = target {
+                    let to = drag.order.iter().position(|c| c == target)?;
+                    drag.order.retain(|c| *c != drag.card);
+                    drag.order.insert(to, drag.card.clone());
+                }
+            }
+        }
+        UiAction::Dropped { id, .. } => {
+            id.strip_prefix(view::PANEL_MOVE)?;
+            let drag = ui.card_drag.take()?;
+            if drag.order == view::panel_order(ui) {
+                return Some(vec![]);
+            }
+            // Shown at once in its place; Settings keep it.
+            ui.settings.panel_order = drag.order;
+            return Some(vec![Intent::SaveSettings(ui.settings.clone())]);
+        }
+        UiAction::DragCancelled { id } => {
+            id.strip_prefix(view::PANEL_MOVE)?;
+            ui.card_drag = None;
+        }
+        _ => return None,
+    }
+    Some(vec![])
 }
 
 /// A card of connectors that could help (`suggest_connectors`), while its turn waits on it: its

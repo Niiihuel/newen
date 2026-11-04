@@ -10189,19 +10189,34 @@ pub fn picked(ui: &Ui, permission: &str, page: usize, question: &Value) -> Vec<S
 }
 
 /// One card of the right panel, as Desktop's: a 280 px white card with a #EBEBEB
-/// edge, radius 12 and 18 px in, a 13 px title with its caret, and what it holds.
-fn panel_card(
+/// edge, radius 12 and 18 px in, a 13 px title with its caret, and what it holds; with its id,
+/// which [`panel_order`] places it by. Over the card its grip shows at the head's end, which
+/// drags it among the others; its head is where another card is dropped.
+fn panel_card<'a>(
     title: &str,
-    id: &str,
+    id: &'a str,
     open: bool,
     trailing: Vec<Element>,
     rows: Vec<Element>,
     width: f32,
-) -> Element {
+    ui: &Ui,
+) -> (&'a str, Element) {
     let mut head = vec![text(title).font_size(SMALL).centered_y(), caret(open)];
     head.push(Element::spacer().flex(1.0));
     head.extend(trailing);
-    let head = Element::clickable(id, Element::row(head).gap(6.0).size(None, Some(20.0)));
+    let grip = limn::DragHandle::new(format!("{PANEL_MOVE}{id}"), look::palette())
+        .on_hover(true)
+        .dragging(ui.card_drag.as_ref().is_some_and(|d| d.card == id))
+        .size(20.0)
+        .accessibility_label(format!("Move {title}"))
+        .render();
+    let head = Element::row(vec![
+        Element::clickable(id, Element::row(head).gap(6.0).size(None, Some(20.0)))
+            .drop_target()
+            .flex(1.0),
+        grip,
+    ])
+    .gap(4.0);
     // The rows open and close on limn's spring, the gap above them inside the slot.
     let body = open.then(|| {
         Element::column(
@@ -10217,12 +10232,49 @@ fn panel_card(
             .expand()
             .render(),
     ];
-    Element::panel(Element::column(content))
+    let card = Element::panel(Element::column(content))
         .background(look::palette().surface)
         .border(look::card_border(), 1.0)
         .radius(12.0)
         .padding(18.0)
         .size(Some(width), None)
+        .hover_region()
+        // The others glide aside as a dragged card takes their place.
+        .animate_move(format!("{id}:move"));
+    (id, card)
+}
+
+/// The right panel's cards in Newen's own order, which [`panel_order`] starts from.
+pub const PANEL_CARDS: [&str; 8] = [
+    PROGRESS_CARD,
+    USED_CARD,
+    "panel:environment",
+    CONTEXT_CARD,
+    "panel:terminals",
+    "panel:usage",
+    "panel:changes",
+    "panel:outputs",
+];
+
+/// A card's grip: `{PANEL_MOVE}{card}`.
+pub const PANEL_MOVE: &str = "panel:move:";
+
+/// The right panel's cards in the order the person dragged them to (Settings), or the one a
+/// drag under way shows; the ones it does not name after them, in Newen's own order.
+pub fn panel_order(ui: &Ui) -> Vec<String> {
+    if let Some(drag) = &ui.card_drag {
+        return drag.order.clone();
+    }
+    let mut order: Vec<String> = (ui.settings.panel_order.iter())
+        .filter(|id| PANEL_CARDS.contains(&id.as_str()))
+        .cloned()
+        .collect();
+    for id in PANEL_CARDS {
+        if !order.iter().any(|o| o == id) {
+            order.push(id.to_owned());
+        }
+    }
+    order
 }
 
 /// A row of a panel card: a 16 px icon and its words.
@@ -10329,6 +10381,7 @@ fn right_panel(
             vec![],
             progress_rows(&list, current, inner),
             inner,
+            ui,
         ));
     }
     // Then what it reached beyond its folder: connectors and the web.
@@ -10341,6 +10394,7 @@ fn right_panel(
             vec![],
             vec![Element::column(used).gap(2.0)],
             inner,
+            ui,
         ));
     }
     cards.extend([
@@ -10351,6 +10405,7 @@ fn right_panel(
             vec![],
             environment,
             inner,
+            ui,
         ),
         panel_card(
             "Context",
@@ -10359,6 +10414,7 @@ fn right_panel(
             context_head,
             context_rows,
             inner,
+            ui,
         ),
     ]);
     // What the agent left running beside its turns, as Desktop's rail lists it.
@@ -10371,6 +10427,7 @@ fn right_panel(
             // Packed as the sidebar's rows are, 2 px apart.
             vec![Element::column(rows).gap(2.0)],
             inner,
+            ui,
         ));
     }
     if let Some(rows) = usage_rows(store, ui, inner - 36.0) {
@@ -10381,6 +10438,7 @@ fn right_panel(
             vec![],
             rows,
             inner,
+            ui,
         ));
     }
     cards.extend([panel_card(
@@ -10390,6 +10448,7 @@ fn right_panel(
         vec![],
         vec![changes],
         inner,
+        ui,
     )]);
     let outputs = outputs(session);
     if !outputs.is_empty() {
@@ -10417,8 +10476,13 @@ fn right_panel(
                 })
                 .collect(),
             inner,
+            ui,
         ));
     }
+    // In the person's order: Settings', or the one a drag under way shows.
+    let order = panel_order(ui);
+    cards.sort_by_key(|(id, _)| order.iter().position(|o| o == id));
+    let cards = cards.into_iter().map(|(_, card)| card).collect();
     // Taller than the window, as an open breakdown gets, the cards scroll.
     Element::scroll("panel:scroll", Element::column(cards).gap(8.0).padding(8.0))
         .scrollbar_appearance(limn::ScrollbarAppearance::overlay())

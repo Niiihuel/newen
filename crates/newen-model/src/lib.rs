@@ -323,6 +323,10 @@ pub struct Settings {
     /// Whether the person let Newen download Cisco's OpenH264 codec to play the clips of What's
     /// new: `None` while never asked, so nothing is downloaded until they say yes.
     pub video_codec: Option<bool>,
+    /// The right panel's cards in the order the person dragged them to, by id; one it does not
+    /// name follows in Newen's own order.
+    #[serde(default)]
+    pub panel_order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -365,6 +369,7 @@ impl Default for Settings {
             remote_new_sessions: false,
             whats_new: true,
             video_codec: None,
+            panel_order: vec![],
         }
     }
 }
