@@ -18,6 +18,18 @@ pub fn url(query: &str) -> String {
     format!("https://registry.modelcontextprotocol.io/v0/servers?version=latest&limit=50&search={query}")
 }
 
+/// What the registry lists for `query`, asked with `curl`.
+pub async fn find(query: &str) -> Result<Vec<ServerOffer>, String> {
+    let run = newen_agent::ProgramRun {
+        args: vec!["-sSfL".into(), "--max-time".into(), "20".into(), url(query)],
+        stdin: None,
+        timeout: 25,
+        until: None,
+    };
+    let body = crate::run_program("curl", &run, &std::env::temp_dir()).await?;
+    offers(&body)
+}
+
 /// The offers in what the registry answered: each server reached at its first address, or
 /// run from its first package, its required arguments as `<hint>` for the person to fill.
 pub fn offers(body: &str) -> Result<Vec<ServerOffer>, String> {

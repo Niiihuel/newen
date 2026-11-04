@@ -190,6 +190,10 @@ pub const MCP_CLEAR_YES: &str = "mcp:clear-yes";
 pub const MCP_CLEAR_NO: &str = "mcp:clear-no";
 pub const MCP_ROW: &str = "mcp:row:";
 pub const MCP_BACK: &str = "mcp:back";
+/// A button of a connectors card: `{SUGGESTED}{session}:` before the MCP dialog's id of it.
+pub const SUGGESTED: &str = "suggested:";
+/// ... or before `{SUGGESTED_ADD}{n}`, Connect on its `n`th offer from the registry.
+pub const SUGGESTED_ADD: &str = "add:";
 /// The Files pane's buttons over the file on screen.
 pub const DOC_PREVIEW: &str = "doc:preview";
 pub const DOC_SAVE: &str = "doc:save";
@@ -3195,6 +3199,9 @@ fn permission_heading(who: &str, tool: &str, input: &Value) -> String {
             let name = input["name"].as_str().unwrap_or_default();
             return format!("Allow the agent to start the dev server {name}?");
         }
+        if input["kind"] == "connectors" {
+            return "Connectors that could help".to_owned();
+        }
         let site = input["site"].as_str().unwrap_or_default();
         return format!("Allow the agent to use the browser on {site}?");
     }
@@ -4432,6 +4439,15 @@ fn item(
             decided: None,
             ..
         } if tool == "ExitPlanMode" => plan_card(store, id, Some(session), ui, column, palette),
+        Item::Permission {
+            id,
+            tool,
+            input,
+            decided: None,
+            ..
+        } if newen_model::is_site_permission(tool) && input["kind"] == "connectors" => {
+            connectors_card(id, input, session, ui, column, palette)
+        }
         Item::Permission { .. } => permission(item, &session.agent, ui, column, palette),
         Item::TurnEnd {
             ok: false,
@@ -5602,6 +5618,16 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
         name if name.ends_with("sessions__list_sessions") => {
             ("Listed sessions", "Listing sessions", String::new())
         }
+        name if name.ends_with("sessions__suggest_connectors") => {
+            let names: Vec<&str> = (input["names"].as_array().into_iter().flatten())
+                .filter_map(Value::as_str)
+                .collect();
+            (
+                "Offered connectors",
+                "Offering connectors",
+                names.join(", "),
+            )
+        }
         "AskUserQuestion" => (
             "Asked",
             "Asking",
@@ -6729,6 +6755,210 @@ fn site_permission(
         .radius(12.0)
         .padding(16.0)
         .size(Some(width), None)
+}
+
+/// Desktop's "Connectors that could help": the session's connectors its agent offered
+/// (`suggest_connectors`), each with its logo, how it stands and the one thing to do, then the
+/// servers the MCP registry offers for names the session has none of, with their words and
+/// Connect, while the turn waits on the card. It goes on by itself once all are connected; the
+/// cross closes it, and the turn goes on without the rest.
+fn connectors_card(
+    id: &str,
+    input: &Value,
+    session: &Session,
+    ui: &Ui,
+    width: f32,
+    palette: ComponentPalette,
+) -> Element {
+    let card = (ui.suggested.get(&session.id)).filter(|c| c.permission == id);
+    let can_toggle = (session.capabilities.as_ref()).is_some_and(|c| c.mcp_toggle);
+    let scope = format!("{SUGGESTED}{}:", session.id);
+    // The turn waits on the card, so its buttons work while it runs, as the dialog's do not.
+    let act = |id: String, label: &str| keyed_button(&id, label, "", false, true, palette);
+    let head = Element::row(vec![
+        hgap(12.0),
+        text("Connectors that could help").flex(1.0).centered_y(),
+        icon_tool(
+            CONNECTORS_BROWSE,
+            icons::of(icons::CONNECTORS),
+            "Browse connectors",
+            28.0,
+            palette,
+        ),
+        icon_tool(
+            &format!("perm:{id}:deny"),
+            icons::of(icons::CLOSE),
+            "Close",
+            28.0,
+            palette,
+        ),
+        hgap(4.0),
+    ])
+    .gap(4.0)
+    .size(None, Some(44.0));
+    let mut rows = vec![head, hline(width, look::card_border())];
+    let row = |avatar: Element, title: String, says: String, action: Element| {
+        let says = Element::truncated_text(says)
+            .font_family(FontFamily::Sans)
+            .font_size(SMALL)
+            .foreground(look::muted());
+        Element::row(vec![
+            avatar.centered_y(),
+            Element::column(vec![text(title).font_family(FontFamily::SansBold), says])
+                .gap(2.0)
+                .flex(1.0)
+                .centered_y(),
+            action.centered_y(),
+        ])
+        .gap(12.0)
+        .padding(16.0)
+    };
+    let servers = session.mcp.as_deref().unwrap_or_default();
+    let server_row = |server: &newen_model::McpServer| {
+        let phase = card.and_then(|c| c.sign_ins.phases.get(&server.name).copied());
+        let action = server_status(server, phase, can_toggle, &scope, &act);
+        let avatar = server_avatar(ui, server, 36.0);
+        row(
+            avatar,
+            server.label.clone(),
+            server_says(server, phase),
+            action,
+        )
+    };
+    for name in (input["servers"].as_array().into_iter().flatten()).filter_map(Value::as_str) {
+        if let Some(server) = servers.iter().find(|s| s.name == name) {
+            rows.push(server_row(server));
+        }
+    }
+    // The registry's offers, Desktop's directory rows: once added, the server's own row.
+    let offers: Vec<newen_model::ServerOffer> =
+        serde_json::from_value(input["offers"].clone()).unwrap_or_default();
+    for (at, offer) in offers.iter().enumerate() {
+        let name = crate::offer_name(offer);
+        if let Some(server) = servers.iter().find(|s| s.name == name) {
+            rows.push(server_row(server));
+            continue;
+        }
+        let title = offer.title.clone().unwrap_or_else(|| name.to_owned());
+        let avatar = match logo_picture(ui, &format!("mcp:{name}")) {
+            Some(logo) => logo_tile(logo, 36.0),
+            None => limn::Avatar::new(&title, look::palette())
+                .size(36.0)
+                .render(),
+        };
+        let action = if card.is_some_and(|c| c.adding.iter().any(|a| a == name)) {
+            limn::Spinner::new(format!("mcp:wait:{scope}{name}"), look::muted())
+                .size(14.0)
+                .render()
+        } else {
+            act(format!("{scope}{SUGGESTED_ADD}{at}"), "Connect")
+        };
+        rows.push(row(avatar, title, offer.description.clone(), action));
+    }
+    // A sign-in or an add that could not start says why.
+    if let Some(notice) = card.and_then(|c| c.sign_ins.notice.clone()) {
+        rows.push(muted(notice).font_size(SMALL).padding(16.0));
+    }
+    Element::panel(Element::column(rows))
+        .background(palette.surface)
+        .border(look::card_border(), 1.0)
+        .radius(12.0)
+        .size(Some(width), None)
+}
+
+/// An MCP server's logo, as Desktop shows each server's favicon: the one Newen found, else its
+/// initial.
+fn server_avatar(ui: &Ui, server: &newen_model::McpServer, side: f32) -> Element {
+    let key = format!(
+        "mcp:{}",
+        crate::server_logo_name(ui, &server.name, &server.label)
+    );
+    match logo_picture(ui, &key) {
+        Some(logo) => logo_tile(logo, side),
+        None => limn::Avatar::new(&server.label, look::palette())
+            .size(side)
+            .render(),
+    }
+}
+
+/// How an MCP server stands, in Desktop's words, a sign-in under way first.
+fn server_says(server: &newen_model::McpServer, phase: Option<crate::McpPhase>) -> String {
+    use crate::McpPhase;
+    use newen_model::McpStatus;
+    match (phase, server.status) {
+        (Some(McpPhase::Opening), _) => "Opening sign-in\u{2026}".to_owned(),
+        (Some(McpPhase::InBrowser), _) => "Complete sign-in in your browser\u{2026}".to_owned(),
+        (None, McpStatus::Connected) => match server.tools.len() {
+            1 => "Connected \u{b7} 1 tool".to_owned(),
+            n => format!("Connected \u{b7} {n} tools"),
+        },
+        (None, McpStatus::Pending) => "Connecting\u{2026}".to_owned(),
+        (None, McpStatus::NeedsAuth) => "Needs authentication".to_owned(),
+        (None, McpStatus::Failed) => match &server.error {
+            Some(error) => format!("Failed to connect: {error}"),
+            None => "Failed to connect".to_owned(),
+        },
+        (None, McpStatus::Disabled) => "Turned off".to_owned(),
+    }
+}
+
+/// Where to sign in to a server Newen cannot sign in to.
+fn needs_auth(server: &newen_model::McpServer) -> &'static str {
+    if server.source == newen_model::McpSource::Account {
+        "Sign in to it where your account's connectors are managed, then reconnect here."
+    } else {
+        "Sign in with /mcp in a terminal where this session runs, then reconnect here."
+    }
+}
+
+/// Desktop's status cell of an MCP server: a check, a spinner, or the one thing to do, its
+/// button made by `act` with the dialog's id under `scope`. What it says more is in its details.
+fn server_status(
+    server: &newen_model::McpServer,
+    phase: Option<crate::McpPhase>,
+    can_toggle: bool,
+    scope: &str,
+    act: &dyn Fn(String, &str) -> Element,
+) -> Element {
+    use crate::McpPhase;
+    use newen_model::McpStatus;
+    let name = &server.name;
+    let note = |said: &str, why: Option<&str>| {
+        let said = muted(said).font_size(BODY);
+        match why {
+            Some(why) => {
+                limn::Tooltip::new(said, format!("mcp:why:{scope}{name}"), why, look::palette())
+                    .render()
+            }
+            None => said,
+        }
+    };
+    match (phase, server.status) {
+        (Some(McpPhase::Opening), _) | (None, McpStatus::Pending) => {
+            limn::Spinner::new(format!("mcp:wait:{scope}{name}"), look::muted())
+                .size(14.0)
+                .render()
+        }
+        (Some(McpPhase::InBrowser), _) => act(format!("{scope}{MCP_RECONNECT}{name}"), "Reconnect"),
+        (None, McpStatus::Connected) => Element::icon(icons::of(icons::CHECK))
+            .foreground(look::palette().text)
+            .size(Some(16.0), Some(16.0)),
+        (None, McpStatus::NeedsAuth) if server.sign_in => {
+            act(format!("{scope}{MCP_CONNECT}{name}"), "Connect")
+        }
+        (None, McpStatus::NeedsAuth) => note("Needs authentication", Some(needs_auth(server))),
+        (None, McpStatus::Failed) => limn::Tooltip::new(
+            act(format!("{scope}{MCP_RECONNECT}{name}"), "Reconnect"),
+            format!("mcp:failed:{scope}{name}"),
+            server.error.as_deref().unwrap_or("Failed to connect"),
+            look::palette(),
+        )
+        .render(),
+        (None, McpStatus::Disabled) if can_toggle => {
+            act(format!("{scope}{MCP_TURN_ON}{name}"), "Turn on")
+        }
+        (None, McpStatus::Disabled) => note("Off in its config", None),
+    }
 }
 
 fn permission_actions(id: &str, can_always: bool, ui: &Ui, palette: ComponentPalette) -> Element {
@@ -12163,19 +12393,7 @@ fn mcp_dialog(
         }
     };
     let words = |s: String| muted(s).font_size(BODY);
-    // Desktop shows each server's favicon; Newen shows the logo it found, else the initial.
-    let avatar = |server: &newen_model::McpServer, side: f32| match logo_picture(
-        ui,
-        &format!(
-            "mcp:{}",
-            crate::server_logo_name(ui, &server.name, &server.label)
-        ),
-    ) {
-        Some(logo) => logo_tile(logo, side),
-        None => limn::Avatar::new(&server.label, look::palette())
-            .size(side)
-            .render(),
-    };
+    let avatar = |server: &newen_model::McpServer, side: f32| server_avatar(ui, server, side);
     // Where it was configured, as Desktop's outlined pill beside the type.
     let chip = |label: &str| {
         Element::row(vec![
@@ -12186,11 +12404,6 @@ fn mcp_dialog(
         .size(None, Some(18.0))
         .border(look::customize_edge(), 1.0)
         .radius(9.0)
-    };
-    let spinner = |name: &str| {
-        limn::Spinner::new(format!("mcp:wait:{name}"), look::muted())
-            .size(14.0)
-            .render()
     };
     let kind = |source: McpSource| match source {
         McpSource::User => "User",
@@ -12203,17 +12416,6 @@ fn mcp_dialog(
         McpSource::App => "App",
         McpSource::Global => "All agents",
         McpSource::Other => "Other",
-    };
-    let tools = |n: usize| match n {
-        1 => "Connected \u{b7} 1 tool".to_owned(),
-        n => format!("Connected \u{b7} {n} tools"),
-    };
-    let needs_auth = |server: &newen_model::McpServer| {
-        if server.source == McpSource::Account {
-            "Sign in to it where your account's connectors are managed, then reconnect here."
-        } else {
-            "Sign in with /mcp in a terminal where this session runs, then reconnect here."
-        }
     };
     let caps = session.and_then(|s| s.capabilities.as_ref());
     let (can_toggle, can_clear) = (
@@ -12249,20 +12451,7 @@ fn mcp_dialog(
             if let Some(plugin) = &server.plugin {
                 who.push(muted(format!("Provided by the {plugin} plugin")).font_size(SMALL));
             }
-            let status = match (phase, server.status) {
-                (Some(McpPhase::Opening), _) => "Opening sign-in\u{2026}".to_owned(),
-                (Some(McpPhase::InBrowser), _) => {
-                    "Complete sign-in in your browser\u{2026}".to_owned()
-                }
-                (None, McpStatus::Connected) => tools(server.tools.len()),
-                (None, McpStatus::Pending) => "Connecting\u{2026}".to_owned(),
-                (None, McpStatus::NeedsAuth) => "Needs authentication".to_owned(),
-                (None, McpStatus::Failed) => match &server.error {
-                    Some(error) => format!("Failed to connect: {error}"),
-                    None => "Failed to connect".to_owned(),
-                },
-                (None, McpStatus::Disabled) => "Turned off".to_owned(),
-            };
+            let status = server_says(server, phase);
             who.push(words(format!("{} \u{b7} {status}", kind(server.source))));
             let mut buttons = vec![];
             let name = &server.name;
@@ -12386,52 +12575,9 @@ fn mcp_dialog(
                         avatar(server, 24.0).centered_y(),
                         Element::column(copy).gap(2.0).flex(1.0).centered_y(),
                     ];
-                    let note = |said: String, why: Option<&str>| {
-                        let said = words(said);
-                        match why {
-                            Some(why) => limn::Tooltip::new(
-                                said,
-                                format!("mcp:why:{}", server.name),
-                                why,
-                                look::palette(),
-                            )
-                            .render(),
-                            None => said,
-                        }
-                    };
                     let name = &server.name;
-                    // Desktop's status cell: a check, a spinner, or the one thing to
-                    // do; what it says more is in the server's details.
-                    let check = || {
-                        Element::icon(icons::of(icons::CHECK))
-                            .foreground(look::palette().text)
-                            .size(Some(16.0), Some(16.0))
-                    };
-                    let status = match (mcp.phases.get(name), server.status) {
-                        (Some(McpPhase::Opening), _) => spinner(name),
-                        (Some(McpPhase::InBrowser), _) => {
-                            action(format!("{MCP_RECONNECT}{name}"), "Reconnect")
-                        }
-                        (None, McpStatus::Connected) => check(),
-                        (None, McpStatus::Pending) => spinner(name),
-                        (None, McpStatus::NeedsAuth) if server.sign_in => {
-                            action(format!("{MCP_CONNECT}{name}"), "Connect")
-                        }
-                        (None, McpStatus::NeedsAuth) => {
-                            note("Needs authentication".into(), Some(needs_auth(server)))
-                        }
-                        (None, McpStatus::Failed) => limn::Tooltip::new(
-                            action(format!("{MCP_RECONNECT}{name}"), "Reconnect"),
-                            format!("mcp:failed:{name}"),
-                            server.error.as_deref().unwrap_or("Failed to connect"),
-                            look::palette(),
-                        )
-                        .render(),
-                        (None, McpStatus::Disabled) if can_toggle => {
-                            action(format!("{MCP_TURN_ON}{name}"), "Turn on")
-                        }
-                        (None, McpStatus::Disabled) => note("Off in its config".into(), None),
-                    };
+                    let phase = mcp.phases.get(name).copied();
+                    let status = server_status(server, phase, can_toggle, "", &action);
                     limn::TableRow::new(
                         format!("{MCP_ROW}{name}"),
                         vec![

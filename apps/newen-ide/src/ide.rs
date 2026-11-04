@@ -1207,10 +1207,9 @@ impl Ide {
                         }
                         None => self.diagram_sources.push(diagram),
                     }
-                } else if let Some(target) = id.strip_prefix(MD_LINK) {
-                    return Some(self.follow_link(target));
                 } else {
-                    return None;
+                    let target = id.strip_prefix(MD_LINK)?;
+                    return Some(self.follow_link(target));
                 }
             }
         }
@@ -1402,12 +1401,11 @@ impl Ide {
                 .requests
                 .push(TerminalRequest::Select(tab.parse().ok()?));
             self.focus = Some(TERMINAL.into());
-        } else if let Some(tab) = id.strip_prefix("terminal:close:") {
+        } else {
+            let tab = id.strip_prefix("terminal:close:")?;
             terminal
                 .requests
                 .push(TerminalRequest::Close(tab.parse().ok()?));
-        } else {
-            return None;
         }
         Some(vec![])
     }

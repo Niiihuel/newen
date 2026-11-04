@@ -1353,6 +1353,8 @@ pub struct Ui {
     pub search: Option<String>,
     /// The session's MCP servers' dialog (`/mcp`), while open.
     pub mcp: Option<McpDialog>,
+    /// Each session's card of connectors that could help, while its turn waits on it.
+    pub suggested: std::collections::HashMap<SessionId, Suggested>,
     /// Sessions whose branch bar the person closed.
     pub bar_closed: Vec<SessionId>,
     /// Sessions whose queue bar is expanded to its list; a queue starts folded.
@@ -1847,12 +1849,11 @@ fn session_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
         // The host opens the folder; the menus close.
         ui.row_menu = None;
         ui.open_menu = None;
-    } else if let Some(s) = session("delete:") {
+    } else {
+        let s = session("delete:")?;
         ui.row_menu = None;
         ui.open_menu = None;
         ui.deleting = Some(s);
-    } else {
-        return None;
     }
     Some(vec![])
 }
@@ -2170,6 +2171,7 @@ impl Ui {
             deleting: None,
             search: None,
             mcp: None,
+            suggested: std::collections::HashMap::new(),
             bar_closed: vec![],
             queue_expanded: vec![],
             queue_menu: None,
@@ -2276,7 +2278,10 @@ impl Ui {
         let ultra = self
             .ultra_since
             .map(|_| std::time::Duration::from_millis(33));
-        let mcp = (self.mcp.as_ref()).map(|m| MCP_POLL.saturating_sub(m.asked.elapsed()));
+        let mcp = (self.mcp.iter())
+            .chain(self.suggested.values().map(|c| &c.sign_ins))
+            .map(|m| MCP_POLL.saturating_sub(m.asked.elapsed()))
+            .min();
         // A question's countdown shows from its quiet stretch's end, in whole seconds.
         let questions = (self.unanswered.values())
             .filter_map(|(_, since)| {
@@ -2344,7 +2349,7 @@ impl Ui {
             .collect()
     }
 
-    /// The logos the open Connectors or Plugins page, or MCP dialog, shows and nothing asked for
+    /// The logos the open Connectors or Plugins page, MCP dialog or a connectors card shows and nothing asked for
     /// yet, asked for once each; none while logos are off.
     pub fn logos_due(&mut self, store: &Store) -> Vec<Intent> {
         if !self.settings.logos {
@@ -2380,8 +2385,21 @@ impl Ui {
                 });
             }
         }
-        if let Some(mcp) = &self.mcp {
-            let servers = store.session(mcp.session).and_then(|s| s.mcp.as_ref());
+        // A connectors card's offers, by the name they will have, their site's for an address.
+        for offer in self.suggested.values().flat_map(|c| &c.offers) {
+            let name = offer_name(offer).to_owned();
+            wanted.push(LogoWanted {
+                key: format!("mcp:{name}"),
+                name,
+                url: https_address(&offer.target),
+            });
+        }
+        // The MCP dialog's servers, and a connectors card's.
+        let shown: Vec<SessionId> = (self.mcp.iter().map(|m| m.session))
+            .chain(self.suggested.keys().copied())
+            .collect();
+        for session in shown {
+            let servers = store.session(session).and_then(|s| s.mcp.as_ref());
             for server in servers.into_iter().flatten() {
                 // The address is the one the Connectors page lists under the same name.
                 let url = (self.connectors.listed.values())
@@ -2437,15 +2455,17 @@ impl Ui {
         if customizing && self.extensions.values().any(|k| k.folder != folder) {
             return self.ask_extensions();
         }
-        match &mut self.mcp {
-            Some(mcp) if mcp.asked.elapsed() >= MCP_POLL => {
+        // A connectors card's too, so the turn goes on once they connect.
+        let suggested = self.suggested.values_mut().map(|c| &mut c.sign_ins);
+        (self.mcp.iter_mut().chain(suggested))
+            .filter(|mcp| mcp.asked.elapsed() >= MCP_POLL)
+            .map(|mcp| {
                 mcp.asked = std::time::Instant::now();
-                vec![Intent::McpStatus {
+                Intent::McpStatus {
                     session: mcp.session,
-                }]
-            }
-            _ => vec![],
-        }
+                }
+            })
+            .collect()
     }
 
     /// Before each frame: the sidebar and the panel head for where they were toggled to, and
@@ -3952,6 +3972,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if let Some(intents) = mcp_clicked(ui, id) {
         return intents;
     }
+    if let Some(intents) = suggested_clicked(store, ui, id) {
+        return intents;
+    }
     if let Some(intents) = session_clicked(store, ui, id) {
         return intents;
     }
@@ -5332,8 +5355,7 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ("offer", at) => {
             let (_, offers, _) = c.found.as_ref()?;
             let offer = offers.get(at.parse::<usize>().ok()?)?.clone();
-            // The registry's name's last part, as a server's own name.
-            let name = offer.name.rsplit(['/', '.']).next().unwrap_or(&offer.name);
+            let name = offer_name(&offer);
             let mut target = vec![offer.target.clone()];
             target.extend(offer.args.iter().cloned());
             ui.connectors.adding = Some(AddServer {
@@ -5473,6 +5495,53 @@ fn mcp_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         mcp.clearing = Some(name.to_owned());
         return Some(vec![]);
     }
+    sign_in_clicked(mcp, id)
+}
+
+/// A connectors card's buttons: the MCP dialog's, for its session's sign-ins; and Connect on a
+/// server the registry offers, which adds it to the session at once and to its agent's config
+/// for the sessions after (`claude mcp add --scope user`, as Customize's Add does).
+fn suggested_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
+    let (session, id) = id.strip_prefix(view::SUGGESTED)?.split_once(':')?;
+    let session: SessionId = session.parse().ok()?;
+    let card = ui.suggested.get_mut(&session)?;
+    let Some(at) = id.strip_prefix(view::SUGGESTED_ADD) else {
+        return sign_in_clicked(&mut card.sign_ins, id);
+    };
+    let offer = card.offers.get(at.parse::<usize>().ok()?)?;
+    let server = newen_model::NewServer {
+        name: offer_name(offer).to_owned(),
+        target: offer.target.clone(),
+        args: offer.args.clone(),
+        remote: offer.remote,
+        scope: Some("user".into()),
+        ..Default::default()
+    };
+    card.sign_ins.notice = None;
+    card.adding.push(server.name.clone());
+    let known = store.session(session)?;
+    Some(vec![
+        Intent::ExtensionOp {
+            agent: known.agent.clone(),
+            folder: known.cwd.clone(),
+            op: newen_model::ExtensionOp::AddServer(server.clone()),
+        },
+        Intent::McpAdd { session, server },
+        Intent::McpStatus { session },
+    ])
+}
+
+/// A registry offer's name as a server's own: its registry name's last part
+/// (`io.github.upstash/context7` is `context7`).
+pub(crate) fn offer_name(offer: &newen_model::ServerOffer) -> &str {
+    offer.name.rsplit(['/', '.']).next().unwrap_or(&offer.name)
+}
+
+/// Connecting one of `mcp`'s servers: signing in to it, connecting it again or turning it on,
+/// each but the sign-in followed by asking for the servers again.
+fn sign_in_clicked(mcp: &mut McpDialog, id: &str) -> Option<Vec<Intent>> {
+    let session = mcp.session;
+    let asked = |intent| Some(vec![intent, Intent::McpStatus { session }]);
     if let Some(name) = id.strip_prefix(view::MCP_CONNECT) {
         mcp.notice = None;
         mcp.phases.insert(name.to_owned(), McpPhase::Opening);
@@ -5503,47 +5572,135 @@ impl Ui {
     /// needed no one (the server is reconnected), a sign-in that could not start; and the
     /// servers, whose sign-in is over once their status changes, as Desktop's.
     fn mcp_heard(&mut self, event: &Event) -> Vec<Intent> {
-        let Some(mcp) = self.mcp.as_mut() else {
-            return vec![];
+        let (session, event) = match event {
+            Event::Agent { session, event, .. } => (*session, event),
+            Event::Decided { permission, .. } => {
+                self.suggested.retain(|_, c| c.permission != *permission);
+                return vec![];
+            }
+            // The store closes a card its turn or its process left open: it waits on nothing.
+            Event::Status {
+                session,
+                status: SessionStatus::Exited | SessionStatus::Failed(_),
+            } => {
+                self.suggested.remove(session);
+                return vec![];
+            }
+            _ => return vec![],
         };
-        let Event::Agent { session, event, .. } = event else {
-            return vec![];
-        };
-        if *session != mcp.session {
+        if matches!(event, AgentEvent::TurnFinished { .. }) {
+            self.suggested.remove(&session);
             return vec![];
         }
-        match event {
-            AgentEvent::McpSignIn { server, url, error } => match (url, error) {
-                (_, Some(error)) => {
-                    mcp.phases.remove(server);
-                    mcp.notice = Some(error.clone());
+        // A card of connectors that could help: its sign-ins are kept as the dialog's.
+        if let AgentEvent::PermissionRequest {
+            id, tool, input, ..
+        } = event
+        {
+            if newen_model::is_site_permission(tool) && input["kind"] == "connectors" {
+                let offers: Vec<newen_model::ServerOffer> =
+                    serde_json::from_value(input["offers"].clone()).unwrap_or_default();
+                let servers = (input["servers"].as_array().into_iter().flatten())
+                    .filter_map(|s| Some(s.as_str()?.to_owned()))
+                    .chain(offers.iter().map(|o| offer_name(o).to_owned()))
+                    .collect();
+                let card = Suggested {
+                    permission: id.clone(),
+                    servers,
+                    offers,
+                    sign_ins: McpDialog::new(session),
+                    adding: vec![],
+                };
+                self.suggested.insert(session, card);
+            }
+        }
+        let mut intents = vec![];
+        if let Some(mcp) = self.mcp.as_mut().filter(|m| m.session == session) {
+            intents.extend(sign_ins_heard(mcp, event));
+        }
+        if let Some(card) = self.suggested.get_mut(&session) {
+            intents.extend(sign_ins_heard(&mut card.sign_ins, event));
+            // An offered server is added once the session lists it, or not, as it says why.
+            match event {
+                AgentEvent::McpServers(servers) => {
+                    (card.adding).retain(|name| !servers.iter().any(|s| s.name == *name))
                 }
-                (Some(_), None) => {
-                    mcp.phases.insert(server.clone(), McpPhase::InBrowser);
-                }
-                (None, None) => {
-                    mcp.phases.remove(server);
-                    return vec![
-                        Intent::McpReconnect {
-                            session: *session,
-                            name: server.clone(),
-                        },
-                        Intent::McpStatus { session: *session },
-                    ];
-                }
-            },
-            AgentEvent::McpServers(servers) => {
-                for server in servers {
-                    let was = mcp.status.insert(server.name.clone(), server.status);
-                    if was.is_some_and(|was| was != server.status) {
-                        mcp.phases.remove(&server.name);
-                    }
+                AgentEvent::McpSignIn {
+                    server,
+                    error: Some(_),
+                    ..
+                } => card.adding.retain(|name| name != server),
+                _ => {}
+            }
+            // All of them connected: the turn goes on, with nothing left to click.
+            let connected = |name: &String| {
+                matches!(event, AgentEvent::McpServers(servers) if servers.iter().any(|s| {
+                    s.name == *name && s.status == newen_model::McpStatus::Connected
+                }))
+            };
+            if card.servers.iter().all(connected) {
+                intents.push(Intent::Decide {
+                    session,
+                    permission: card.permission.clone(),
+                    decision: Decision::Allow,
+                });
+                self.suggested.remove(&session);
+            }
+        }
+        intents
+    }
+}
+
+/// What `mcp` hears of its session: a sign-in's page opened in the browser, a sign-in that
+/// needed no one (the server is reconnected), a sign-in that could not start; and the servers,
+/// whose sign-in is over once their status changes, as Desktop's.
+fn sign_ins_heard(mcp: &mut McpDialog, event: &AgentEvent) -> Vec<Intent> {
+    let session = mcp.session;
+    match event {
+        AgentEvent::McpSignIn { server, url, error } => match (url, error) {
+            (_, Some(error)) => {
+                mcp.phases.remove(server);
+                mcp.notice = Some(error.clone());
+            }
+            (Some(_), None) => {
+                mcp.phases.insert(server.clone(), McpPhase::InBrowser);
+            }
+            (None, None) => {
+                mcp.phases.remove(server);
+                return vec![
+                    Intent::McpReconnect {
+                        session,
+                        name: server.clone(),
+                    },
+                    Intent::McpStatus { session },
+                ];
+            }
+        },
+        AgentEvent::McpServers(servers) => {
+            for server in servers {
+                let was = mcp.status.insert(server.name.clone(), server.status);
+                if was.is_some_and(|was| was != server.status) {
+                    mcp.phases.remove(&server.name);
                 }
             }
-            _ => {}
         }
-        vec![]
+        _ => {}
     }
+    vec![]
+}
+
+/// A card of connectors that could help (`suggest_connectors`), while its turn waits on it: its
+/// permission, the servers it offers, and their sign-ins, kept as the MCP dialog's.
+#[derive(Clone, Debug)]
+pub struct Suggested {
+    pub permission: String,
+    /// What it waits on: the session's servers, and the offered ones by [`offer_name`].
+    pub servers: Vec<String>,
+    /// Servers the MCP registry offers, which the session does not have.
+    pub offers: Vec<newen_model::ServerOffer>,
+    pub sign_ins: McpDialog,
+    /// Offered servers being added, until the session lists them or says why it could not.
+    pub adding: Vec<String>,
 }
 
 /// The session's MCP servers' dialog, while open.

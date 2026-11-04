@@ -743,6 +743,22 @@ Esta lista es de Newen. En una sesión de Code, Desktop solo muestra cuántas he
 - Apagar un servidor o una herramienta. El CLI no tiene un pedido por herramienta: solo reglas `permissions.deny`, que modificarían la configuración de la persona.
 - Pegar a mano la URL de retorno (`mcp_oauth_callback_url`).
 
+### 2.11c Conectores que podrían ayudar (tarjeta en la conversación)
+
+Es la tarjeta de Desktop "Connectors that could help", bajo el turno que la pidió (`suggest_connectors`, ver [agents.md](agents.md)). El turno espera hasta que se responde, y la sesión queda "esperándote" en la barra lateral con ese título.
+
+| Parte | Lo que se ve | Pieza |
+|---|---|---|
+| Encabezado | "Connectors that could help"; a la derecha "Browse connectors" (abre Customize › Connectors en Discover) y la cruz "Close" | `icon_tool`, `icons::CONNECTORS`, `icons::CLOSE` |
+| Fila | logo de 36 (el que Newen encontró, si no la inicial), nombre en negrita y debajo cómo está ("Needs authentication", "Failed to connect: …", "Turned off", "Opening sign-in…", "Complete sign-in in your browser…") | `server_avatar`, `server_says` |
+| Acción | la misma celda que `/mcp` (§2.11b): Connect, Reconnect, Turn on, spinner o ✓ | `server_status` |
+| Fila del registro | un servidor que la sesión no tiene, como Context7 en Desktop: logo, título y la descripción del registro, y **Connect** (spinner mientras se agrega). Una vez agregado, es una fila de servidor como las otras | `offers`, `offer_name` |
+
+- **Los botones funcionan durante el turno**, al revés que en `/mcp`: el turno está esperando justamente esta tarjeta.
+- **Iniciar sesión** sigue los mismos pasos que en `/mcp` (`Ui::suggested`, un `McpDialog` por tarjeta). Mientras la tarjeta espera, la UI pide los servidores cada 2 s (`Ui::due`).
+- **Connect en una fila del registro** lo agrega a la sesión en marcha y a la configuración del agente (alcance user), ver [agents.md](agents.md). Si no se pudo agregar o iniciar sesión, la tarjeta lo dice en una línea al pie.
+- **Sigue sola:** cuando todos los servidores de la tarjeta están conectados, la UI la responde (`Decide` Allow) y el turno continúa con sus herramientas. La cruz la responde con Deny y el turno continúa sin ellos. Respondida, la tarjeta se va y queda la fila "Offered connectors {nombres}".
+
 ### 2.12 Atajos del MVP (tabla única, en `newen_ui::keybinds`, editable como en RUNE)
 
 | Atajo | Acción | Origen |
