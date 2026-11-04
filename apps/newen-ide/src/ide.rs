@@ -58,7 +58,9 @@ const COPY_RELATIVE: &str = "editor:copy-relative";
 const REVEAL: &str = "editor:reveal";
 const NOTICE: f32 = 40.0;
 /// The line under the editor: mode, file, caret, language and branch.
-const FOOTER: f32 = 26.0;
+const FOOTER: f32 = 36.0;
+/// The footer's language chip, whose menu tells the file's server, line endings and indent.
+const LANGUAGE_MENU: &str = "footer:language";
 pub const PROBLEM_NEXT: &str = "problems:next";
 const PROBLEMS_TOGGLE: &str = "problems:toggle";
 const PANE_TERMINAL: &str = "pane:terminal";
@@ -525,6 +527,8 @@ pub struct Ide {
     /// The "···" menu over the editor is open; the diagrams of a preview shown as source; an
     /// address a link asks the host to open in the desktop's browser.
     pub more_open: bool,
+    /// The footer's language menu is open.
+    pub language_open: bool,
     pub diagram_sources: Vec<u64>,
     pub open_url: Option<String>,
     /// Completing the word at the caret, and where the caret was last drawn, which the host
@@ -629,6 +633,7 @@ impl Ide {
             link_out: vec![],
             link_note: None,
             more_open: false,
+            language_open: false,
             diagram_sources: vec![],
             open_url: None,
             completion: None,
@@ -732,6 +737,9 @@ impl Ide {
         // The "···" menu shuts with whatever is chosen, in it or not.
         if id != MORE {
             self.more_open = false;
+        }
+        if id != LANGUAGE_MENU {
+            self.language_open = false;
         }
         if !id.starts_with("close:") {
             self.closing = None;
@@ -1243,6 +1251,7 @@ impl Ide {
         let mut save = false;
         match id {
             MORE => self.more_open = !self.more_open,
+            LANGUAGE_MENU => self.language_open = !self.language_open,
             PROBLEM_NEXT => self.next_problem(),
             ASK_AGENT => self.ask_agent(),
             LSP_RESTART => {
@@ -3083,17 +3092,17 @@ fn structure_controls(
     (folds, scopes)
 }
 
-/// The gutter's marks, as editors draw them: added rows in Newen's added green, changed rows
-/// in its cursor blue, removed lines in its removed red.
+/// The gutter's marks, as editors draw them: added rows in Newen's sage, changed rows in its
+/// slate, removed lines in its clay.
 fn change_marks(changes: &[(std::ops::Range<usize>, Change)]) -> Vec<limn::CodeChangeMark> {
     changes
         .iter()
         .map(|(rows, change)| limn::CodeChangeMark {
             rows: rows.clone(),
             color: match change {
-                Change::Added => look::added(),
-                Change::Changed => look::cursor(),
-                Change::Removed => look::removed(),
+                Change::Added => look::diff_added(),
+                Change::Changed => look::diff_changed(),
+                Change::Removed => look::diff_removed(),
             },
         })
         .collect()
@@ -3130,40 +3139,62 @@ pub fn indent_style(prefs: &Prefs) -> limn_editor::IndentStyle {
     }
 }
 
-/// The line under the editor, quiet as Newen's pane headers: the Vim mode, the file and
-/// whether it is saved, then the caret, the language, the line ending and the branch.
+/// The line under the editor, in the chips under Newen's composer: on the left, filled as its
+/// place and folder are, the branch, Vim's mode and whether the file is saved; on the right,
+/// quiet as its mode and model, what the IDE says, the problems, the language with its server's
+/// state, and the caret.
 fn footer(ide: &Ide, width: f32) -> Element {
-    let small = |s: String| muted(s).font_size(SMALL).centered_y();
-    let mut lead = vec![hgap(12.0)];
+    let ink = look::palette().text;
+    let label = |s: String, ink: limn::Color| text(s).font_size(SMALL).foreground(ink).centered_y();
+    let glyph = |name: &'static str, ink: limn::Color| {
+        Element::icon(icons::of(name))
+            .foreground(ink)
+            .size(Some(14.0), Some(14.0))
+            .centered_y()
+    };
+    let dot = |ink: limn::Color| limn::StatusDot::new(ink).size(6.0).render().centered_y();
+    let mut lead = vec![];
+    if let Some(branch) = &ide.branch {
+        lead.push(filled(vec![
+            glyph(icons::GIT_BRANCH, ink),
+            label(branch.clone(), ink),
+        ]));
+    }
     let buffer = ide.active_buffer();
     if let Some(mode) = ide.vim_mode.filter(|_| buffer.is_some() && ide.prefs.vim) {
-        let ink = match mode {
+        let mode_ink = match mode {
             limn::VimMode::Insert => look::running(),
             limn::VimMode::Normal => look::muted(),
             _ => look::pro(),
         };
-        // Said as the rest of the footer, "Normal", in the mode's ink.
-        let label = mode.label().to_lowercase();
-        let mut chars = label.chars();
-        let label: String = chars
-            .next()
+        // "Normal", in the mode's ink.
+        let words = mode.label().to_lowercase();
+        let mut chars = words.chars();
+        let words: String = (chars.next())
             .map(|c| c.to_uppercase().chain(chars).collect())
             .unwrap_or_default();
-        lead.push(text(label).font_size(SMALL).foreground(ink).centered_y());
+        lead.push(filled(vec![label(words, mode_ink)]));
     }
-    let mut tail = vec![];
-    for note in [&ide.link_note, &ide.lsp_note].into_iter().flatten() {
-        tail.push(small(note.clone()));
-    }
+    let mut tail: Vec<Element> = [&ide.link_note, &ide.lsp_note]
+        .into_iter()
+        .flatten()
+        .map(|note| label(note.clone(), look::muted()))
+        .collect();
     let Some(buffer) = buffer else {
-        lead.push(small(name(&ide.root)));
-        return footer_row(ide, lead, tail, width);
+        lead.push(filled(vec![
+            glyph(icons::FOLDER, ink),
+            label(name(&ide.root), ink),
+        ]));
+        return footer_row(lead, tail, width);
     };
     if buffer.dirty() {
-        lead.push(small("Unsaved".into()));
+        lead.push(filled(vec![
+            dot(look::awaiting()),
+            label("Unsaved".into(), ink),
+        ]));
     }
     let Some(snapshot) = buffer.editor.as_ref().and_then(|e| e.snapshot().ok()) else {
-        return footer_row(ide, lead, tail, width);
+        return footer_row(lead, tail, width);
     };
     // Errors and warnings, each by its mark; a press goes to the next.
     let found = ide
@@ -3172,18 +3203,13 @@ fn footer(ide: &Ide, width: f32) -> Element {
         .and_then(|d| d.at(snapshot.revision()));
     let count = |severity| found.map_or(0, |d| d.iter().filter(|d| d.severity == severity).count());
     let mut problems = vec![];
-    for (icon, ink, n) in [
+    for (icon, mark, n) in [
         (icons::ERROR, look::failed(), count(1)),
         (icons::WARNING, look::awaiting(), count(2)),
     ] {
         if n > 0 {
-            problems.push(
-                Element::icon(icons::of(icon))
-                    .foreground(ink)
-                    .size(Some(13.0), Some(13.0))
-                    .centered_y(),
-            );
-            problems.push(small(n.to_string()));
+            problems.push(glyph(icon, mark));
+            problems.push(label(n.to_string(), ink));
         }
     }
     if !problems.is_empty() {
@@ -3195,45 +3221,62 @@ fn footer(ide: &Ide, width: f32) -> Element {
             Some("F8 goes to the next one."),
         ));
     }
-    // The file's language server: a dot of its state, and what it is in the tooltip.
+    // The language, led by its server's state; its menu says the rest of the file.
+    let ext = (buffer.path.extension())
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
     let language = limn_language::Language::from_path(&buffer.path.to_string_lossy());
-    if let Some(server) = ide.lsp_servers.get(&language) {
-        let (ink, says) = match (&server.failure, server.ready) {
-            (Some(why), _) => (look::failed(), why.clone()),
-            (None, true) => (look::running(), format!("{} is running", server.name)),
-            (None, false) => (look::awaiting(), format!("{} is starting", server.name)),
+    let server = ide.lsp_servers.get(&language);
+    let mut shown = vec![];
+    let mut entries = vec![];
+    if let Some(server) = server {
+        let (state_ink, state) = match (&server.failure, server.ready) {
+            (Some(_), _) => (look::failed(), "Stopped"),
+            (None, true) => (look::running(), "Running"),
+            (None, false) => (look::awaiting(), "Starting"),
         };
-        let dot = limn::StatusDot::new(ink).size(6.0).render().centered_y();
-        if server.failure.is_some() {
-            // Down, it says so, and a press starts it again: after installing it, too.
-            let label = if server.ready {
-                format!("{} stopped", server.name)
-            } else {
-                server.name.clone()
-            };
-            let again = Element::icon(icons::of(icons::RELOAD))
-                .foreground(look::muted())
-                .size(Some(13.0), Some(13.0))
-                .centered_y();
-            let more = match &server.hint {
-                Some(hint) => format!("{hint}. Click to start it again."),
-                None => "Click to start it again.".to_owned(),
-            };
-            tail.push(chip(
-                LSP_RESTART,
-                vec![dot, small(label), again],
-                &says,
-                None,
-                Some(&more),
-            ));
-        } else {
-            let item = Element::row(vec![hgap(6.0), dot, small(server.name.clone()), hgap(6.0)])
-                .gap(6.0)
-                .size(None, Some(22.0));
-            let tip = limn::Tooltip::new(item, "footer:server", says, look::palette());
-            tail.push(tip.render().centered_y());
-        }
+        shown.push(dot(state_ink));
+        entries.push(limn::DropdownMenuEntry::Heading("Language server".into()));
+        let item = limn::DropdownMenuItem::new(LSP_RESTART, server.name.clone());
+        entries.push(
+            match &server.failure {
+                // Down, a press starts it again: after installing it, too.
+                Some(why) => item.description(match &server.hint {
+                    Some(hint) => format!("{why}. {hint}. Choose to start it again."),
+                    None => format!("{why}. Choose to start it again."),
+                }),
+                None => item.annotation(state).disabled(),
+            }
+            .into(),
+        );
     }
+    shown.push(label(language_name(ext).into(), ink));
+    shown.push(glyph(icons::CARET_DOWN, look::muted()));
+    let ending = match snapshot.preferred_line_ending() {
+        limn_editor::LineEnding::CrLf => "CRLF",
+        _ => "LF",
+    };
+    let indent = match indent_style(&ide.prefs) {
+        limn_editor::IndentStyle::Spaces(n) => format!("{n} spaces"),
+        limn_editor::IndentStyle::Tabs(n) => format!("Tabs, {n} wide"),
+    };
+    entries.push(limn::DropdownMenuEntry::Heading("File".into()));
+    for (what, value) in [("Line endings", ending.to_owned()), ("Indentation", indent)] {
+        let item = limn::DropdownMenuItem::new(format!("{LANGUAGE_MENU}:{what}"), what);
+        entries.push(item.annotation(value).disabled().into());
+    }
+    let trigger = quiet(LANGUAGE_MENU, shown, ide.language_open);
+    tail.push(
+        menu(
+            trigger,
+            entries,
+            ide.language_open,
+            LANGUAGE_MENU,
+            260.0,
+            limn::PopoverPlacement::TopEnd,
+        )
+        .centered_y(),
+    );
     let at = snapshot
         .position_of(snapshot.selection().head)
         .unwrap_or_default();
@@ -3244,48 +3287,59 @@ fn footer(ide: &Ide, width: f32) -> Element {
     }
     tail.push(chip(
         QUICK_LINE,
-        vec![small(caret)],
+        vec![label(caret, ink)],
         "Go to line",
         Some("Ctrl+G"),
         None,
     ));
-    let ext = buffer
-        .path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    tail.push(small(language_name(ext).into()));
-    let ending = match snapshot.preferred_line_ending() {
-        limn_editor::LineEnding::CrLf => "CRLF",
-        _ => "LF",
-    };
-    tail.push(small(ending.into()));
-    footer_row(ide, lead, tail, width)
+    footer_row(lead, tail, width)
 }
 
-/// The footer's line: what is said of the file on the left, the rest and the branch on the
-/// right, under a hairline.
-fn footer_row(ide: &Ide, lead: Vec<Element>, mut tail: Vec<Element>, width: f32) -> Element {
-    if let Some(branch) = &ide.branch {
-        let icon = Element::icon(icons::of(icons::GIT_BRANCH))
-            .foreground(look::muted())
-            .size(Some(13.0), Some(13.0))
-            .centered_y();
-        let name = muted(branch.clone()).font_size(SMALL).centered_y();
-        tail.push(Element::row(vec![icon, name]).gap(4.0));
-    }
-    tail.push(hgap(8.0));
-    let mut row = lead;
+/// A footer chip that only says something, filled as the composer's "Local" and folder.
+fn filled(content: Vec<Element>) -> Element {
+    let mut row = vec![hgap(8.0)];
+    row.extend(content);
+    row.push(hgap(8.0));
+    Element::row(row)
+        .gap(6.0)
+        .background(look::cancel())
+        .radius(6.0)
+        .size(None, Some(24.0))
+        .centered_y()
+}
+
+/// The footer's row: the filled chips on the left, the quiet ones on the right, on the
+/// editor's own ground, with no line over it.
+fn footer_row(lead: Vec<Element>, tail: Vec<Element>, width: f32) -> Element {
+    let mut row = vec![hgap(10.0)];
+    row.push(Element::row(lead).gap(6.0).shrink_to_fit().centered_y());
     row.push(Element::spacer().flex(1.0));
-    row.extend(tail);
-    Element::column(vec![
-        hline(width, look::pane_border()),
-        Element::row(row).gap(8.0).size(None, Some(FOOTER - 1.0)),
-    ])
+    row.push(Element::row(tail).gap(2.0).centered_y());
+    row.push(hgap(10.0));
+    Element::row(row).size(Some(width), Some(FOOTER))
 }
 
-/// A footer item that does something, as Newen's composer chips: filled under
-/// the pointer, with what it does, its keys and more in its tooltip.
+/// A footer chip that does something, quiet as the composer's mode and model: filled under
+/// the pointer, and while its menu is `open`.
+fn quiet(id: &str, content: Vec<Element>, open: bool) -> Element {
+    let mut items = vec![hgap(8.0)];
+    items.extend(content);
+    items.push(hgap(8.0));
+    let row = Element::row(items).gap(6.0).size(None, Some(24.0));
+    let chip = ComponentPalette {
+        hover: look::chip_hover(),
+        ..look::palette()
+    }
+    .interactive_surface(Element::clickable(id, row))
+    .radius(6.0);
+    if open {
+        chip.background(look::chip_hover())
+    } else {
+        chip
+    }
+}
+
+/// [`quiet`], with what it does, its keys and more in its tooltip.
 fn chip(
     id: &str,
     content: Vec<Element>,
@@ -3293,17 +3347,7 @@ fn chip(
     keys: Option<&str>,
     more: Option<&str>,
 ) -> Element {
-    let mut items = vec![hgap(6.0)];
-    items.extend(content);
-    items.push(hgap(6.0));
-    let row = Element::row(items).gap(4.0).size(None, Some(22.0));
-    let chip = ComponentPalette {
-        hover: look::chip_hover(),
-        ..look::palette()
-    }
-    .interactive_surface(Element::clickable(id, row))
-    .radius(6.0);
-    let mut tip = limn::Tooltip::new(chip, id, tip, look::palette());
+    let mut tip = limn::Tooltip::new(quiet(id, content, false), id, tip, look::palette());
     if let Some(keys) = keys {
         tip = tip.shortcut(keys);
     }
@@ -3393,6 +3437,49 @@ mod tests {
 
     fn stamp(secs: u64) -> Stamp {
         Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+    }
+
+    /// The footer's chips: the branch filled on the left, the language and the caret quiet on
+    /// the right; the language's menu tells the file's line endings and indent.
+    #[test]
+    fn the_footer_is_chips_and_the_language_tells_the_rest_of_the_file() {
+        let mut ide = with_files();
+        ide.branch = Some("main".into());
+        click(&mut ide, "file:/r/a.rs");
+        read(&mut ide, "/r/a.rs", "fn a() {}\n");
+        let window = Size::new(1200.0, 800.0);
+        let words = |ide: &Ide| -> Vec<String> {
+            let frame = UiTree::new(view(ide, window)).layout(window);
+            let mut words: Vec<String> = (frame.commands.iter())
+                .filter_map(|c| match c {
+                    limn::DrawCommand::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Text the backend lays out itself is in the frame's runs.
+            words.extend(
+                frame
+                    .text_layouts()
+                    .into_iter()
+                    .flat_map(|b| b.runs)
+                    .map(|r| r.text),
+            );
+            words
+        };
+        let shown = words(&ide);
+        for chip in ["main", "Rust", "Ln 1, Col 1"] {
+            assert!(shown.iter().any(|w| w == chip), "{chip}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|w| w == "Line endings"));
+        click(&mut ide, LANGUAGE_MENU);
+        assert!(ide.language_open);
+        let shown = words(&ide);
+        for said in ["Line endings", "LF", "Indentation", "4 spaces"] {
+            assert!(shown.iter().any(|w| w == said), "{said}: {shown:?}");
+        }
+        // Anything else chosen shuts it.
+        click(&mut ide, QUICK_LINE);
+        assert!(!ide.language_open);
     }
 
     #[test]

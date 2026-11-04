@@ -35,6 +35,8 @@ struct App {
     polled: std::time::Instant,
     /// A folder of icon themes chosen in the platform's dialog, picked up on the next frame.
     picked: Arc<Mutex<Option<PathBuf>>>,
+    /// The theme the window's icon was last set for.
+    icon_dark: Option<bool>,
     /// What was open when it was last kept.
     kept: session::Session,
     /// How many frames a control asked to take the keys has not been there yet.
@@ -238,6 +240,13 @@ impl eframe::App for App {
                 egui::Theme::Light
             });
             look::set_dark(dark);
+        }
+        let dark = look::is_dark();
+        if self.icon_dark != Some(dark) {
+            self.icon_dark = Some(dark);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(Arc::new(window_icon(
+                dark,
+            )))));
         }
         // A family chosen in Settings: laid out and painted in from the next frame on, when
         // the tree measures with it again.
@@ -733,6 +742,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("newen-ide")
+            .with_icon(window_icon(false))
             .with_inner_size([1408.0, 844.0])
             .with_min_inner_size([560.0, 360.0]),
         ..Default::default()
@@ -787,6 +797,7 @@ fn main() -> eframe::Result {
                 pinned_theme: newen_files::env("THEME").is_some(),
                 polled: std::time::Instant::now(),
                 picked: Arc::default(),
+                icon_dark: None,
                 kept,
                 focus_waits: 0,
                 shells: newen_pty::Tabs::default(),
@@ -800,9 +811,29 @@ fn main() -> eframe::Result {
     )
 }
 
+/// newen-ide's own icon, Newen's on a hanada horizon (scripts/brand), for its window in the theme
+/// in force (X11, Windows); a Wayland desktop takes it by the app id from the icon theme instead
+/// (`scripts/install-desktop.sh`).
+fn window_icon(dark: bool) -> egui::IconData {
+    let png: &[u8] = if dark {
+        include_bytes!("../assets/icons/newen-ide-dark-256.png")
+    } else {
+        include_bytes!("../assets/icons/newen-ide-256.png")
+    };
+    eframe::icon_data::from_png_bytes(png).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_icon_is_the_ides_own_in_either_theme() {
+        let (light, dark) = (window_icon(false), window_icon(true));
+        assert_eq!((light.width, light.height), (256, 256));
+        assert_eq!(light.rgba.len(), 256 * 256 * 4);
+        assert_ne!(light.rgba, dark.rgba);
+    }
 
     #[test]
     fn a_file_on_the_command_line_takes_its_line_and_column() {

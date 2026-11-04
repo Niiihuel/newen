@@ -2995,6 +2995,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "winresource",
 ]
 
 [[package]]
@@ -3063,6 +3064,7 @@ dependencies = [
  "newen-files",
  "newen-model",
  "serde_json",
+ "similar",
 ]
 
 [[package]]

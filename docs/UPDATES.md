@@ -975,7 +975,8 @@ despertar; y que el registro no tenga direcciones.
 ## Linux
 
 **Artefacto**: `newen-x86_64-linux.tar.gz`, un tar comprimido con gzip con todo
-en su raíz, sin carpeta: el programa `newen`, los archivos de CEF
+en su raíz, sin carpeta: el programa `newen`, el editor `newen-ide` (que Newen
+busca a su lado y `scripts/install-desktop.sh` registra con su ícono), los archivos de CEF
 (`libcef.so`, `libEGL.so`, `libGLESv2.so`, `libvk_swiftshader.so`, los `.pak`,
 `icudtl.dat`, `v8_context_snapshot.bin`…) y la carpeta `locales/`. Se compila
 en Ubuntu 24.04 con las bibliotecas de la distribución (no las de Nix) y con
@@ -1054,7 +1055,7 @@ de cada sistema está en [portabilidad.md](portabilidad.md).
 ## Windows
 
 **Artefacto**: `newen-x86_64-windows.zip`, con todo en su raíz: `newen.exe`,
-los archivos de CEF (`libcef.dll`, `chrome_elf.dll`, `libEGL.dll`,
+`newen-ide.exe` (con su ícono adentro, como `newen.exe`), los archivos de CEF (`libcef.dll`, `chrome_elf.dll`, `libEGL.dll`,
 `libGLESv2.dll`, los `.pak`, `icudtl.dat`, `v8_context_snapshot.bin`…) y la
 carpeta `locales\`. En el manifiesto es `windows-x86_64`. Compilado con MSVC y
 `+crt-static`, así que no hace falta el Visual C++ Redistributable.
@@ -1067,11 +1068,12 @@ carpeta `locales\`. En el manifiesto es `windows-x86_64`. Compilado con MSVC y
   newen.exe.old             el anterior, hasta la siguiente actualización
   newen.exe.0.3.0.new       una versión preparada, hasta activarla
   versions\0.2.0\           el resto del bundle de cada versión
-    libcef.dll  *.pak  icudtl.dat  …
+    newen-ide.exe  libcef.dll  *.pak  icudtl.dat  …
     locales\
 ```
 
-`newen.exe` busca CEF primero a su lado y si no en `versions\{su versión}\`.
+`newen.exe` busca CEF primero a su lado y si no en `versions\{su versión}\`, y
+a `newen-ide.exe` igual (si no está, el del `PATH`).
 Newen se considera instalado sólo si corre desde esa carpeta (las dos rutas se
 comparan resueltas: `current_exe` no trae el prefijo `\\?\` que pone
 `canonicalize`).
@@ -1115,7 +1117,8 @@ ahí: su integridad la dan la firma Ed25519 del manifiesto y el SHA-256.
 
 **Artefacto**: `newen-aarch64-macos.zip`, hecho con
 `ditto -c -k --keepParent Newen.app`: en su raíz está `Newen.app/`, firmado y
-notarizado, con CEF dentro (el framework trae enlaces simbólicos que `ditto`
+notarizado, con CEF dentro y `newen-ide` al lado de `newen` en
+`Contents/MacOS/` (el framework trae enlaces simbólicos que `ditto`
 conserva). En el manifiesto es `macos-aarch64`; sólo Apple Silicon.
 
 **Instalación**: es el bundle mismo. Si Newen corre desde

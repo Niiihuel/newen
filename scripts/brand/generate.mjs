@@ -5,6 +5,9 @@
 // Writes newen.svg and newen-dark.svg (ink cut), newen-mark.svg (the bare mark in currentColor) and its
 // two layers newen-mark-letter.svg and newen-mark-horizon.svg (the welcome screen's),
 // newen[-dark]-{16,24,32,48,64,128,256,512}.png (clean cut at <= 48 px, ink cut above) and newen.ico.
+// newen-ide's icon is the same with a hanada horizon: newen-ide[-dark].svg, its PNGs and newen-ide.ico,
+// written to
+// apps/newen-ide/assets/icons (or beside Newen's when an out dir is given).
 // The ink and brush code is copied from the website's scripts/brand (newen.mjs, brush.mjs); the changes
 // are marked "change:".
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -15,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = process.argv[2] ?? join(here, '../../apps/newen/assets/icons');
+const ideOut = process.argv[2] ?? join(here, '../../apps/newen-ide/assets/icons');
 const font = JSON.parse(readFileSync(join(here, 'mincho-extrabold-glyphs.json'), 'utf8'));
 const CAP = 740;
 const f = (n) => (Math.round(n * 100) / 100).toString();
@@ -22,6 +26,7 @@ const f = (n) => (Math.round(n * 100) / 100).toString();
 const SUMI = '#141413';
 const WASHI = '#f2ebde';
 const BENI = '#c0605c';
+const HANADA = '#5c8bc0'; // newen-ide's horizon: a light indigo with beni's lightness and saturation
 const NIGHT = '#1a1714';
 const RIM = '#2c2722'; // the dark tile's edge, so it does not vanish on a dark desktop
 const THEMES = { light: { tile: WASHI, mark: SUMI }, dark: { tile: NIGHT, mark: WASHI, rim: RIM } };
@@ -299,10 +304,10 @@ const ARC = (() => {
   }
 }
 
-function large(theme) {
+function large(theme, horizon = BENI) {
   const t = THEMES[theme];
   const n = `<g fill="${t.mark}" transform="translate(512 ${L.base})">${letterN(L.cap / CAP, 'ink')}</g>`;
-  return svg(`${CLIP}${tile(theme, L.rim)}<g fill="${BENI}" clip-path="url(#newen-tile)">${ARC}</g>${n}`);
+  return svg(`${CLIP}${tile(theme, L.rim)}<g fill="${horizon}" clip-path="url(#newen-tile)">${ARC}</g>${n}`);
 }
 
 // The bare mark for the UI: the same N and horizon in currentColor, no tile (limn tints it).
@@ -319,7 +324,7 @@ const horizon = () => svg(`${CLIP}<g fill="currentColor" clip-path="url(#newen-t
 // 16 px it is one crisp row. At each size the N's top and bottom and the band's edges are snapped
 // to whole pixels, with at least one clear pixel between the N and the band.
 const S = { cap: 498, base: 697, bold: 14, y: 800, w: 64, x0: -20, x1: 800, taper: 520, w1: 40 };
-function small(theme, px) {
+function small(theme, px, horizon = BENI) {
   const t = THEMES[theme];
   const u = 1024 / px;
   const snap = (y) => Math.round(y / u) * u;
@@ -342,7 +347,7 @@ function small(theme, px) {
   });
   const band = [...xs.map((x) => [x, y - half(x)]), ...tip, ...xs.reverse().map((x) => [x, y + half(x)])];
   const n = `<g fill="${t.mark}" stroke="${t.mark}" stroke-width="${f(S.bold / k)}" stroke-linejoin="round" transform="translate(512 ${f(base)})">${letterN(k, 'clean')}</g>`;
-  return svg(`${CLIP}${tile(theme, u)}<path fill="${BENI}" clip-path="url(#newen-tile)" d="${encode(band, 2)}"/>${n}`);
+  return svg(`${CLIP}${tile(theme, u)}<path fill="${horizon}" clip-path="url(#newen-tile)" d="${encode(band, 2)}"/>${n}`);
 }
 
 // ---------- write and render ----------
@@ -369,7 +374,18 @@ try {
   magick([...layers.map((px) => join(out, `newen-${px}.png`)), join(out, 'newen.ico')]);
   const found = magick(['identify', '-format', '%w ', join(out, 'newen.ico')]).trim();
   if (found !== layers.join(' ')) throw new Error(`newen.ico has layers ${found}`);
+  // newen-ide: the same icon on a hanada horizon.
+  writeFileSync(join(ideOut, 'newen-ide.svg'), large('light', HANADA));
+  writeFileSync(join(ideOut, 'newen-ide-dark.svg'), large('dark', HANADA));
+  for (const theme of ['light', 'dark']) {
+    const name = theme === 'light' ? 'newen-ide' : 'newen-ide-dark';
+    for (const px of SIZES) {
+      png(px <= SMALL ? small(theme, px, HANADA) : large(theme, HANADA), px, join(ideOut, `${name}-${px}.png`));
+    }
+  }
+  magick([...layers.map((px) => join(ideOut, `newen-ide-${px}.png`)), join(ideOut, 'newen-ide.ico')]);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
 console.log(`wrote newen.svg, newen-dark.svg, newen-mark.svg and its two layers, ${SIZES.length * 2} PNGs and newen.ico in ${out}`);
+console.log(`wrote newen-ide.svg, newen-ide-dark.svg, ${SIZES.length * 2} PNGs and newen-ide.ico in ${ideOut}`);

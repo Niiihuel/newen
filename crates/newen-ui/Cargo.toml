@@ -17,6 +17,8 @@ newen-components = { path = "../newen-components" }
 # Where a file moved to, for the document the Files pane moved.
 newen-files = { path = "../newen-files" }
 serde_json.workspace = true
+# The chat's diffs of what a tool wrote, as newen-ide's gutter marks.
+similar = "2"
 
 [dev-dependencies]
 # Tests feed egui's own input through limn-egui's translation, as the window does.

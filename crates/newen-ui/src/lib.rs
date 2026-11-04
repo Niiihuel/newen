@@ -29,9 +29,9 @@ pub use slash::{key as slash_key, slash_query};
 pub use view::{menu_digit, view};
 
 use newen_model::{
-    AgentCapabilities, AgentEvent, BrowserOp, Chime, Decision, Event, FileEffect, Intent, Lane,
-    LogoWanted, NewSession, NotifyLevel, ProposalAnswer, QueuedMessage, RequestId, SessionId,
-    SessionStatus, Settings, Suggestion, TranscriptView,
+    AgentCapabilities, AgentEvent, BrowserOp, Chime, Decision, DiffSource, Event, FileEffect,
+    Intent, Lane, LogoWanted, NewSession, NotifyLevel, ProposalAnswer, QueuedMessage, RequestId,
+    SessionId, SessionStatus, Settings, Suggestion, TranscriptView,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -85,10 +85,12 @@ pub enum Item {
     },
     /// Something Newen left out of a message, shown where the message is.
     Notice { text: String },
-    /// What one request changed in the folder, and whether it was rewound since.
+    /// What one request changed in the folder, the snapshot it left the folder in, and
+    /// whether it was rewound since.
     Changes {
         request: RequestId,
         files: Vec<FileEffect>,
+        after: Option<String>,
         rewound: bool,
     },
     /// Tasks the agent proposed for sessions of their own, on one card per turn, each with
@@ -423,12 +425,14 @@ impl Store {
                 session,
                 request,
                 files,
+                after,
                 ..
             } if !files.is_empty() => {
                 if let Some(s) = self.session_mut(session) {
                     s.items.push(Item::Changes {
                         request,
                         files,
+                        after,
                         rewound: false,
                     });
                 }
@@ -647,6 +651,7 @@ impl Store {
             }
             Event::Reading { .. }
             | Event::FileRead { .. }
+            | Event::DiffText { .. }
             | Event::FileWriteFailed { .. }
             | Event::Listed { .. }
             | Event::FileOpDone { .. }
@@ -1218,6 +1223,9 @@ pub struct Ui {
     /// The editors found on the computer, for Open in.
     pub editors: Vec<Editor>,
     pub expanded: Vec<String>,
+    /// The new side of the diff pane's diffs, by diff id ([`view::pane_diff_id`]): asked of
+    /// the engine on the first click on one's folded rows, which it fills.
+    pub diff_texts: std::collections::HashMap<String, DiffText>,
     /// A message written before its session existed, and the sessions it mentions, sent once
     /// it does.
     pub waiting: Option<Waiting>,
@@ -2107,6 +2115,7 @@ impl Ui {
             link_menu: None,
             editors: vec![],
             expanded: vec![],
+            diff_texts: std::collections::HashMap::new(),
             waiting: None,
             images: vec![],
             queue_submit: false,
@@ -2765,6 +2774,27 @@ impl Ui {
     }
 
     fn applied_to_view(&mut self, event: &Event) -> Vec<Intent> {
+        if let Event::DiffText {
+            session,
+            source,
+            path,
+            text,
+        } = event
+        {
+            let got: Option<std::sync::Arc<str>> = text.as_deref().map(Into::into);
+            for asked in self.diff_texts.values_mut() {
+                if *asked
+                    == (DiffText::Asked {
+                        session: *session,
+                        source: source.clone(),
+                        path: path.clone(),
+                    })
+                {
+                    *asked = DiffText::Got(got.clone());
+                }
+            }
+            return vec![];
+        }
         // A queued message taken back goes into the box, after what the person had written.
         if let Event::QueueTaken { text, images, .. } = event {
             let mut prompt = self.prompt.trim_end().to_owned();
@@ -3776,6 +3806,37 @@ pub fn terminal_key(
     true
 }
 
+/// Where the diff pane's files are read from: the selected session's folder, or the
+/// snapshot the request it shows left. `None` for a request from before Newen kept it.
+fn diff_source(store: &Store, ui: &Ui) -> Option<(SessionId, DiffSource)> {
+    let Some((session, request)) = &ui.diff else {
+        return Some((ui.selected?, DiffSource::Working));
+    };
+    let after = store
+        .session(*session)?
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Changes {
+                request: r, after, ..
+            } if r == request => after.clone(),
+            _ => None,
+        })?;
+    Some((*session, DiffSource::Snapshot(after)))
+}
+
+/// A diff's new side for the diff pane: asked of the engine, then what it sent, `None` when
+/// it could not be read as text.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffText {
+    Asked {
+        session: SessionId,
+        source: DiffSource,
+        path: String,
+    },
+    Got(Option<std::sync::Arc<str>>),
+}
+
 fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
     if id == welcome::START {
         ui.settings.welcomed = true;
@@ -4227,6 +4288,42 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
             });
         }
         return intents;
+    }
+    // A fold of the diff pane opens once the engine sent the file's new side, asked on the
+    // first click; the click is kept meanwhile.
+    if let Some((diff, _)) = id
+        .strip_prefix(view::PANE_DIFF)
+        .and_then(|_| id.rsplit_once(":expand:"))
+    {
+        ui.expanded.push(id.to_owned());
+        if ui.diff_texts.contains_key(diff) {
+            return vec![];
+        }
+        // shortcut: the texts read are dropped all at once past 64; an LRU if that shows.
+        if ui.diff_texts.len() >= 64 {
+            ui.diff_texts.clear();
+        }
+        let Some((session, source)) = diff_source(store, ui) else {
+            ui.diff_texts.insert(diff.to_owned(), DiffText::Got(None));
+            return vec![];
+        };
+        let path = (diff[view::PANE_DIFF.len()..].split_once(':')).map_or("", |(_, p)| p);
+        let asked = DiffText::Asked {
+            session,
+            source: source.clone(),
+            path: path.to_owned(),
+        };
+        ui.diff_texts.insert(diff.to_owned(), asked);
+        return vec![Intent::DiffText {
+            session,
+            source,
+            path: path.to_owned(),
+        }];
+    }
+    // A chat diff's fold opens for good. Kept in click order, as the view reads them.
+    if (id.starts_with("diff:") || id.starts_with("perm-diff:")) && id.contains(":expand:") {
+        ui.expanded.push(id.to_owned());
+        return vec![];
     }
     if id.starts_with(view::DIFF_FOLD) || id.starts_with("web:") {
         match ui.expanded.iter().position(|k| k == id) {

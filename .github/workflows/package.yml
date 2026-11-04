@@ -71,7 +71,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
-      - run: cargo build --release --locked -p newen
+      - run: cargo build --release --locked -p newen -p newen-ide
       - run: scripts/package.sh linux target/release dist
       # The libraries it needs at run time, in the log (docs/UPDATES.md#linux).
       - run: ldd dist/newen/newen
@@ -130,7 +130,7 @@ jobs:
           # (CEF's wrapper is built against the static one too); with --target it reaches only
           # the program, not build scripts.
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p newen
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p newen -p newen-ide
       - run: scripts/package.sh windows target/x86_64-pc-windows-msvc/release dist
       # Its entries flat at the root: newen.exe beside CEF's files.
       - run: cd dist/newen && 7z a -tzip -mx=9 ../newen-x86_64-windows.zip -- *
@@ -176,8 +176,8 @@ jobs:
         with:
           path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
-      # Newen and the helper apps' program (newen-helper).
-      - run: cargo build --release --locked --target aarch64-apple-darwin -p newen -p newen-browser --bins
+      # Newen, newen-ide beside it, and the helper apps' program (newen-helper).
+      - run: cargo build --release --locked --target aarch64-apple-darwin -p newen -p newen-ide -p newen-browser --bins
       - run: scripts/package.sh macos target/aarch64-apple-darwin/release dist
       - name: sign
         env:

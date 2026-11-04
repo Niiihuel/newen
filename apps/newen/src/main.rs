@@ -1783,6 +1783,24 @@ fn open_url(url: &str) -> bool {
             .is_ok_and(|status| status.success())
 }
 
+/// newen-ide in Newen's folder `dir`: beside the program when they were built together or come in
+/// a release, or, in a Windows installation, with the rest of the release in
+/// `versions\{version}` (docs/UPDATES.md); else the one on PATH.
+fn ide_program(dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    let name = format!(
+        "{}{}",
+        newen_ui::view::NEWEN_IDE,
+        std::env::consts::EXE_SUFFIX
+    );
+    dir.into_iter()
+        .flat_map(|dir| {
+            let version = dir.join("versions").join(env!("CARGO_PKG_VERSION"));
+            [dir.join(&name), version.join(&name)]
+        })
+        .find(|program| program.is_file())
+        .unwrap_or_else(|| newen_ui::view::NEWEN_IDE.into())
+}
+
 /// Show `path` of the folder `root`, or the folder, in `editor` at `line` when given: newen-ide
 /// in its window of that folder when one is open, else a new one; the others by their URL
 /// link, as Desktop opens them: `vscode://file/<path>:<line>`.
@@ -1828,12 +1846,8 @@ fn open_in_editor(
     if newen_link::send(&newen_link::ide_socket(root), &open).is_ok() {
         return;
     }
-    // Beside Newen when they were built together, else the one on PATH.
-    let program = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join(newen_ui::view::NEWEN_IDE)))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| newen_ui::view::NEWEN_IDE.into());
+    let beside = std::env::current_exe().ok();
+    let program = ide_program(beside.as_deref().and_then(std::path::Path::parent));
     let mut command = newen_files::command(program);
     command.arg(root);
     if let Some(path) = path {
@@ -2261,6 +2275,25 @@ mod tests {
 
     /// quill's data moves only when allowed and when no copy of quill answers on its socket;
     /// then it does, once.
+    #[test]
+    fn newen_ide_is_found_beside_newen_or_in_its_windows_version_folder() {
+        let dir = std::env::temp_dir().join(format!("newen-ide-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let name = format!("newen-ide{}", std::env::consts::EXE_SUFFIX);
+        assert_eq!(
+            ide_program(Some(&dir)),
+            std::path::PathBuf::from("newen-ide"),
+            "else PATH's"
+        );
+        let versioned = dir.join("versions").join(env!("CARGO_PKG_VERSION"));
+        std::fs::create_dir_all(&versioned).unwrap();
+        std::fs::write(versioned.join(&name), "").unwrap();
+        assert_eq!(ide_program(Some(&dir)), versioned.join(&name));
+        std::fs::write(dir.join(&name), "").unwrap();
+        assert_eq!(ide_program(Some(&dir)), dir.join(&name), "beside it first");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn quill_s_data_moves_only_when_allowed_and_no_copy_of_quill_runs() {
         let base = std::env::temp_dir().join(format!("newen-first-start-{}", std::process::id()));

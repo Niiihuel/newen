@@ -189,6 +189,16 @@ pub struct FileEffect {
     pub patch: String,
 }
 
+/// Where a diff's new side is read from.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum DiffSource {
+    /// The folder as it is now, against its repository's last commit.
+    Working,
+    /// A snapshot of the folder in the engine's shadow repository, by its tree id: as a
+    /// request left it.
+    Snapshot(String),
+}
+
 /// The repository a folder is in: its branch, where it pushes, and the branch pull requests
 /// go into.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -752,6 +762,13 @@ pub enum Intent {
         session: SessionId,
         #[serde(default)]
         at: Option<String>,
+    },
+    /// A changed file as its diff's new side holds it, so the diff can show the lines between
+    /// its hunks: answered by `Event::DiffText`.
+    DiffText {
+        session: SessionId,
+        source: DiffSource,
+        path: String,
     },
     /// A file of the session's folder, by its path in it, for the document pane: answered by
     /// `Event::FileRead`.
@@ -1354,6 +1371,10 @@ pub enum Event {
         files: Vec<FileEffect>,
         /// The folder before the request, as the engine's snapshot id: what a rewind restores.
         snapshot: String,
+        /// The folder after it, which its diff reads the lines between hunks from; `None` in
+        /// sessions recorded before Newen kept it.
+        #[serde(default)]
+        after: Option<String>,
     },
     /// Where the session works, as the right panel shows it.
     Environment {
@@ -1444,6 +1465,14 @@ pub enum Event {
         from: SessionId,
         #[serde(default)]
         at: Option<String>,
+    },
+    /// A changed file as its diff's new side holds it; `None` when it is binary, larger than
+    /// 1 MiB, gone, or outside the folder.
+    DiffText {
+        session: SessionId,
+        source: DiffSource,
+        path: String,
+        text: Option<String>,
     },
     /// A file of the session's folder as it is now on disk; `None` when it cannot be read as
     /// text, or is outside the folder.
@@ -1674,6 +1703,7 @@ impl Event {
             | Event::Reading { session, .. }
             | Event::Forwarded { session, .. }
             | Event::FileRead { session, .. }
+            | Event::DiffText { session, .. }
             | Event::FileWriteFailed { session, .. }
             | Event::Listed { session, .. }
             | Event::FileOpDone { session, .. }

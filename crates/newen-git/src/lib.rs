@@ -78,6 +78,26 @@ impl Shadow {
         })
     }
 
+    /// `path` as the snapshot `tree` holds it, for a diff to show the lines between its
+    /// hunks; `None` as [`diff_text`] says, or when `tree` is not a tree id.
+    pub fn text(&self, tree: &str, path: &str) -> Option<String> {
+        // Only an id `snapshot` gave, never an option or a revision expression.
+        if tree.is_empty() || !tree.bytes().all(|b| b.is_ascii_hexdigit()) || !inside(path) {
+            return None;
+        }
+        let object = format!("{tree}:{path}");
+        let size: u64 = self
+            .git(&["cat-file", "-s", &object])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        if size > UNTRACKED_SIZE {
+            return None;
+        }
+        diff_text(self.git(&["cat-file", "blob", &object]).ok()?.into_bytes())
+    }
+
     /// Put the folder's files back as they were in tree `tree`: changed files return, files
     /// created since are removed. Ignored files are left alone.
     pub fn restore(&self, tree: &str) -> io::Result<()> {
@@ -201,6 +221,42 @@ pub fn working_changes(dir: &Path) -> io::Result<Vec<FileEffect>> {
         .filter(|path| !path.is_empty() && !path.ends_with('/') && !known.contains(*path));
     files.extend(untracked(top, others));
     Ok(files)
+}
+
+/// `path` as it is now in `dir`'s repository, by its path from the repository's top as
+/// [`working_changes`] names it, for a diff to show the lines between its hunks; `None` as
+/// [`diff_text`] says.
+pub fn working_text(dir: &Path, path: &str) -> Option<String> {
+    if !inside(path) {
+        return None;
+    }
+    let output = newen_files::command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let top = String::from_utf8_lossy(&output.stdout);
+    let full = Path::new(top.trim_end_matches(['\n', '\r'])).join(path);
+    if std::fs::metadata(&full).ok()?.len() > UNTRACKED_SIZE {
+        return None;
+    }
+    diff_text(std::fs::read(full).ok()?)
+}
+
+/// A file's bytes as text for a diff: `None` when it is binary (a NUL byte, as git tells)
+/// or larger than [`UNTRACKED_SIZE`].
+fn diff_text(bytes: Vec<u8>) -> Option<String> {
+    (bytes.len() as u64 <= UNTRACKED_SIZE && !bytes.contains(&0))
+        .then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Whether `path` names a file inside the folder it is relative to.
+fn inside(path: &str) -> bool {
+    use std::path::Component;
+    let path = Path::new(path);
+    path.is_relative()
+        && (path.components()).all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 /// How many untracked files are read, how many more are listed unread, and how large and how
@@ -402,6 +458,44 @@ mod tests {
                 && !work.join("moved.txt").exists()
                 && !work.join("new.txt").exists()
         );
+    }
+
+    #[test]
+    fn a_diffs_texts_are_read_whole_but_binary_large_or_outside_ones() {
+        let (root, work) = folder("texts");
+        fs::create_dir_all(work.join("src")).unwrap();
+        fs::write(work.join("src/a.rs"), "one\ntwo\n").unwrap();
+        fs::write(work.join("blob.bin"), b"a\0b").unwrap();
+        let big = vec![b'x'; UNTRACKED_SIZE as usize + 1];
+        fs::write(work.join("big.txt"), &big).unwrap();
+        let shadow = Shadow::open(&root, &work).unwrap();
+        let tree = shadow.snapshot().unwrap();
+        fs::write(work.join("src/a.rs"), "one\nthree\n").unwrap();
+        assert_eq!(
+            shadow.text(&tree, "src/a.rs").as_deref(),
+            Some("one\ntwo\n")
+        );
+        assert_eq!(shadow.text(&tree, "blob.bin"), None);
+        assert_eq!(shadow.text(&tree, "big.txt"), None);
+        assert_eq!(shadow.text(&tree, "gone.rs"), None);
+        assert_eq!(shadow.text("--output=x", "src/a.rs"), None);
+        assert_eq!(shadow.text(&tree, "../work/src/a.rs"), None);
+
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&work)
+            .status()
+            .unwrap();
+        // From a folder inside, by its path from the top, as `working_changes` names it.
+        let inner = work.join("src");
+        assert_eq!(
+            working_text(&inner, "src/a.rs").as_deref(),
+            Some("one\nthree\n")
+        );
+        assert_eq!(working_text(&inner, "blob.bin"), None);
+        assert_eq!(working_text(&inner, "big.txt"), None);
+        assert_eq!(working_text(&inner, "/etc/hostname"), None);
+        assert_eq!(working_text(&inner, "../shadow/HEAD"), None);
     }
 
     #[test]
