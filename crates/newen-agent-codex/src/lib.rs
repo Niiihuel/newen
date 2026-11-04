@@ -1302,6 +1302,10 @@ impl AgentAdapter for Codex {
         Some(include_str!("../assets/codex.svg"))
     }
 
+    fn install(&self) -> &'static str {
+        "npm install -g @openai/codex"
+    }
+
     // Sign-in is the CLI's own `codex login` (docs/codex.md, codex-rs/cli/src/login.rs): it
     // prints the page address on stderr and waits for the browser to come back to a local
     // server, so it never needs a code. `--device-auth` prints a code the person must type

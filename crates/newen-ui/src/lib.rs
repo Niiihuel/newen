@@ -12,6 +12,7 @@ mod github;
 mod greeting;
 mod licenses;
 mod mention;
+pub mod no_agent;
 mod pixels;
 pub mod remote;
 mod slash;
@@ -1454,6 +1455,8 @@ pub struct Ui {
     /// The settings in force, as the engine last kept them, and the agents it can run.
     pub settings: newen_model::Settings,
     pub agents: Vec<newen_model::AgentInfo>,
+    /// The agents Newen has adapters for whose programs were not found.
+    pub missing_agents: Vec<newen_model::AgentInfo>,
     /// The models each agent's program offered before any session of it (`Event::AgentModels`).
     pub agent_models: std::collections::HashMap<String, Vec<newen_model::ModelInfo>>,
     /// Settings, while open: the page shown, what its search looks for, and the select whose
@@ -2208,6 +2211,7 @@ impl Ui {
             browser_notice: Default::default(),
             settings: Default::default(),
             agents: vec![],
+            missing_agents: vec![],
             agent_models: Default::default(),
             settings_page: None,
             account_menu: false,
@@ -2805,7 +2809,7 @@ impl Ui {
         if let Event::Settings { settings, agents } = event {
             look::set_text_size(settings.text_size);
             look::set_width(settings.width);
-            let first = self.agents.is_empty();
+            let first = self.agents.is_empty() && self.missing_agents.is_empty();
             let (before, after) = (
                 self.settings.agent(&self.agent),
                 settings.agent(&self.agent),
@@ -2814,7 +2818,9 @@ impl Ui {
             // Welcomed before the appearance step existed (the first settings of a run already
             // say so): not asked now. Later ones echo a Get started pressed in this run.
             self.settings.looked |= first && settings.welcomed;
-            self.agents = agents.clone();
+            // Only agents whose program is there are offered.
+            (self.missing_agents, self.agents) = agents.iter().cloned().partition(|a| a.missing);
+            let agents = &self.agents;
             // The agent last chosen, else the first available, until there is one in use.
             if !agents.iter().any(|a| a.id == self.agent) {
                 let wanted = settings.default_agent.as_deref();
@@ -3911,6 +3917,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = licenses::clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = no_agent::clicked(ui, id) {
         return intents;
     }
     if let Some(intents) = account::clicked(ui, id) {

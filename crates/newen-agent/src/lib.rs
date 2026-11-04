@@ -1049,6 +1049,10 @@ pub trait AgentAdapter: Send {
     fn icon(&self) -> Option<&'static str> {
         None
     }
+    /// The command that installs the agent's program on this system, shown when it is missing.
+    fn install(&self) -> &'static str {
+        ""
+    }
     /// Where a plugin can be installed and what a skill can be, with how to say each: see
     /// [`Extensions::scopes`] and [`Extensions::skill_states`].
     fn extension_words(&self) -> (Choices, Choices) {

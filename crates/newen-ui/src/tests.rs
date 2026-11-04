@@ -1227,6 +1227,7 @@ fn a_plan_that_ends_the_turn_is_carried_out_by_a_turn_of_its_own() {
         ],
         default_mode: "auto".into(),
         customize: Default::default(),
+        ..Default::default()
     }];
     store.apply(Event::SessionCreated {
         session: 1,
@@ -1816,6 +1817,7 @@ fn an_adapters_switch_flips_and_its_list_chooses() {
         modes: claude_modes(),
         default_mode: "default".into(),
         customize: Default::default(),
+        ..Default::default()
     }];
     click(&store, &mut ui, view::SETTINGS_OPEN);
     let saved = |intents: Vec<Intent>| match intents.as_slice() {
@@ -2626,6 +2628,7 @@ fn the_sidebars_customize_and_the_persons_menu_open_settings() {
             modes: claude_modes(),
             default_mode: "default".into(),
             customize: Default::default(),
+            ..Default::default()
         }],
     });
     ui.cwd = "/work".into();
@@ -2670,6 +2673,7 @@ fn customize_lists_and_changes_an_agents_plugins_marketplaces_and_skills() {
             modes: claude_modes(),
             default_mode: "default".into(),
             customize: Default::default(),
+            ..Default::default()
         }],
     });
     // A project folder: plugins install for it, and skills' states are kept there.
@@ -3394,6 +3398,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
                 modes: claude_modes(),
                 default_mode: "default".into(),
                 customize: Default::default(),
+                ..Default::default()
             }],
         });
     };
@@ -5798,6 +5803,7 @@ fn the_logos_of_connectors_and_plugins_are_asked_once_and_only_while_shown() {
             modes: claude_modes(),
             default_mode: "default".into(),
             customize: Default::default(),
+            ..Default::default()
         }],
     });
     ui.applied(&Event::Servers {
@@ -6049,6 +6055,7 @@ fn the_welcome_shows_once_the_settings_are_known_until_get_started() {
             modes: claude_modes(),
             default_mode: "default".into(),
             customize: Default::default(),
+            ..Default::default()
         }],
     });
     assert!(crate::welcoming(&ui));
@@ -6072,6 +6079,91 @@ fn the_welcome_shows_once_the_settings_are_known_until_get_started() {
     test.skip_welcome = true;
     test.agents = ui.agents.clone();
     assert!(!crate::welcoming(&test));
+}
+
+/// An agent whose program is not on this computer is not offered anywhere: not in the
+/// agent menu, nor as a section of Customize to be listed (and fail).
+#[test]
+fn customize_shows_only_the_agents_that_are_installed() {
+    let (store, mut ui) = store_with_session();
+    let agent = |id: &str, name: &str, missing: bool| newen_model::AgentInfo {
+        id: id.into(),
+        name: name.into(),
+        missing,
+        customize: newen_model::CustomizeSupport {
+            connectors: true,
+            plugins: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    ui.applied(&Event::Settings {
+        settings: Default::default(),
+        agents: vec![
+            agent("claude", "Claude Code", false),
+            agent("codex", "Codex", true),
+        ],
+    });
+    click(&store, &mut ui, view::CUSTOMIZE_OPEN);
+    for tab in [view::SETTINGS_CONNECTORS, view::SETTINGS_PLUGINS] {
+        let asked = click(&store, &mut ui, &format!("czp:tab:{tab}"));
+        assert!(drawn(&store, &ui, "Claude Code"), "{tab}");
+        assert!(!drawn(&store, &ui, "Codex"), "{tab}");
+        assert!(
+            !format!("{asked:?}").contains("\"codex\""),
+            "{tab}: {asked:?}"
+        );
+    }
+}
+
+#[test]
+fn with_no_agent_installed_a_screen_says_how_to_install_each_until_one_is() {
+    use crate::no_agent;
+    let (store, mut ui) = store_with_session();
+    ui.skip_welcome = false;
+    let agent = |id: &str, missing: bool| newen_model::AgentInfo {
+        id: id.into(),
+        name: format!("{id} agent"),
+        missing,
+        install: format!("install {id}"),
+        ..Default::default()
+    };
+    let settings = |agents| Event::Settings {
+        settings: Settings::default(),
+        agents,
+    };
+    let sign_ins = |intents: Vec<Intent>| -> Vec<Intent> {
+        (intents.into_iter())
+            .filter(|i| matches!(i, Intent::CheckSignIn { .. }))
+            .collect()
+    };
+    // Nothing is asked of programs that are not there.
+    let asked = ui.applied(&settings(vec![agent("claude", true), agent("codex", true)]));
+    assert_eq!(sign_ins(asked), vec![]);
+    assert!(no_agent::showing(&ui) && !crate::welcoming(&ui));
+    assert!(drawn(&store, &ui, "No agent installed"));
+    assert!(drawn(&store, &ui, "install codex"));
+    let copy = format!("{}codex", no_agent::COPY);
+    assert!(click(&store, &mut ui, &copy).is_empty());
+    assert_eq!(ui.files_copy.as_deref(), Some("install codex"));
+    assert!(matches!(
+        &click(&store, &mut ui, no_agent::CHECK)[..],
+        [Intent::SaveSettings(_)]
+    ));
+    // Once one is installed, only it is offered, and the welcome comes first.
+    let asked = ui.applied(&settings(vec![
+        agent("claude", true),
+        agent("codex", false),
+    ]));
+    assert_eq!(
+        sign_ins(asked),
+        vec![Intent::CheckSignIn {
+            agent: "codex".into()
+        }]
+    );
+    assert!(!no_agent::showing(&ui) && crate::welcoming(&ui));
+    assert_eq!(ui.agent, "codex");
+    assert_eq!(ui.agents.len(), 1);
 }
 
 #[test]
@@ -6161,6 +6253,7 @@ fn an_agent_known() -> Vec<newen_model::AgentInfo> {
         modes: claude_modes(),
         default_mode: "default".into(),
         customize: Default::default(),
+        ..Default::default()
     }]
 }
 
@@ -7088,6 +7181,7 @@ fn a_new_codex_session_never_takes_a_claude_model() {
         modes: vec![],
         default_mode: mode.into(),
         customize: Default::default(),
+        ..Default::default()
     };
     ui.agents = vec![info("claude", "default"), info("codex", "auto")];
     ui.settings.agents.insert(
@@ -7138,6 +7232,7 @@ fn full_access_is_offered_once_allowed_even_before_any_codex_session() {
         ],
         default_mode: "auto".into(),
         customize: Default::default(),
+        ..Default::default()
     }];
     ui.agent = "codex".into();
     assert!(!view::menu_modes(&store, None, &ui).contains(&"full-access".to_owned()));
@@ -7710,6 +7805,7 @@ fn two_agents_on(page: &str) -> (Store, Ui) {
         modes: claude_modes(),
         default_mode: "default".into(),
         customize: Default::default(),
+        ..Default::default()
     };
     ui.applied(&Event::Settings {
         settings: Default::default(),
@@ -9398,6 +9494,7 @@ fn waiting_store() -> (Store, Ui) {
         modes: vec![],
         default_mode: "auto".into(),
         customize: Default::default(),
+        ..Default::default()
     }];
     settle(&store, &mut ui);
     (store, ui)

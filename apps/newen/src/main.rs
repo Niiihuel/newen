@@ -1901,6 +1901,7 @@ fn main() -> eframe::Result {
     if let Some(code) = newen_engine::native::subprocess() {
         std::process::exit(code);
     }
+    newen_files::add_local_bin_to_path();
     wait_for_restarter();
     let args: Vec<String> = std::env::args().collect();
     if let [_, flag, url, ..] = args.as_slice() {

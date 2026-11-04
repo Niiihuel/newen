@@ -24,6 +24,21 @@ const DRAW: f64 = 1.1;
 /// host paints every frame, for the horizon (`Ui::repaint_after`).
 pub const REVEAL: f64 = 1.6;
 
+/// The mark as the icon draws it, `side` wide: the N in the text's colour on its beni horizon.
+pub(crate) fn mark(side: f32) -> Element {
+    let layer = |svg: &'static str, color: Color| {
+        Element::icon(icons::of(svg))
+            .foreground(color)
+            .large_icon(side)
+    };
+    Element::stack(vec![
+        layer(HORIZON, BENI),
+        layer(LETTER, look::palette().text),
+    ])
+    .size(Some(side), Some(side))
+    .accessibility_label("Newen")
+}
+
 pub fn view(ui: &Ui, window: Size) -> Element {
     let since = *ui.welcome_since.get_or_init(std::time::Instant::now);
     let elapsed = since.elapsed().as_secs_f64();

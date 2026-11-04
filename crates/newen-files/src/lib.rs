@@ -465,9 +465,8 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     {
         use std::os::windows::process::CommandExt;
         let program = program.as_ref();
-        let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
         let found =
-            std::env::var_os("PATH").and_then(|path| find_program(program, &path, &pathext));
+            std::env::var_os("PATH").and_then(|path| find_program(program, &path, &pathext()));
         let mut command =
             std::process::Command::new(found.as_deref().map_or(program, Path::as_os_str));
         command.creation_flags(0x0800_0000);
@@ -475,6 +474,43 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     }
     #[cfg(not(windows))]
     std::process::Command::new(program)
+}
+
+#[cfg(windows)]
+fn pathext() -> std::ffi::OsString {
+    std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+}
+
+/// Whether [`command`] finds `program`: a path to a file, or a bare name in one of `PATH`'s
+/// folders (on Windows with one of `PATHEXT`'s extensions, too).
+pub fn installed(program: impl AsRef<std::ffi::OsStr>) -> bool {
+    let program = Path::new(program.as_ref());
+    if program.parent() != Some(Path::new("")) {
+        return program.is_file();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(windows)]
+    if find_program(program.as_os_str(), &path, &pathext()).is_some() {
+        return true;
+    }
+    std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+}
+
+/// Puts `~/.local/bin` on `PATH` when it is not: a desktop launcher's `PATH` often lacks it,
+/// and the agents' installers put their programs there. Called first thing, before threads.
+pub fn add_local_bin_to_path() {
+    let Some(bin) = home_dir().map(|home| home.join(".local").join("bin")) else {
+        return;
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    if dirs.contains(&bin) {
+        return;
+    }
+    dirs.push(bin);
+    if let Ok(joined) = std::env::join_paths(dirs) {
+        std::env::set_var("PATH", joined);
+    }
 }
 
 /// The first `name` + one of `pathext`'s extensions (`;`-separated) that is a file in one of
@@ -602,6 +638,18 @@ mod tests {
         assert_eq!(find("tool.CMD"), None);
         assert_eq!(find("first/tool"), None);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A program is installed when its path is a file, or its bare name is on `PATH`.
+    #[test]
+    fn a_program_is_installed_by_path_or_on_path() {
+        let me = std::env::current_exe().unwrap();
+        assert!(installed(&me));
+        assert!(!installed(me.with_file_name("newen-no-such-program")));
+        assert!(!installed("newen-no-such-program"));
+        assert!(!installed(""));
+        #[cfg(unix)]
+        assert!(installed("sh"));
     }
 
     fn kept(path: &Path) -> Result<(), String> {
