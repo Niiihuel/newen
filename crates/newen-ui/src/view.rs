@@ -89,6 +89,14 @@ pub const OPEN_IN_MENU: &str = "open-in-menu";
 pub const NEWEN_IDE: &str = "newen-ide";
 pub const DIFF_CLOSE: &str = "pane:diff:close";
 pub const PANEL_TOGGLE: &str = "panel:toggle";
+/// The bar's "Step 3 of 5", which shows the rail with its Progress card open, or hides it.
+pub const PROGRESS_CHIP: &str = "progress:chip";
+/// The rail's Progress card.
+pub const PROGRESS_CARD: &str = "panel:progress";
+/// A monitor card's Stop: the session it follows stops its turn.
+pub const MONITOR_STOP: &str = "monitor:stop:";
+/// The rail's card of what the session used: connectors and the web.
+pub const USED_CARD: &str = "panel:used";
 /// Asks the host for the platform folder picker; the host sets `Ui::cwd` with the answer.
 pub const PICK_FOLDER: &str = "pick-folder";
 pub const PLUS_MENU: &str = "plus-menu";
@@ -494,7 +502,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
             .animate_move(COMPOSER_MOVE);
         let body = match session {
             Some(session) => vec![
-                transcript(store, session, ui, column, palette).flex(1.0),
+                transcript(store, session, ui, column, layout.panel > 0.0, palette).flex(1.0),
                 composer,
                 Element::spacer().size(None, Some(12.0)),
             ],
@@ -1897,6 +1905,32 @@ fn top_bar(session: Option<&Session>, ui: &Ui, main: f32, beside: f32) -> Elemen
         (None, _) => heading.push(muted("New session").centered_y()),
     }
     row.push(Element::spacer().flex(1.0));
+    // Desktop's "Step 3 of 5" before the tools: where the agent is in its task list; a press
+    // shows it in the rail.
+    if let Some((list, current)) = session.and_then(progress) {
+        let chip = Element::row(vec![
+            hgap(8.0),
+            Element::icon(icons::of(icons::FILE))
+                .foreground(look::palette().text)
+                .size(Some(14.0), Some(14.0))
+                .centered_y(),
+            text(step_words(list.len(), current))
+                .font_size(SMALL)
+                .centered_y(),
+            hgap(8.0),
+        ])
+        .gap(6.0)
+        .size(None, Some(26.0));
+        let chip = ComponentPalette {
+            hover: look::chip_hover(),
+            ..look::palette()
+        }
+        .interactive_surface(Element::clickable(PROGRESS_CHIP, chip))
+        .background(look::cancel())
+        .radius(6.0);
+        row.push(chip.centered_y());
+        row.push(hgap(4.0));
+    }
     // Desktop's "Open in" by the panes' toggles: the folder on screen in an editor.
     if session.is_some() {
         let open = ui.open_menu == Some(OPEN_IN_MENU);
@@ -2885,6 +2919,7 @@ fn transcript(
     session: &Session,
     ui: &Ui,
     column: f32,
+    rail: bool,
     palette: ComponentPalette,
 ) -> Element {
     // What is inside the column's 16 px sides: Desktop's text stands in from the composer's
@@ -2910,10 +2945,10 @@ fn transcript(
     if !busy && !session.rewound.is_empty() {
         items.push(rewound_line());
     }
-    // While the turn runs, its task list sits over the running line; it goes when the
-    // turn ends.
+    // While the turn runs, its task list sits over the running line, when the rail is not
+    // there to show it; it goes when the turn ends.
     let list = todos(&session.items);
-    if busy && !list.is_empty() {
+    if busy && !rail && !list.is_empty() {
         items.push(task_card(&list, column, palette));
     }
     items.extend(waiting_cards(store, session, ui, column, palette));
@@ -3033,7 +3068,7 @@ fn entries<'a>(
                     && input.get("proposal_id").is_none()
                 {
                     flush(&mut steps, &mut items);
-                    items.push(started_card(store, session, input, column));
+                    items.push(started_card(store, session, input, ui, column));
                 } else if let (true, Some(child)) = (
                     name.ends_with("sessions__send_to_session")
                         && result.as_ref().is_some_and(|r| !r.is_error),
@@ -3054,6 +3089,12 @@ fn entries<'a>(
                         ])
                         .gap(8.0),
                     );
+                } else if let Some(task) = (session.tasks.iter())
+                    .find(|t| t.kind == "workflow" && t.call.as_deref() == Some(call.as_str()))
+                {
+                    // A workflow it runs follows it as a monitor card, where its step was.
+                    flush(&mut steps, &mut items);
+                    items.push(workflow_card(session, task, ui, column.min(520.0)));
                 } else if name == "WebSearch"
                     && result.as_ref().is_none_or(|r| !r.is_error && !r.stopped)
                 {
@@ -3322,54 +3363,286 @@ fn child_named(store: &Store, session: &Session, title: &str) -> Option<newen_mo
         .map(|s| s.id)
 }
 
-/// A session started at the person's asking, in the conversation that started it: a dot, its title and what it does now; it opens beside. Until the
-/// engine has made it, it is "Starting…".
-fn started_card(store: &Store, session: &Session, input: &Value, column: f32) -> Element {
+/// A session started at the person's asking, in the conversation that started it, as a card
+/// that follows it (an agent monitor): its agent's logo, its title and agent \u{b7} model, what it
+/// cost and how it stands; the step it is on with that step's clock; how far its task list is,
+/// as a bar and "2/6"; Stop while it works, and Open, which shows it beside. Until the engine has
+/// made it, it is "Starting".
+fn started_card(store: &Store, session: &Session, input: &Value, ui: &Ui, column: f32) -> Element {
     let title = input["title"].as_str().unwrap_or_default();
     let child = child_named(store, session, title).and_then(|id| store.session(id));
-    let doing = match child {
-        Some(child) => activity(child),
-        None => Some("Starting\u{2026}".to_owned()),
+    monitor_card(child, title, ui, column.min(520.0))
+}
+
+/// The monitor card of `child`, or of one still starting.
+fn monitor_card(child: Option<&Session>, title: &str, ui: &Ui, width: f32) -> Element {
+    let inner = width - 32.0;
+    let info = child.and_then(|c| ui.agents.iter().find(|a| a.id == c.agent));
+    let mut about = info.map(|a| a.name.clone()).unwrap_or_default();
+    if let Some(model) = child.and_then(|c| c.model.as_deref()) {
+        about = if about.is_empty() {
+            model.to_owned()
+        } else {
+            format!("{about} \u{b7} {model}")
+        };
+    }
+    let state = match child.map(|c| &c.status) {
+        None | Some(SessionStatus::Starting) => ("Starting", look::mention()),
+        Some(SessionStatus::Running) => ("Running", look::mention()),
+        Some(SessionStatus::Awaiting) => ("Needs you", look::awaiting()),
+        Some(SessionStatus::Failed(_)) => ("Failed", look::failed()),
+        Some(_) => ("Done", look::muted()),
     };
-    let dot = match child.map(|c| &c.status) {
-        Some(SessionStatus::Awaiting) => look::awaiting(),
-        Some(SessionStatus::Running | SessionStatus::Starting) | None => look::mention(),
-        _ => look::muted(),
+    let logo = icons::agent(info.and_then(|a| a.icon.as_deref()));
+    let cost = child.map(|c| c.cost).filter(|c| *c > 0.0);
+    let mut rows = vec![monitor_head(logo, title, about, cost, state, inner)];
+    let Some(child) = child else {
+        return monitor_frame(rows, width);
     };
-    let mut row = vec![
+    // The step it is on, with that step's clock, while it works or waits on the person.
+    if let Some(doing) = activity(child) {
+        let waiting = child.status == SessionStatus::Awaiting;
+        let since = child.step_since.or(child.running_since);
+        let spinner = format!("monitor:{}:spinner", child.id);
+        rows.push(monitor_step(&spinner, waiting, doing, since, inner));
+    }
+    // How far its task list is.
+    let list = todos(&child.items);
+    let done = list.iter().filter(|t| t.status == "completed").count();
+    let count = (!list.is_empty()).then_some((done, list.len()));
+    rows.extend(count.map(|count| monitor_bar(count, "steps", inner)));
+    let stop = child
+        .working()
+        .then(|| format!("{MONITOR_STOP}{}", child.id));
+    let open = format!("thread:{}", child.id);
+    rows.push(monitor_foot(stop, count, &open, title, inner));
+    monitor_frame(rows, width)
+}
+
+/// A workflow the agent runs, as a monitor card where its step was: its name, "Workflow" and
+/// the phase it is in, how it stands; the phase's agents at work with the workflow's clock; its
+/// phases done as a bar and "1/3"; Stop while it runs, and Open, which shows Background tasks.
+fn workflow_card(session: &Session, task: &crate::Task, ui: &Ui, width: f32) -> Element {
+    use newen_model::TaskState;
+    let inner = width - 32.0;
+    let title = task
+        .name
+        .clone()
+        .unwrap_or_else(|| task.description.clone());
+    let ended = |p: &newen_model::TaskPhase| {
+        !p.agents.is_empty()
+            && (p.agents.iter()).all(|a| matches!(a.state, TaskState::Done | TaskState::Failed))
+    };
+    let done = task.phases.iter().filter(|p| ended(p)).count();
+    let current = task.phases.iter().find(|p| !ended(p));
+    let about = match current {
+        Some(phase) => format!("Workflow \u{b7} {}", phase.title),
+        None => "Workflow".to_owned(),
+    };
+    let state = match (task.running, task.failed, task.stopped) {
+        (true, ..) => ("Running", look::mention()),
+        (false, true, _) => ("Failed", look::failed()),
+        (false, _, true) => ("Stopped", look::muted()),
+        _ => ("Done", look::muted()),
+    };
+    let logo = icons::agent(
+        (ui.agents.iter())
+            .find(|a| a.id == session.agent)
+            .and_then(|a| a.icon.as_deref()),
+    );
+    let mut rows = vec![monitor_head(logo, &title, about, None, state, inner)];
+    if let (true, Some(phase)) = (task.running, current) {
+        let working = (phase.agents.iter())
+            .filter(|a| a.state == TaskState::Running)
+            .count();
+        let words = match working {
+            0 => format!("Starting {}", phase.title),
+            1 => "1 agent at work".to_owned(),
+            n => format!("{n} agents at work"),
+        };
+        let spinner = format!("monitor:task:{}:spinner", task.id);
+        rows.push(monitor_step(
+            &spinner,
+            false,
+            words,
+            Some(task.since),
+            inner,
+        ));
+    }
+    let count = (!task.phases.is_empty()).then_some((done, task.phases.len()));
+    rows.extend(count.map(|count| monitor_bar(count, "phases", inner)));
+    let stop = task.running.then(|| format!("task:stop:{}", task.id));
+    rows.push(monitor_foot(stop, count, TASKS_OPEN, &title, inner));
+    monitor_frame(rows, width)
+}
+
+/// A monitor card's head: the logo on a tile, the title over what runs it, the cost when there
+/// is one, and how it stands as a tinted pill.
+fn monitor_head(
+    logo: &'static str,
+    title: &str,
+    about: String,
+    cost: Option<f64>,
+    (state, ink): (&str, limn::Color),
+    inner: f32,
+) -> Element {
+    let logo = Element::row(vec![Element::icon(icons::of(logo))
+        .foreground(look::palette().text)
+        .size(Some(16.0), Some(16.0))
+        .centered()
+        .flex(1.0)])
+    .size(Some(30.0), Some(30.0))
+    .background(look::cancel())
+    .radius(8.0)
+    .centered_y();
+    let pill = Element::row(vec![
+        hgap(8.0),
         Element::spacer()
-            .background(dot)
-            .radius(2.5)
-            .size(Some(5.0), Some(5.0))
+            .background(ink)
+            .radius(3.0)
+            .size(Some(6.0), Some(6.0))
             .centered_y(),
-        one_line(title.to_owned(), look::palette().text),
-    ];
-    if let Some(doing) = doing {
-        row.push(
-            Element::faded_text(doing, FADE)
+        text(state).font_size(SMALL).foreground(ink).centered_y(),
+        hgap(8.0),
+    ])
+    .gap(6.0)
+    .size(None, Some(24.0))
+    .background(limn::Color { a: 38, ..ink })
+    .radius(6.0)
+    .centered_y();
+    let mut head = vec![
+        logo,
+        Element::column(vec![
+            Element::truncated_text(title.to_owned())
+                .font_family(FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(look::palette().text),
+            Element::truncated_text(about)
                 .font_family(FontFamily::Sans)
                 .font_size(SMALL)
-                .foreground(look::muted())
-                .flex(1.0)
+                .foreground(look::muted()),
+        ])
+        .gap(2.0)
+        .shrink_to_fit()
+        .centered_y(),
+        Element::spacer().flex(1.0),
+    ];
+    if let Some(cost) = cost {
+        head.push(muted(format!("${cost:.3}")).font_size(SMALL).centered_y());
+    }
+    head.push(pill);
+    Element::row(head).gap(10.0).size(Some(inner), Some(36.0))
+}
+
+/// A monitor card's step: a spinner (a mark while it waits on the person), its words, and the
+/// clock since it began.
+fn monitor_step(
+    spinner: &str,
+    waiting: bool,
+    words: String,
+    since: Option<std::time::Instant>,
+    inner: f32,
+) -> Element {
+    let mark = if waiting {
+        Element::icon(icons::of(icons::WARNING))
+            .foreground(look::awaiting())
+            .size(Some(14.0), Some(14.0))
+            .centered_y()
+    } else {
+        limn::Spinner::new(spinner.to_owned(), look::muted())
+            .render()
+            .centered_y()
+    };
+    let mut step = vec![
+        hgap(10.0),
+        mark,
+        Element::truncated_text(words)
+            .font_family(FontFamily::Sans)
+            .font_size(BODY)
+            .foreground(look::palette().text)
+            .shrink_to_fit()
+            .centered_y(),
+        Element::spacer().flex(1.0),
+    ];
+    if let Some(since) = since {
+        step.push(
+            muted(clock(since.elapsed().as_secs()))
+                .font_size(SMALL)
                 .centered_y(),
         );
     }
-    let width = column.min(480.0);
-    let card = Element::row(row)
+    step.push(hgap(10.0));
+    Element::row(step)
+        .gap(8.0)
+        .size(Some(inner), Some(36.0))
+        .background(look::cancel())
+        .radius(8.0)
+}
+
+/// A monitor card's bar of `done` of `total` `what` ("steps", "phases").
+fn monitor_bar((done, total): (usize, usize), what: &str, inner: f32) -> Element {
+    limn::Progress::new(done as f32 / total.max(1) as f32, look::palette())
+        .width(inner)
+        .render()
+        .accessibility_label(format!("{done} of {total} {what} done"))
+}
+
+/// A monitor card's foot: Stop while it works, "done/total" and Open.
+fn monitor_foot(
+    stop: Option<String>,
+    count: Option<(usize, usize)>,
+    open: &str,
+    title: &str,
+    inner: f32,
+) -> Element {
+    let mut foot = vec![];
+    foot.extend(stop.map(|id| Button::new(id, "Stop", look::palette()).render()));
+    foot.push(Element::spacer().flex(1.0));
+    if let Some((done, total)) = count {
+        foot.push(
+            muted(format!("{done}/{total}"))
+                .font_size(SMALL)
+                .centered_y(),
+        );
+    }
+    let shown = Element::row(vec![
+        text("Open").font_size(SMALL).centered_y(),
+        Element::icon(icons::of(icons::ARROW_OUT))
+            .foreground(look::palette().text)
+            .size(Some(12.0), Some(12.0))
+            .centered_y(),
+    ])
+    .gap(4.0)
+    .padding(6.0);
+    let shown = ComponentPalette {
+        hover: look::chip_hover(),
+        ..look::palette()
+    }
+    .interactive_surface(Element::clickable(open, shown))
+    .radius(6.0)
+    .accessibility_label(format!("Open {title}"));
+    foot.push(shown.centered_y());
+    Element::row(foot).gap(10.0).size(Some(inner), Some(30.0))
+}
+
+/// The monitor card's frame: its rows on the column's surface, bordered as a card.
+fn monitor_frame(rows: Vec<Element>, width: f32) -> Element {
+    Element::column(rows)
         .gap(10.0)
-        .padding(12.0)
-        .size(Some(width), Some(40.0))
+        .padding(16.0)
+        .size(Some(width), None)
+        .background(look::palette().surface)
         .border(look::card_border(), 1.0)
-        .radius(10.0);
-    match child {
-        Some(child) => ComponentPalette {
-            hover: look::row_hover(),
-            ..look::palette()
-        }
-        .interactive_surface(Element::clickable(format!("thread:{}", child.id), card))
-        .radius(10.0)
-        .size(Some(width), Some(40.0)),
-        None => card,
+        .radius(12.0)
+}
+
+/// A clock of `secs`: "0:07", "12:03", "1:02:03".
+fn clock(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -5098,6 +5371,295 @@ pub fn todos(items: &[Item]) -> Vec<Todo> {
         }
     }
     list
+}
+
+/// The session's steps as its agent's task list leaves them, and the one under way: the step
+/// in progress, else the first not done, else the list's length once every one is. `None`
+/// without a list.
+pub fn progress(session: &Session) -> Option<(Vec<Todo>, usize)> {
+    let list = todos(&session.items);
+    if list.is_empty() {
+        return None;
+    }
+    let current = (list.iter().position(|t| t.status == "in_progress"))
+        .or_else(|| list.iter().position(|t| t.status != "completed"))
+        .unwrap_or(list.len());
+    Some((list, current))
+}
+
+/// What the bar's chip says of it: "Step 3 of 5", or "5 of 5 done".
+pub fn step_words(steps: usize, current: usize) -> String {
+    if current < steps {
+        format!("Step {} of {steps}", current + 1)
+    } else {
+        format!("{steps} of {steps} done")
+    }
+}
+
+/// The Progress card's steps, as Desktop's rail draws them: a line down their left with the
+/// accent's dot on the step under way; done steps muted, the rest in the text's colour.
+fn progress_rows(list: &[Todo], current: usize, width: f32) -> Vec<Element> {
+    const ROW: f32 = 30.0;
+    let steps = list.iter().enumerate().map(|(at, todo)| {
+        let line = Element::spacer()
+            .background(look::divider())
+            .size(Some(1.0), Some(ROW))
+            .centered_x();
+        let mark = if at == current {
+            let dot = Element::spacer()
+                .background(look::spark())
+                .radius(3.0)
+                .size(Some(6.0), Some(6.0))
+                .centered_x()
+                .centered_y();
+            Element::stack(vec![line, dot])
+        } else {
+            line
+        };
+        let ink = if todo.status == "completed" {
+            look::muted()
+        } else {
+            look::palette().text
+        };
+        Element::row(vec![
+            mark.size(Some(12.0), Some(ROW)),
+            Element::truncated_text(todo.subject.clone())
+                .font_family(FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(ink)
+                .max_width((width - 58.0).max(60.0))
+                .centered_y(),
+        ])
+        .gap(12.0)
+        .size(None, Some(ROW))
+        .accessible(limn::Access::new(limn::Role::ListItem).name(format!(
+            "{}, {}",
+            todo.subject,
+            match todo.status.as_str() {
+                "completed" => "done",
+                "in_progress" => "in progress",
+                _ => "to do",
+            }
+        )))
+    });
+    vec![Element::column(steps.collect())]
+}
+
+/// What a session reached beyond its folder, in the order it first used each: every connector
+/// by the name the agent gives it with its tools' calls, the web searches it made, and the
+/// sites it read pages of with how many. Its helpers' steps count too.
+#[derive(Debug, Default, PartialEq)]
+pub struct Used {
+    pub connectors: Vec<(String, usize)>,
+    pub searches: Vec<String>,
+    pub sites: Vec<(String, usize)>,
+}
+
+pub fn used(session: &Session) -> Used {
+    let bump = |list: &mut Vec<(String, usize)>, key: &str| match list
+        .iter_mut()
+        .find(|(k, _)| k == key)
+    {
+        Some((_, n)) => *n += 1,
+        None => list.push((key.to_owned(), 1)),
+    };
+    let mut used = Used::default();
+    for item in session
+        .items
+        .iter()
+        .chain(session.helpers.values().flatten())
+    {
+        let Item::Tool { name, input, .. } = item else {
+            continue;
+        };
+        // A connector's tool is "mcp__{server}__{tool}"; Newen's own tools are not one.
+        if let Some((server, tool)) = name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
+            if !newen_model::HOST_TOOLS.iter().any(|(own, ..)| *own == tool) {
+                bump(&mut used.connectors, server);
+            }
+        } else if name == "WebSearch" {
+            let query = input["query"].as_str().map(str::trim).unwrap_or_default();
+            if !query.is_empty() && !used.searches.iter().any(|q| q == query) {
+                used.searches.push(query.to_owned());
+            }
+        } else if name == "WebFetch" {
+            if let Some(site) = input["url"].as_str().and_then(site_of) {
+                bump(&mut used.sites, &site);
+            }
+        }
+    }
+    used
+}
+
+/// The site an address is on, without its "www.": "learn.microsoft.com".
+fn site_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let host = host.rsplit('@').next()?.split(':').next()?.to_lowercase();
+    let host = host.trim_start_matches("www.");
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
+/// A connector the agent names `server` ("claude_ai_Figma"), as the person knows it: the
+/// listed or running server whose name the agent's spelling comes from ("claude.ai Figma"),
+/// and the key its logo is kept under.
+pub(crate) fn connector(ui: &Ui, session: &Session, server: &str) -> (String, String) {
+    // Agents spell a server's name with "_" for what a tool's name cannot hold.
+    let spelled = |name: &str| -> String {
+        (name.chars())
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    let listed = (ui.connectors.listed.values())
+        .flat_map(|l| l.servers.iter().flatten())
+        .map(|s| (s.name.as_str(), s.label.as_str()));
+    let running = (session.mcp.iter().flatten()).map(|s| (s.name.as_str(), s.label.as_str()));
+    let shown = (listed.chain(running))
+        .find(|(name, _)| spelled(name) == server)
+        .map(|(name, label)| crate::server_logo_name(ui, name, label))
+        .unwrap_or_else(|| server.to_owned());
+    let key = format!("mcp:{shown}");
+    (shown, key)
+}
+
+/// The rows of the rail's "Used in this session": connectors, then the web, each with up to
+/// three logos and, while the pointer is on it, a card of what it was used for, as Desktop's.
+fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
+    let used = used(session);
+    let logo = |key: &str, fallback: &'static str, side: f32| match logo_picture(ui, key) {
+        Some(picture) => Element::raster_image(picture.clone())
+            .size(Some(side), Some(side))
+            .centered_y(),
+        None => Element::icon(icons::of(fallback))
+            .foreground(look::muted())
+            .size(Some(side), Some(side))
+            .centered_y(),
+    };
+    let count = |n: usize, one: &str, many: &str| {
+        muted(format!("{n} {}", if n == 1 { one } else { many }))
+            .font_size(SMALL)
+            .centered_y()
+    };
+    let line = |lead: Element, words: String, trail: Option<Element>| {
+        let mut row = vec![
+            lead,
+            Element::truncated_text(words)
+                .font_family(FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(look::palette().text)
+                .shrink_to_fit()
+                .centered_y(),
+            Element::spacer().flex(1.0),
+        ];
+        row.extend(trail);
+        Element::row(row).gap(10.0).size(None, Some(28.0))
+    };
+    let heading = |words: &str| muted(words).font_size(SMALL);
+    let row =
+        |id: &str, icon: &'static str, label: &str, logos: Vec<Element>, card: Vec<Element>| {
+            let mut row = vec![
+                Element::icon(icons::of(icon))
+                    .foreground(look::palette().text)
+                    .size(Some(16.0), Some(16.0))
+                    .centered_y(),
+                text(label).centered_y(),
+                Element::spacer().flex(1.0),
+            ];
+            row.extend(logos);
+            let anchor = ComponentPalette {
+                hover: look::chip_hover(),
+                ..look::palette()
+            }
+            .interactive_surface(Element::clickable(
+                id,
+                Element::row(row)
+                    .gap(8.0)
+                    .padding(4.0)
+                    .size(Some(width - 36.0), Some(32.0)),
+            ))
+            .radius(6.0);
+            let card = Element::column(std::iter::once(text(label)).chain(card).collect())
+                .gap(6.0)
+                .padding(12.0);
+            limn::Popover::new(
+                anchor,
+                card,
+                true,
+                format!("{id}:card"),
+                look::menu_palette(),
+            )
+            .width(320.0)
+            .placement(limn::PopoverPlacement::LeftStart)
+            .render()
+            .popover_on_hover()
+            .popover_gap(6.0)
+        };
+    let mut rows = vec![];
+    if !used.connectors.is_empty() {
+        let named: Vec<(String, String, usize)> = (used.connectors.iter())
+            .map(|(server, calls)| {
+                let (shown, key) = connector(ui, session, server);
+                (shown, key, *calls)
+            })
+            .collect();
+        let logos = named
+            .iter()
+            .take(3)
+            .map(|(_, key, _)| logo(key, icons::PLUG, 14.0))
+            .collect();
+        let card = (named.iter())
+            .map(|(shown, key, calls)| {
+                line(
+                    logo(key, icons::PLUG, 16.0),
+                    shown.clone(),
+                    Some(count(*calls, "call", "calls")),
+                )
+            })
+            .collect();
+        rows.push(row(
+            "used:connectors",
+            icons::CONNECTORS,
+            "Connectors",
+            logos,
+            card,
+        ));
+    }
+    if !used.searches.is_empty() || !used.sites.is_empty() {
+        let site_key = |site: &str| format!("site:{site}");
+        let logos = (used.sites.iter())
+            .take(3)
+            .map(|(site, _)| logo(&site_key(site), icons::GLOBE, 14.0))
+            .collect();
+        let mut card = vec![];
+        if !used.searches.is_empty() {
+            card.push(heading("Searches"));
+            card.extend(used.searches.iter().map(|query| {
+                let lead = Element::icon(icons::of(icons::SEARCH))
+                    .foreground(look::muted())
+                    .size(Some(14.0), Some(14.0))
+                    .centered_y();
+                line(lead, format!("\u{201c}{query}\u{201d}"), None)
+            }));
+        }
+        if !used.sites.is_empty() {
+            card.push(heading("Sites read"));
+            card.extend(used.sites.iter().map(|(site, pages)| {
+                line(
+                    logo(&site_key(site), icons::GLOBE, 16.0),
+                    site.clone(),
+                    Some(count(*pages, "page", "pages")),
+                )
+            }));
+        }
+        rows.push(row("used:web", icons::GLOBE, "Web search", logos, card));
+    }
+    rows
 }
 
 /// The task list: a card as wide as the column, a 28 px row per
@@ -9261,7 +9823,31 @@ fn right_panel(
         )
         .accessibility_label(counted(added, removed))
     };
-    let mut cards = vec![
+    let mut cards = vec![];
+    // What the agent is doing, step by step, as its task list says: first, as Desktop's rail.
+    if let Some((list, current)) = progress(session) {
+        cards.push(panel_card(
+            "Progress",
+            PROGRESS_CARD,
+            open(PROGRESS_CARD, true),
+            vec![],
+            progress_rows(&list, current, inner),
+            inner,
+        ));
+    }
+    // Then what it reached beyond its folder: connectors and the web.
+    let used = used_rows(session, ui, inner);
+    if !used.is_empty() {
+        cards.push(panel_card(
+            "Used in this session",
+            USED_CARD,
+            open(USED_CARD, true),
+            vec![],
+            vec![Element::column(used).gap(2.0)],
+            inner,
+        ));
+    }
+    cards.extend([
         panel_card(
             "Environment",
             "panel:environment",
@@ -9278,7 +9864,7 @@ fn right_panel(
             context_rows,
             inner,
         ),
-    ];
+    ]);
     // What the agent left running beside its turns, as Desktop's rail lists it.
     if let Some(rows) = crate::terminals::rows(session, inner - 36.0) {
         cards.push(panel_card(

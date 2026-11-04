@@ -9,7 +9,7 @@ pub use newen_agent::{
     ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Skill, Suggestion,
     TaskAgent, TaskPhase, TaskState, TaskUsage, Todo, ToolContent, ToolPolicy, ToolRule, Usage,
-    UsageWindow, WebSearchRun, WebSource,
+    UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's

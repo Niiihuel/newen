@@ -1254,6 +1254,11 @@ pub struct Todo {
 pub fn apply_task_tool(list: &mut Vec<Todo>, name: &str, input: &Value, output: Option<&str>) {
     match name {
         "TaskCreate" => {
+            // A task made once every one before it is done begins a new list, as the agent's
+            // own list does: the finished one is not carried under it.
+            if !list.is_empty() && list.iter().all(|t| t.status == "completed") {
+                list.clear();
+            }
             let id = output
                 .and_then(|o| o.strip_prefix("Task #"))
                 .and_then(|rest| rest.split(' ').next())
@@ -1298,6 +1303,40 @@ pub fn apply_task_tool(list: &mut Vec<Todo>, name: &str, input: &Value, output: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_task_made_after_every_one_is_done_begins_a_new_list() {
+        let mut list = vec![];
+        let make = |list: &mut Vec<Todo>, id: &str, subject: &str| {
+            let input = serde_json::json!({ "subject": subject });
+            apply_task_tool(
+                list,
+                "TaskCreate",
+                &input,
+                Some(&format!("Task #{id} created")),
+            );
+        };
+        let done = |list: &mut Vec<Todo>, id: &str| {
+            let input = serde_json::json!({ "taskId": id, "status": "completed" });
+            apply_task_tool(list, "TaskUpdate", &input, None);
+        };
+        make(&mut list, "1", "Read the code");
+        make(&mut list, "2", "Fix the bug");
+        done(&mut list, "1");
+        // One still open: the next one joins the same list.
+        make(&mut list, "3", "Add a test");
+        assert_eq!(list.len(), 3);
+        done(&mut list, "2");
+        done(&mut list, "3");
+        // All done: the next one starts over, and its updates still find it.
+        make(&mut list, "4", "Write the notes");
+        assert_eq!(
+            list.iter().map(|t| t.subject.as_str()).collect::<Vec<_>>(),
+            ["Write the notes"]
+        );
+        done(&mut list, "4");
+        assert_eq!(list[0].status, "completed");
+    }
 
     #[test]
     fn the_task_tools_build_one_list() {
