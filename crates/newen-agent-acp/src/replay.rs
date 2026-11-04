@@ -50,7 +50,12 @@ pub fn replay(adapter: &mut dyn AgentAdapter, capture: &str) -> Replayed {
                 decoded.replies
             }
             Some("out") => {
-                replayed.expected.push(msg.clone());
+                // The capture names the Newen that recorded it; the adapter names this one.
+                let mut msg = msg.clone();
+                if let Some(version) = msg.pointer_mut("/params/clientInfo/version") {
+                    *version = env!("CARGO_PKG_VERSION").into();
+                }
+                replayed.expected.push(msg);
                 vec![]
             }
             _ => vec![],
