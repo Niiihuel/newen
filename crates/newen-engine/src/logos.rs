@@ -1,5 +1,6 @@
-//! The logos of connectors and plugins (docs/engine.md): looked up by name on svgl.app, else
-//! the server's own site, and kept as PNG files under Newen's data folder. Blocking: it fetches,
+//! The logos of connectors, plugins and model providers (docs/engine.md): looked up by name on
+//! svgl.app, else at the logo address its catalogue gives (a provider's), else the server's own
+//! site, and kept as PNG files under Newen's data folder. Blocking: it fetches,
 //! decodes and rasterizes, so it runs on a blocking thread. Newen ships no logo.
 
 use newen_model::LogoWanted;
@@ -64,10 +65,38 @@ fn fresh(written: SystemTime, now: SystemTime) -> bool {
         .map_or(true, |age| age < RETRY_AFTER)
 }
 
-/// The light and dark PNGs for `wanted`, from svgl.app by name, else from the server's site.
+/// The light and dark PNGs for `wanted`, from svgl.app by name, else from its `url`: the logo
+/// itself when that is an SVG (a catalogue's), else the server's site.
 fn find(wanted: &LogoWanted) -> Option<(Vec<u8>, Vec<u8>)> {
     let agent = agent();
-    svgl(&agent, &wanted.name).or_else(|| site(&agent, wanted.url.as_deref()))
+    let svg = (wanted.url.as_deref()).filter(|url| url.ends_with(".svg"));
+    svgl(&agent, &wanted.name).or_else(|| match svg {
+        Some(url) => catalogue(&agent, url),
+        None => site(&agent, wanted.url.as_deref()),
+    })
+}
+
+/// The ink a one-colour logo is drawn in on a dark tile.
+const DARK_INK: &str = "#ececec";
+
+/// A catalogue's SVG logo, rasterized for each tile: as drawn for a light one, and for a dark
+/// one in a light ink when it is one colour (`currentColor`, or none given), which would vanish
+/// drawn black.
+fn catalogue(agent: &ureq::Agent, url: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    let svg = String::from_utf8(get(agent, url, None)?).ok()?;
+    let light = rasterize(svg.as_bytes())?;
+    let dark = rasterize(dark_ink(&svg).as_bytes()).unwrap_or_else(|| light.clone());
+    Some((light, dark))
+}
+
+/// `svg` with its one colour turned light: `currentColor`, or the black it is drawn in when it
+/// names no fill. One that gives its own colours stays as it is.
+fn dark_ink(svg: &str) -> String {
+    let inked = svg.replace("currentColor", DARK_INK);
+    if inked != svg || svg.contains("fill=") {
+        return inked;
+    }
+    inked.replacen("<svg", &format!("<svg fill=\"{DARK_INK}\""), 1)
 }
 
 /// svgl.app's logo for a name: its light and dark vectors, each rasterized.
@@ -83,16 +112,19 @@ fn svgl(agent: &ureq::Agent, name: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((light_png, dark_png))
 }
 
-/// The light and dark addresses of the svgl entry titled `name` (any case), from its search
-/// answer. An error or a list without that title gives none; a plain route serves both.
+/// The light and dark addresses of the svgl entry titled `name`, its letters and digits in any
+/// case ("DigitalOcean" is "Digital Ocean"), from its search answer. An error or a list
+/// without that title gives none; a plain route serves both.
 fn svgl_routes(body: &str, name: &str) -> Option<(String, String)> {
     let entries: Vec<serde_json::Value> = serde_json::from_str(body).ok()?;
-    let name = name.trim().to_lowercase();
-    let entry = entries.iter().find(|e| {
-        e["title"]
-            .as_str()
-            .is_some_and(|t| t.to_lowercase() == name)
-    })?;
+    let key = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let name = key(name);
+    let entry = (entries.iter()).find(|e| e["title"].as_str().is_some_and(|t| key(t) == name))?;
     match &entry["route"] {
         serde_json::Value::String(url) => Some((url.clone(), url.clone())),
         route => {
@@ -275,6 +307,38 @@ mod tests {
     }
 
     #[test]
+    fn a_one_colour_logo_is_inked_light_for_a_dark_tile() {
+        let current = r#"<svg viewBox="0 0 1 1"><path fill="currentColor" d="M0 0h1v1z"/></svg>"#;
+        assert!(dark_ink(current).contains(&format!("fill=\"{DARK_INK}\"")));
+        let bare = r#"<svg viewBox="0 0 1 1"><path d="M0 0h1v1z"/></svg>"#;
+        assert!(dark_ink(bare).starts_with(&format!("<svg fill=\"{DARK_INK}\"")));
+        let coloured = r##"<svg viewBox="0 0 1 1"><path fill="#ff5500" d="M0 0h1v1z"/></svg>"##;
+        assert_eq!(dark_ink(coloured), coloured);
+    }
+
+    #[test]
+    fn an_svgl_title_matches_by_its_letters_and_digits() {
+        let body = r#"[{"title":"Digital Ocean","route":"https://svgl.app/do.svg"},
+            {"title":"Vercel","route":{"light":"https://svgl.app/v-l.svg","dark":"https://svgl.app/v-d.svg"}}]"#;
+        assert_eq!(
+            svgl_routes(body, "DigitalOcean"),
+            Some((
+                "https://svgl.app/do.svg".into(),
+                "https://svgl.app/do.svg".into()
+            ))
+        );
+        assert_eq!(
+            svgl_routes(body, "vercel").unwrap().1,
+            "https://svgl.app/v-d.svg"
+        );
+        assert_eq!(
+            svgl_routes(body, "Vercel AI Gateway"),
+            None,
+            "not a part of a name"
+        );
+    }
+
+    #[test]
     fn a_kept_logo_is_answered_from_disk() {
         let dir = std::env::temp_dir().join(format!("newen-logos-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -316,6 +380,17 @@ mod tests {
                 "mcp:context7",
                 "context7",
                 Some("https://mcp.context7.com/mcp"),
+            ),
+            // A provider svgl has, and one only its catalogue draws.
+            (
+                "provider:Groq",
+                "Groq",
+                Some("https://models.dev/logos/groq.svg"),
+            ),
+            (
+                "provider:302.AI",
+                "302.AI",
+                Some("https://models.dev/logos/302ai.svg"),
             ),
         ];
         for (key, name, url) in cases {

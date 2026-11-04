@@ -500,9 +500,84 @@ pub struct Provider {
     pub env: Vec<String>,
     /// The one of those it is connected by, set where Newen runs.
     pub env_set: Option<String>,
-    /// Its other ways in (a sign-in in the browser, a profile), which only the program's own
-    /// terminal walks through: the command to type there.
-    pub terminal: Option<String>,
+    /// Its logo's address, an SVG, as the agent's catalogue has it: looked up when svgl.app
+    /// has none by its name.
+    pub logo: Option<String>,
+    /// Its ways in other than a key: a sign-in in the browser, or credentials this computer
+    /// already has (a cloud profile), each perhaps after a few questions.
+    pub sign_ins: Vec<SignInMethod>,
+}
+
+/// A way to connect a provider other than a key, as the agent's program offers it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SignInMethod {
+    /// The program's id of it, which signing in takes back.
+    pub id: String,
+    pub label: String,
+    /// It opens a page in the browser; else it connects with what this computer has.
+    pub browser: bool,
+    /// What it asks first.
+    pub form: Vec<FormField>,
+}
+
+/// One question of a sign-in's form.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FormField {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub required: bool,
+    pub placeholder: Option<String>,
+    pub default: Option<String>,
+    /// The answers to choose from; none for one to type.
+    pub choices: Vec<FormChoice>,
+    /// It is asked only while each of these earlier answers is so: `(key, value)`.
+    pub when: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FormChoice {
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// A step of signing in to a provider ([`AgentAdapter::provider_sign_in_run`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SignInStep<'a> {
+    /// Start with `method`, its form answered.
+    Begin {
+        method: &'a str,
+        answers: &'a [(String, String)],
+    },
+    /// How the attempt stands.
+    Check {
+        attempt: &'a str,
+    },
+    /// The code the person pasted back from the sign-in page.
+    Code {
+        attempt: &'a str,
+        code: &'a str,
+    },
+    Cancel {
+        attempt: &'a str,
+    },
+}
+
+/// Where a provider's sign-in stands, as a step's run printed it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SignInState {
+    /// Started: the page to open, what the person does there (a code to enter), and whether
+    /// they paste a code back.
+    Waiting {
+        attempt: String,
+        url: Option<String>,
+        instructions: Option<String>,
+        code: bool,
+    },
+    Pending,
+    Done,
+    Failed(String),
 }
 
 /// Where a server's definition came from: the person's own settings, the project's, the
@@ -1120,6 +1195,14 @@ pub trait AgentAdapter: Send {
     /// arguments.
     fn provider_connect_run(&self, _provider: &str, _key: &str) -> Option<ProgramRun> {
         None
+    }
+    /// The run of a step of signing in to `provider` ([`Provider::sign_ins`]).
+    fn provider_sign_in_run(&self, _provider: &str, _step: SignInStep) -> Option<ProgramRun> {
+        None
+    }
+    /// Where a sign-in stands in what a step's run printed.
+    fn provider_sign_in_read(&self, _stdout: &str) -> SignInState {
+        SignInState::Failed(String::new())
     }
     /// The runs that take `provider`'s credentials `ids` away.
     fn provider_disconnect_runs(&self, _provider: &str, _ids: &[String]) -> Vec<ProgramRun> {

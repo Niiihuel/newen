@@ -677,6 +677,7 @@ impl Store {
             | Event::ServerTools { .. }
             | Event::ServersFound { .. }
             | Event::Providers { .. }
+            | Event::ProviderSignIn { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }
@@ -2458,7 +2459,7 @@ impl Ui {
             }
         }
         // Providers' logos where an agent's page or "Add a provider" shows them: the connected
-        // ones, and the first a search finds rather than every one the agent lists.
+        // ones, or every one a search finds (the engine looks a few up at a time).
         let adding = self.adding_provider.as_ref();
         let agent = (adding.map(|a| a.agent.as_str()))
             .or_else(|| (self.settings_page.as_deref()).and_then(|p| p.strip_prefix("agent:")));
@@ -2466,17 +2467,14 @@ impl Ui {
         let query = adding
             .map(|a| a.query.trim().to_lowercase())
             .unwrap_or_default();
-        for provider in (listed.into_iter().flatten())
-            .filter(|p| match adding {
-                Some(_) => query.is_empty() || p.name.to_lowercase().contains(&query),
-                None => !p.connected.is_empty() || p.env_set.is_some(),
-            })
-            .take(30)
-        {
+        for provider in (listed.into_iter().flatten()).filter(|p| match adding {
+            Some(_) => query.is_empty() || p.name.to_lowercase().contains(&query),
+            None => !p.connected.is_empty() || p.env_set.is_some(),
+        }) {
             wanted.push(LogoWanted {
                 key: providers::logo_key(provider),
                 name: provider.name.clone(),
-                url: None,
+                url: provider.logo.clone(),
             });
         }
         wanted.retain(|w| self.logo_asked.insert(w.key.clone()));
@@ -3387,6 +3385,9 @@ fn update_action(store: &Store, ui: &mut Ui, action: &limn::UiAction) -> Vec<Int
         }
         UiAction::Submitted { id, .. } if id == providers::KEY => {
             providers::clicked(ui, providers::CONNECT_ID).unwrap_or_default()
+        }
+        UiAction::Submitted { id, .. } if id == providers::CODE => {
+            providers::clicked(ui, providers::SEND_CODE_ID).unwrap_or_default()
         }
         UiAction::InputChanged { id, value } if id.starts_with(account::CODE) => {
             ui.account.code = value.clone();

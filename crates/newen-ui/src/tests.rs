@@ -4799,7 +4799,37 @@ fn a_provider_is_found_connected_with_a_key_and_disconnected() {
         connected: connected.iter().map(|c| c.to_string()).collect(),
         key: id != "copilot",
         env: vec![format!("{}_API_KEY", id.to_uppercase())],
-        terminal: (id == "copilot").then(|| "x auth login copilot".into()),
+        sign_ins: if id == "copilot" {
+            vec![newen_model::SignInMethod {
+                id: "oauth:device".into(),
+                label: "Login with GitHub Copilot".into(),
+                browser: true,
+                form: vec![
+                    newen_model::FormField {
+                        key: "deploymentType".into(),
+                        title: "Select GitHub deployment type".into(),
+                        required: true,
+                        choices: ["github.com", "enterprise"]
+                            .map(|v| newen_model::FormChoice {
+                                value: v.into(),
+                                label: v.into(),
+                                description: None,
+                            })
+                            .into(),
+                        ..Default::default()
+                    },
+                    newen_model::FormField {
+                        key: "enterpriseUrl".into(),
+                        title: "Enter your GitHub Enterprise URL".into(),
+                        required: true,
+                        when: vec![("deploymentType".into(), "enterprise".into())],
+                        ..Default::default()
+                    },
+                ],
+            }]
+        } else {
+            vec![]
+        },
         ..Default::default()
     };
     let listed = |groq: &[&str]| Event::Providers {
@@ -4858,11 +4888,57 @@ fn a_provider_is_found_connected_with_a_key_and_disconnected() {
     click(&store, &mut ui, "prov:connect");
     ui.applied(&listed(&["newen-groq"]));
     assert!(ui.adding_provider.is_none());
-    // One that signs in elsewhere says how, and offers no key.
+    // One that signs in in the browser: its question, Enterprise's only for Enterprise, then
+    // the page it opens and the code to enter there; done, the dialog closes.
     click(&store, &mut ui, "prov:add:opencode");
     click(&store, &mut ui, "prov:pick:copilot");
-    assert!(shows(&ui, "x auth login copilot") && !shows(&ui, "API key"));
-    click(&store, &mut ui, "prov:close");
+    assert!(shows(&ui, "Login with GitHub Copilot") && !shows(&ui, "API key"));
+    click(&store, &mut ui, "prov:method:oauth:device");
+    assert!(shows(&ui, "Select GitHub deployment type") && !shows(&ui, "Enterprise URL"));
+    assert!(
+        click(&store, &mut ui, "prov:start").is_empty(),
+        "not answered yet"
+    );
+    click(&store, &mut ui, "prov:choice:deploymentType=enterprise");
+    assert!(shows(&ui, "Enter your GitHub Enterprise URL"));
+    click(&store, &mut ui, "prov:choice:deploymentType=github.com");
+    let started = click(&store, &mut ui, "prov:start");
+    assert_eq!(
+        started,
+        vec![Intent::ProviderSignIn {
+            agent: "opencode".into(),
+            provider: "copilot".into(),
+            method: "oauth:device".into(),
+            answers: vec![("deploymentType".into(), "github.com".into())],
+        }]
+    );
+    let signing = |state| Event::ProviderSignIn {
+        agent: "opencode".into(),
+        provider: "copilot".into(),
+        state,
+    };
+    ui.applied(&signing(newen_model::ProviderSignIn::Waiting {
+        url: Some("https://github.com/login/device".into()),
+        instructions: Some("Enter code: 8787-8C73".into()),
+        code: false,
+    }));
+    assert!(shows(&ui, "Enter code: 8787-8C73") && shows(&ui, "Cancel sign-in"));
+    // Cancelling takes the attempt away; trying again and finishing closes the dialog.
+    assert_eq!(
+        click(&store, &mut ui, "prov:stop"),
+        vec![Intent::CancelProviderSignIn {
+            agent: "opencode".into(),
+            provider: "copilot".into()
+        }]
+    );
+    click(&store, &mut ui, "prov:start");
+    ui.applied(&signing(newen_model::ProviderSignIn::Failed(
+        "no seat".into(),
+    )));
+    assert!(shows(&ui, "no seat"));
+    click(&store, &mut ui, "prov:start");
+    ui.applied(&signing(newen_model::ProviderSignIn::Done));
+    assert!(ui.adding_provider.is_none());
     // Disconnect takes its credentials away.
     assert_eq!(
         click(&store, &mut ui, "prov:disconnect:opencode:openrouter"),

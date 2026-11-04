@@ -8,7 +8,7 @@
 - Persist before notifying: an important state change is written to `newen-store` before the UI sees it.
 - Unknown CLI messages are kept as `Unknown`, never a crash. A CLI version outside the tested range is reported in the UI.
 - Newen does not identify itself as another client (e.g. Claude Desktop) and uses no vendor code, fonts, icons or branding. One exception: an adapter (`newen-agent-<id>`) may ship its agent's logo, only to name that agent where Newen lists agents; generic code never holds one.
-- Logos of connectors and plugins are never shipped: the engine looks them up at run time (svgl.app by name, else the server's site), keeps them in the person's data dir, and a Settings switch turns that off.
+- Logos of connectors, plugins and model providers are never shipped: the engine looks them up at run time (svgl.app by name, else the logo address its agent's catalogue gives, else the server's site), keeps them in the person's data dir, and a Settings switch turns that off.
 - Every new dependency gets a one-line comment in `Cargo.toml` saying why.
 - Newen was called quill until 0.1.9. quill's names (its folders, `quill.db`, `QUILL_*` variables, keychain service, socket, settings values, launchers, repository and manifest) appear only where Newen moves a person's data or keeps quill's copies, launchers and updates working: `newen_engine::migrate`, the fallbacks docs/UPDATES.md lists under «Venir de quill», their tests and that doc. No other code names them.
 - Behavior modeled on Claude Desktop is described by what the user sees; its reverse-engineering notes stay private and are never cited or copied into this repo. What is inferred is said to be inferred.

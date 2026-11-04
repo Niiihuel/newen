@@ -4,8 +4,9 @@
 
 use newen_agent::{
     AgentAdapter, AgentCommand, AgentId, AgentOption, Choices, ConfiguredServer, Decoded,
-    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ModelInfo, ProgramRun,
-    Provider, SessionExtras, SessionSpec,
+    ExtensionOp, FormChoice, FormField, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords,
+    ModelInfo, ProgramRun, Provider, SessionExtras, SessionSpec, SignInMethod, SignInState,
+    SignInStep,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Value};
@@ -23,6 +24,55 @@ fn api(path: &str) -> ProgramRun {
         timeout: 60,
         until: None,
     }
+}
+
+/// One of an integration's methods other than a key or a variable: `oauth` (a page in the
+/// browser) or `external` (credentials this computer has), its id kept as `kind:id`.
+fn sign_in_method(method: &Value) -> Option<SignInMethod> {
+    let kind = method["type"]
+        .as_str()
+        .filter(|k| ["oauth", "external"].contains(k))?;
+    let id = method["id"].as_str()?;
+    let text = |v: &Value, key: &str| v[key].as_str().map(str::to_owned);
+    let form = (method["form"].as_array().into_iter().flatten())
+        .filter_map(|field| {
+            Some(FormField {
+                key: field["key"].as_str()?.to_owned(),
+                title: text(field, "title")
+                    .unwrap_or_else(|| field["key"].as_str().unwrap_or_default().to_owned()),
+                description: text(field, "description"),
+                required: field["required"] == true,
+                placeholder: text(field, "placeholder"),
+                default: text(field, "default"),
+                choices: (field["options"].as_array().into_iter().flatten())
+                    .filter_map(|o| {
+                        Some(FormChoice {
+                            value: o["value"].as_str()?.to_owned(),
+                            label: text(o, "label").unwrap_or_else(|| {
+                                o["value"].as_str().unwrap_or_default().to_owned()
+                            }),
+                            description: text(o, "description"),
+                        })
+                    })
+                    .collect(),
+                when: (field["when"].as_array().into_iter().flatten())
+                    .filter(|w| w["op"] == "eq")
+                    .filter_map(|w| {
+                        Some((
+                            w["key"].as_str()?.to_owned(),
+                            w["value"].as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect(),
+            })
+        })
+        .collect();
+    Some(SignInMethod {
+        id: format!("{kind}:{id}"),
+        label: text(method, "label").unwrap_or_else(|| id.to_owned()),
+        browser: kind == "oauth",
+        form,
+    })
 }
 
 /// The JSON a run printed first: `api` follows a failed request's body with its HTTP status.
@@ -343,9 +393,9 @@ impl AgentAdapter for OpenCode {
                     env_set: (connections)
                         .find(|c| c["type"] == "env")
                         .and_then(|c| c["name"].as_str().map(str::to_owned)),
-                    // A sign-in in the browser or a profile: OpenCode's own terminal asks for it.
-                    terminal: (has("oauth") || has("external"))
-                        .then(|| format!("opencode auth login {id}")),
+                    // Its catalogue is models.dev's, which draws every provider by its id.
+                    logo: Some(format!("https://models.dev/logos/{id}.svg")),
+                    sign_ins: (methods.iter()).filter_map(|m| sign_in_method(m)).collect(),
                     id,
                 })
             })
@@ -367,6 +417,77 @@ impl AgentAdapter for OpenCode {
             timeout: 60,
             until: None,
         })
+    }
+
+    /// Each step on OpenCode's background service, which keeps an attempt between requests
+    /// (a private server would forget it). Only a pasted one-time code travels in an argument.
+    fn provider_sign_in_run(&self, provider: &str, step: SignInStep) -> Option<ProgramRun> {
+        let path = format!("/api/integration/{provider}/connect");
+        let (method, path, body) = match step {
+            SignInStep::Begin { method, answers } => {
+                let (kind, id) = method.split_once(':')?;
+                let answer: serde_json::Map<String, Value> = (answers.iter())
+                    .map(|(key, value)| (key.clone(), json!(value)))
+                    .collect();
+                let body = json!({ "methodID": id, "answer": answer });
+                ("POST", format!("{path}/{kind}"), Some(body))
+            }
+            SignInStep::Check { attempt } => ("GET", format!("{path}/oauth/{attempt}"), None),
+            SignInStep::Code { attempt, code } => (
+                "POST",
+                format!("{path}/oauth/{attempt}/complete"),
+                Some(json!({ "code": code })),
+            ),
+            SignInStep::Cancel { attempt } => ("DELETE", format!("{path}/oauth/{attempt}"), None),
+        };
+        let mut args: Vec<String> = ["api", method, &path].map(String::from).into();
+        if let Some(body) = body {
+            args.extend(["-d".into(), body.to_string()]);
+        }
+        Some(ProgramRun {
+            args,
+            stdin: None,
+            timeout: 60,
+            until: None,
+        })
+    }
+
+    fn provider_sign_in_read(&self, stdout: &str) -> SignInState {
+        let Some(body) = first_json(stdout) else {
+            // A step that answers nothing (cancelling, a code taken) went through.
+            return match stdout.trim() {
+                "" => SignInState::Done,
+                said => SignInState::Failed(said.lines().last().unwrap_or(said).to_owned()),
+            };
+        };
+        if let Some(message) = body["message"]
+            .as_str()
+            .filter(|_| body["_tag"].is_string())
+        {
+            return SignInState::Failed(message.to_owned());
+        }
+        let data = &body["data"];
+        if let Some(attempt) = data["attemptID"].as_str() {
+            let text = |key: &str| data[key].as_str().map(str::to_owned);
+            return SignInState::Waiting {
+                attempt: attempt.to_owned(),
+                url: text("url"),
+                instructions: text("instructions"),
+                code: data["mode"] == "code",
+            };
+        }
+        match data["status"].as_str() {
+            Some("pending") => SignInState::Pending,
+            Some("failed") => SignInState::Failed(
+                data["message"]
+                    .as_str()
+                    .unwrap_or("The sign-in failed.")
+                    .to_owned(),
+            ),
+            Some("expired") => SignInState::Failed("The sign-in expired.".into()),
+            // `complete`, or a connection made at once (a profile).
+            _ => SignInState::Done,
+        }
     }
 
     fn provider_disconnect_runs(&self, provider: &str, ids: &[String]) -> Vec<ProgramRun> {

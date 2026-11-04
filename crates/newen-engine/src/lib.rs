@@ -26,6 +26,7 @@ pub mod migrate;
 mod registry;
 mod servers;
 mod shared;
+mod sign_in;
 mod skills;
 mod suggest;
 mod update;
@@ -279,6 +280,8 @@ enum Internal {
     PullRequests,
     /// An agent's providers changed: its models are asked for again.
     AskModels(String),
+    /// A provider was signed in to: the agent's providers are listed again, then its models.
+    ProvidersChanged(String),
     /// A session's pull request was merged.
     Merged { session: SessionId },
     /// A step may have changed files in the session's folder.
@@ -455,6 +458,10 @@ struct Router {
     /// Site permissions the browser waits on, by the card's id: the site and where the
     /// answer goes.
     site_waits: SiteWaits,
+    /// The logo lookups that may run at once (`Intent::Logos`).
+    logo_slots: Arc<tokio::sync::Semaphore>,
+    /// Each provider's sign-in attempt under way (`Intent::ProviderSignIn`).
+    provider_attempts: sign_in::Attempts,
     /// Asks the person on a card of Newen's own.
     ask: Ask,
     /// The dev servers agents started with preview_start.
@@ -667,6 +674,8 @@ impl Router {
             relayed,
             browser,
             site_waits,
+            logo_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            provider_attempts: Default::default(),
             sessions: HashMap::new(),
             folders: HashMap::new(),
             trees: HashMap::new(),
@@ -833,6 +842,49 @@ impl Router {
             });
             if changed {
                 let _ = internal.send(Internal::AskModels(agent));
+            }
+        });
+    }
+
+    /// Sign in to an agent's provider (`sign_in::follow`), its page opened in the browser:
+    /// `Event::ProviderSignIn` as it goes; connected, its providers and models are asked again.
+    fn provider_sign_in(
+        &self,
+        agent: String,
+        provider: String,
+        method: String,
+        answers: Vec<(String, String)>,
+    ) {
+        let Some(adapter) = adapter(&agent) else {
+            return;
+        };
+        let program = (self.program(&agent))
+            .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+        let (ui, internal) = (self.ui.clone(), self.internal.clone());
+        let attempts = self.provider_attempts.clone();
+        tokio::spawn(async move {
+            let home = newen_files::home_dir().unwrap_or_else(std::env::temp_dir);
+            let step = |run: newen_agent::ProgramRun| {
+                let (program, home) = (program.clone(), home.clone());
+                async move { run_program(&program, &run, &home).await }
+            };
+            let key = (agent.clone(), provider.clone());
+            let tell = |state| {
+                ui(Event::ProviderSignIn {
+                    agent: agent.clone(),
+                    provider: provider.clone(),
+                    state,
+                })
+            };
+            let open = |page: &str| drop(newen_files::open_in_system(page));
+            let times = (sign_in::EVERY, sign_in::WITHIN);
+            let adapter = std::sync::Mutex::new(adapter);
+            let connected = sign_in::follow(
+                &adapter, key, &method, &answers, &attempts, times, step, open, tell,
+            )
+            .await;
+            if connected {
+                let _ = internal.send(Internal::ProvidersChanged(agent));
             }
         });
     }
@@ -2136,6 +2188,70 @@ impl Router {
                 self.providers(agent, Some(runs));
                 return;
             }
+            Intent::ProviderSignIn {
+                agent,
+                provider,
+                method,
+                answers,
+            } => {
+                self.provider_sign_in(agent, provider, method, answers);
+                return;
+            }
+            Intent::ProviderSignInCode {
+                agent,
+                provider,
+                code,
+            } => {
+                let key = (agent.clone(), provider.clone());
+                let attempt = self.provider_attempts.lock().unwrap().get(&key).cloned();
+                let Some((adapter, attempt)) = adapter(&agent).zip(attempt) else {
+                    return;
+                };
+                let step = newen_agent::SignInStep::Code {
+                    attempt: &attempt,
+                    code: &code,
+                };
+                let Some(run) = adapter.provider_sign_in_run(&provider, step) else {
+                    return;
+                };
+                let program = (self.program(&agent))
+                    .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+                let ui = self.ui.clone();
+                // The attempt's follow-up sees it done; only a code refused is told here.
+                tokio::spawn(async move {
+                    let home = newen_files::home_dir().unwrap_or_else(std::env::temp_dir);
+                    let state = match run_program(&program, &run, &home).await {
+                        Ok(printed) => adapter.provider_sign_in_read(&printed),
+                        Err(why) => newen_agent::SignInState::Failed(why),
+                    };
+                    if let newen_agent::SignInState::Failed(why) = state {
+                        let state = newen_model::ProviderSignIn::Failed(why);
+                        ui(Event::ProviderSignIn {
+                            agent,
+                            provider,
+                            state,
+                        });
+                    }
+                });
+                return;
+            }
+            Intent::CancelProviderSignIn { agent, provider } => {
+                let key = (agent.clone(), provider.clone());
+                let attempt = self.provider_attempts.lock().unwrap().remove(&key);
+                let Some((adapter, attempt)) = adapter(&agent).zip(attempt) else {
+                    return;
+                };
+                let cancel = newen_agent::SignInStep::Cancel { attempt: &attempt };
+                if let Some(run) = adapter.provider_sign_in_run(&provider, cancel) {
+                    let program = (self.program(&agent))
+                        .unwrap_or_else(|| adapter.launch(&SessionSpec::default()).program);
+                    tokio::spawn(async move {
+                        let home = newen_files::home_dir().unwrap_or_else(std::env::temp_dir);
+                        let _ = run_program(&program, &run, &home).await;
+                    });
+                }
+                return;
+            }
             Intent::FindServers { query } => {
                 let ui = self.ui.clone();
                 tokio::spawn(async move {
@@ -2165,14 +2281,22 @@ impl Router {
                 return;
             }
             // Each logo on a thread of its own: a lookup can wait on the network for ten seconds.
+            // A few at a time: a provider list asks for hundreds, each a lookup over the network.
             Intent::Logos { wanted } => {
                 if let Some(dir) = self.config.logos.clone() {
                     for want in wanted {
                         let (ui, dir) = (self.ui.clone(), dir.clone());
-                        tokio::task::spawn_blocking(move || {
+                        let slots = self.logo_slots.clone();
+                        tokio::spawn(async move {
+                            let Ok(_slot) = slots.acquire_owned().await else {
+                                return;
+                            };
                             let key = want.key.clone();
-                            let (light, dark) = logos::logo(&dir, &want);
-                            ui(Event::Logo { key, light, dark });
+                            let found =
+                                tokio::task::spawn_blocking(move || logos::logo(&dir, &want)).await;
+                            if let Ok((light, dark)) = found {
+                                ui(Event::Logo { key, light, dark });
+                            }
                         });
                     }
                 }
@@ -2595,6 +2719,7 @@ impl Router {
             }
             Internal::PullRequests => {}
             Internal::AskModels(agent) => self.ask_models(agent),
+            Internal::ProvidersChanged(agent) => self.providers(agent, Some(vec![])),
             // A session that went back to work keeps on; it is asked again in 5 minutes.
             Internal::Merged { session } => {
                 if self.settings.archive_on_merge

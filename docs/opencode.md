@@ -72,12 +72,23 @@ OpenCode usa los modelos de los proveedores (integraciones) que la persona conec
 
 | Qué | Cómo | Notas |
 |---|---|---|
-| Listar | `opencode --standalone api GET /api/integration` | `{data: [{id, name, methods: [{type: key|env|oauth|external, …}], connections: [{type: credential, id}|{type: env, name}]}]}`; 239 en 2.2.5. Con `key`, se conecta con clave; con `env`, las variables que lee; con `oauth`/`external` (un inicio de sesión en el navegador, un perfil de AWS), solo su terminal lo hace (`opencode auth login <id>`) |
+| Listar | `opencode --standalone api GET /api/integration` | `{data: [{id, name, methods: [{type: key|env|oauth|external, id, label, form}], connections: [{type: credential, id}|{type: env, name}]}]}`; 239 en 2.2.5. Con `key`, se conecta con clave; con `env`, las variables que lee; con `oauth` (una página en el navegador) o `external` (credenciales que la computadora ya tiene: un perfil de AWS, gcloud), Newen inicia sesión (abajo). `form`: preguntas `{key, title, description, required, placeholder, default, options: [{value, label, description}], when: [{key, op: "eq", value}]}`; una con `when` se pregunta solo con esa respuesta (Copilot: la URL de Enterprise) |
 | Conectar con clave | `opencode --standalone auth import`, con `[{id: "newen-<id>", integrationID, label: "Newen", active: true, value: {type: "key", key}}]` en stdin | `auth login --method key` pide la clave solo en una terminal ("API key input requires an interactive terminal") y `api POST …/connect/key` la llevaría en un argumento; `auth import` la lee de stdin, así que nunca está en la lista de procesos |
 | Desconectar | `opencode --standalone auth logout <id> <credencial>` | Sin la credencial abre un selector que pide terminal. Las credenciales salen de `connections` |
 | Modelos antes de una sesión | `opencode --standalone api GET /api/model` y `/api/model/default` | Cada modelo como `proveedor/modelo` (el id que toma `session/set_config_option` `model`), con sus `variants` como esfuerzos (los `thought_level` de la sesión) y el de por defecto marcado. La sesión dice solo los esfuerzos de su modelo actual |
 
-El OAuth de OpenCode (`POST /api/integration/<id>/connect/oauth` con `methodID`, que da `{attemptID, url, instructions, mode: auto|code}`) no se usa todavía: no se pudo verificar sin una cuenta. Esos proveedores dicen el comando de la terminal.
+**Iniciar sesión** (`AgentAdapter::provider_sign_in_run`, `newen-engine/src/sign_in.rs`). `auth login` sin terminal no lo hace ("Authentication form input requires an interactive terminal"), y un servidor privado (`--standalone`) olvida el intento entre pedidos: estos pasos van al **servicio de fondo** de OpenCode (`opencode api`, que lo arranca si no corre). Verificado con Copilot (dispositivo) el 2026-11-04, sin completarlo:
+
+| Paso | Pedido | Respuesta |
+|---|---|---|
+| Empezar | `POST /api/integration/<id>/connect/oauth` `{methodID, answer}` (o `…/connect/external` para un perfil, que conecta en el acto) | `{attemptID, url, instructions, mode: auto|code, time: {created, expires}}`; Copilot: `url` `https://github.com/login/device`, `instructions` "Enter code: XXXX-XXXX", `mode` `auto`, diez minutos. Sin una respuesta obligatoria: `InvalidRequestError` "Missing required form field: …" |
+| Seguir | `GET …/connect/oauth/<attempt>` cada 2 s, hasta 15 min | `{status: pending|complete|failed (message)|expired}` |
+| Código | `POST …/connect/oauth/<attempt>/complete` `{code}` (con `mode: code`) | sin cuerpo. El código, de un solo uso, es el único dato que va en un argumento |
+| Cancelar | `DELETE …/connect/oauth/<attempt>` | después, `IntegrationAttemptNotFoundError` |
+
+Newen abre `url` en el navegador (solo https), muestra `instructions` y, terminado, vuelve a listar los proveedores y los modelos. No se completó ningún inicio de sesión real: falta una cuenta para verificar el final de punta a punta.
+
+**Logos:** svgl.app por el nombre; si no tiene, el del catálogo de OpenCode, el de models.dev por su id (`https://models.dev/logos/<id>.svg`, 221 de 239 en 2.2.5; los demás dan un dibujo genérico, que se acepta). Casi todos son de un color (`currentColor`): para el tema oscuro se dibujan en tinta clara.
 
 ## Customize
 

@@ -9,7 +9,7 @@ new = [
     "With no agent installed, Newen shows how to install each one.",
     "The editor saves as Settings say: trimmed line ends, a final line break, autosave and format on save.",
     "Drag a card of the right panel by its grip to put it where you want it; Newen keeps that order.",
-    "Connect OpenCode's model providers with a key, from its page in Settings or the model menu.",
+    "Connect OpenCode's model providers from Settings or the model menu: with a key, or by signing in, as with GitHub Copilot.",
     "OpenCode's models and their efforts show before a session starts.",
 ]
 improved = [

@@ -6,10 +6,10 @@ use std::path::PathBuf;
 pub use newen_agent::{
     apply_task_tool, AgentCapabilities, AgentEvent, AgentOption, AgentSlashCommand, AuthState,
     ConfiguredServer, ContextCategory, ContextKind, ContextUsage, Decision, ExtensionKinds,
-    ExtensionOp, Extensions, FileChange, Marketplace, McpServer, McpSource, McpStatus, McpTool,
-    ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer, Provider, Skill,
-    Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, Todo, ToolContent, ToolPolicy,
-    ToolRule, Usage, UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
+    ExtensionOp, Extensions, FileChange, FormChoice, FormField, Marketplace, McpServer, McpSource,
+    McpStatus, McpTool, ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer,
+    Provider, SignInMethod, Skill, Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, Todo,
+    ToolContent, ToolPolicy, ToolRule, Usage, UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's
@@ -555,6 +555,19 @@ pub struct QueuedMessage {
     pub held: bool,
 }
 
+/// A provider's sign-in, as the person follows it: the page opened and what to do there, and
+/// whether a code comes back to paste; then done, or why not.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ProviderSignIn {
+    Waiting {
+        url: Option<String>,
+        instructions: Option<String>,
+        code: bool,
+    },
+    Done,
+    Failed(String),
+}
+
 /// A connector or plugin whose logo is wanted: its key (`mcp:<name>` or `plugin:<name>`), the
 /// name to look up, and the server's address when it has one.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -930,6 +943,24 @@ pub enum Intent {
         agent: String,
         provider: String,
         credentials: Vec<String>,
+    },
+    /// Sign in to a provider by one of its `sign_ins`, its form answered: the engine opens the
+    /// page and follows the attempt; answered by `Event::ProviderSignIn`.
+    ProviderSignIn {
+        agent: String,
+        provider: String,
+        method: String,
+        answers: Vec<(String, String)>,
+    },
+    /// The code the sign-in page gave, for the sign-in under way.
+    ProviderSignInCode {
+        agent: String,
+        provider: String,
+        code: String,
+    },
+    CancelProviderSignIn {
+        agent: String,
+        provider: String,
     },
     /// Servers the public MCP registry lists for `query`; answered by `Event::ServersFound`.
     FindServers {
@@ -1647,6 +1678,12 @@ pub enum Event {
     },
     /// The contribution calendar, or why it could not be had.
     GithubContributions(Result<ContributionCalendar, String>),
+    /// Where a provider's sign-in stands.
+    ProviderSignIn {
+        agent: String,
+        provider: String,
+        state: ProviderSignIn,
+    },
     /// An agent's model providers, or why they could not be listed or one not connected.
     Providers {
         agent: String,
@@ -1781,6 +1818,7 @@ impl Event {
             | Event::Servers { .. }
             | Event::ServersFound { .. }
             | Event::Providers { .. }
+            | Event::ProviderSignIn { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
             | Event::SignInUrl { .. }

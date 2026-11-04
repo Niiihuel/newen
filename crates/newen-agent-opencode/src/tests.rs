@@ -4,7 +4,7 @@
 
 use super::*;
 use newen_agent::AgentEvent::{self, *};
-use newen_agent::{Decision, InjectedServer};
+use newen_agent::{Decision, InjectedServer, SignInState, SignInStep};
 use newen_agent_acp::replay::{replay, Replayed};
 
 fn run(name: &str) -> Replayed {
@@ -446,18 +446,41 @@ fn providers_say_how_each_connects_and_which_are_connected() {
         (["newen-groq".to_owned()].as_slice(), true)
     );
     assert_eq!(groq.env, ["GROQ_API_KEY"]);
-    assert_eq!(groq.terminal, None);
+    assert!(groq.sign_ins.is_empty());
+    assert_eq!(
+        groq.logo.as_deref(),
+        Some("https://models.dev/logos/groq.svg")
+    );
     let anthropic = by("anthropic");
     assert!(anthropic.connected.is_empty());
     assert_eq!(anthropic.env_set.as_deref(), Some("ANTHROPIC_API_KEY"));
+    // A sign-in in the browser after a question, a second only for one answer of the first.
     let copilot = by("github-copilot");
     assert!(!copilot.key);
+    let device = &copilot.sign_ins[0];
+    assert_eq!((device.id.as_str(), device.browser), ("oauth:device", true));
+    assert_eq!(device.label, "Login with GitHub Copilot");
+    let (kind, url) = (&device.form[0], &device.form[1]);
+    assert_eq!(kind.key, "deploymentType");
     assert_eq!(
-        copilot.terminal.as_deref(),
-        Some("opencode auth login github-copilot")
+        kind.choices
+            .iter()
+            .map(|c| c.value.as_str())
+            .collect::<Vec<_>>(),
+        ["github.com", "enterprise"]
     );
-    assert!(by("openai").key && by("openai").terminal.is_some());
-    assert!(by("amazon-bedrock").terminal.is_some());
+    assert_eq!(
+        url.when,
+        [("deploymentType".to_owned(), "enterprise".to_owned())]
+    );
+    let openai = by("openai");
+    assert!(openai.key && openai.sign_ins.len() == 3);
+    // Credentials this computer has: no browser.
+    let bedrock = &by("amazon-bedrock").sign_ins[0];
+    assert_eq!(
+        (bedrock.id.as_str(), bedrock.browser),
+        ("external:aws-profile", false)
+    );
     // A failed request's body comes before its status line: nothing is made up of it.
     assert!(OpenCode::new()
         .providers("{\"_tag\":\"Error\"}\nHTTP 500 Internal Server Error")
@@ -507,4 +530,119 @@ fn models_come_with_their_efforts_and_the_default_before_a_session() {
     let bare = OpenCode::new().models_listed(&[fixture("models.json"), String::new()]);
     assert!(bare.iter().all(|m| !m.default));
     assert!(OpenCode::new().models_listed(&[String::new()]).is_empty());
+}
+
+/// A sign-in on OpenCode's background service, as it answered on 2026-11-04 (Copilot's device
+/// flow started, its status asked, then cancelled): each step a request, read back.
+#[test]
+fn a_sign_in_starts_is_followed_and_cancelled_on_the_service() {
+    let opencode = OpenCode::new();
+    let answers = [("deploymentType".to_owned(), "github.com".to_owned())];
+    let begin = SignInStep::Begin {
+        method: "oauth:device",
+        answers: &answers,
+    };
+    let run = opencode
+        .provider_sign_in_run("github-copilot", begin)
+        .unwrap();
+    assert_eq!(
+        run.args[..3],
+        [
+            "api",
+            "POST",
+            "/api/integration/github-copilot/connect/oauth"
+        ]
+    );
+    assert!(
+        !run.args.contains(&"--standalone".to_owned()),
+        "the service keeps the attempt"
+    );
+    let body: Value = serde_json::from_str(&run.args[4]).unwrap();
+    assert_eq!(
+        body,
+        json!({ "methodID": "device", "answer": { "deploymentType": "github.com" } })
+    );
+    let started = r#"{"location":{"directory":"/home/person"},"data":{"attemptID":"con_1a74","url":"https://github.com/login/device","instructions":"Enter code: 8787-8C73","mode":"auto","time":{"created":1793808268579,"expires":1793808868579}}}"#;
+    assert_eq!(
+        opencode.provider_sign_in_read(started),
+        SignInState::Waiting {
+            attempt: "con_1a74".into(),
+            url: Some("https://github.com/login/device".into()),
+            instructions: Some("Enter code: 8787-8C73".into()),
+            code: false,
+        }
+    );
+    let check = opencode
+        .provider_sign_in_run(
+            "github-copilot",
+            SignInStep::Check {
+                attempt: "con_1a74",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        check.args,
+        [
+            "api",
+            "GET",
+            "/api/integration/github-copilot/connect/oauth/con_1a74"
+        ]
+    );
+    let pending = r#"{"location":{"directory":"/home/person"},"data":{"status":"pending","time":{"created":1,"expires":2}}}"#;
+    assert_eq!(
+        opencode.provider_sign_in_read(pending),
+        SignInState::Pending
+    );
+    let read = |status: &str| {
+        opencode.provider_sign_in_read(&format!(
+            r#"{{"data":{{"status":"{status}","message":"no seat"}}}}"#
+        ))
+    };
+    assert_eq!(read("complete"), SignInState::Done);
+    assert_eq!(read("failed"), SignInState::Failed("no seat".into()));
+    assert_eq!(
+        read("expired"),
+        SignInState::Failed("The sign-in expired.".into())
+    );
+    let gone = "{\"_tag\":\"IntegrationAttemptNotFoundError\",\"message\":\"OAuth attempt not found: con_1a74\"}\nHTTP 404 No";
+    assert_eq!(
+        opencode.provider_sign_in_read(gone),
+        SignInState::Failed("OAuth attempt not found: con_1a74".into())
+    );
+    let cancel = opencode
+        .provider_sign_in_run(
+            "github-copilot",
+            SignInStep::Cancel {
+                attempt: "con_1a74",
+            },
+        )
+        .unwrap();
+    assert_eq!(cancel.args[1], "DELETE");
+    let code = opencode
+        .provider_sign_in_run(
+            "openai",
+            SignInStep::Code {
+                attempt: "a",
+                code: "xyz",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        code.args[2],
+        "/api/integration/openai/connect/oauth/a/complete"
+    );
+    // A profile connects at once, by its own endpoint.
+    let profile = [("profile".to_owned(), "work".to_owned())];
+    let external = SignInStep::Begin {
+        method: "external:aws-profile",
+        answers: &profile,
+    };
+    let run = opencode
+        .provider_sign_in_run("amazon-bedrock", external)
+        .unwrap();
+    assert_eq!(
+        run.args[2],
+        "/api/integration/amazon-bedrock/connect/external"
+    );
+    assert_eq!(opencode.provider_sign_in_read(""), SignInState::Done);
 }
