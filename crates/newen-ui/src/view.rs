@@ -1339,7 +1339,7 @@ fn file_view(
             tool(DOC_PREVIEW, icons::EYE, "Preview")
         });
     }
-    if document.editor.is_some() && !(document.markdown() && document.preview) {
+    if document.editor.is_some() && !document.rendered() {
         tools.push(tool(find::FIND_OPEN, icons::SEARCH, "Find in file"));
     }
     tools.push(tool(files::COPY, icons::COPY, "Copy file contents"));
@@ -1374,7 +1374,7 @@ fn file_view(
     column.push(match &document.editor {
         None if document.unreadable => note("This file can't be shown as text.", &[]),
         None => Element::spacer().size(Some(width), Some(below)),
-        Some(editor) if document.markdown() && document.preview => {
+        Some(editor) if document.rendered() => {
             let text = document.text().unwrap_or_default();
             let ids = code::PreviewIds {
                 id: "doc:preview-text",

@@ -2054,6 +2054,17 @@ impl Document {
         self.path.ends_with(".md") || self.path.ends_with(".markdown")
     }
 
+    /// A spreadsheet or a Word document, which the engine reads as Markdown: shown rendered,
+    /// never edited.
+    pub fn converted(&self) -> bool {
+        newen_files::office::converts(std::path::Path::new(&self.path))
+    }
+
+    /// Shown as rendered Markdown: a Markdown file in preview, or a converted one.
+    pub fn rendered(&self) -> bool {
+        self.converted() || self.markdown() && self.preview
+    }
+
     /// What the editor holds now.
     pub fn text(&self) -> Option<String> {
         let snapshot = self.editor.as_ref()?.snapshot().ok()?;

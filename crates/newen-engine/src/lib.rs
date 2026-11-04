@@ -4939,6 +4939,9 @@ fn size_of(path: &std::path::Path) -> u64 {
 /// The largest file the document pane opens.
 const DOCUMENT_LIMIT: u64 = 2 << 20;
 
+/// The largest spreadsheet or Word document it shows: its Markdown has a cap of its own.
+const CONVERTED_LIMIT: u64 = 64 << 20;
+
 /// Where `path` is inside `cwd`, or `None` when it would lead out of it: a document of a
 /// session is a file of its own folder.
 fn inside(cwd: &std::path::Path, path: &str) -> Option<std::path::PathBuf> {
@@ -4965,14 +4968,31 @@ fn inside(cwd: &std::path::Path, path: &str) -> Option<std::path::PathBuf> {
 
 fn read_text(cwd: &std::path::Path, path: &str) -> Option<String> {
     let file = inside(cwd, path)?;
-    if std::fs::metadata(&file).ok()?.len() > DOCUMENT_LIMIT {
+    let converted = newen_files::office::converts(&file);
+    let limit = if converted {
+        CONVERTED_LIMIT
+    } else {
+        DOCUMENT_LIMIT
+    };
+    if std::fs::metadata(&file).ok()?.len() > limit {
         return None;
+    }
+    if converted {
+        return Some(
+            newen_files::office::markdown(&file)
+                .unwrap_or_else(|error| format!("This file can't be read: {error}")),
+        );
     }
     String::from_utf8(std::fs::read(file).ok()?).ok()
 }
 
 fn write_text(cwd: &std::path::Path, path: &str, text: &str) -> Result<(), String> {
     let file = inside(cwd, path).ok_or("The file is not in the session's folder.")?;
+    // What the pane shows of a spreadsheet or a Word document is Markdown: writing it would
+    // replace the file.
+    if newen_files::office::converts(&file) {
+        return Err("This file is shown converted and can't be saved.".into());
+    }
     std::fs::write(file, text).map_err(|e| e.to_string())
 }
 
@@ -6058,6 +6078,15 @@ mod tests {
             assert_eq!(read_text(&root, outside), None, "{outside}");
             assert!(write_text(&root, outside, "x").is_err(), "{outside}");
         }
+        // A spreadsheet shows as Markdown, and that Markdown never replaces it.
+        std::fs::write(root.join("docs/book.xlsx"), "not a workbook").unwrap();
+        let shown = read_text(&root, "docs/book.xlsx").unwrap();
+        assert!(shown.starts_with("This file can't be read:"), "{shown}");
+        assert!(write_text(&root, "docs/book.xlsx", "x").is_err());
+        assert_eq!(
+            std::fs::read(root.join("docs/book.xlsx")).unwrap(),
+            b"not a workbook"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

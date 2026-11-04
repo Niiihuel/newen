@@ -4049,6 +4049,39 @@ fn the_trees_filter_finds_files_by_name_and_lines_after_a_question_mark() {
     assert!(!shows(&ui, "found:src/a.rs:41"));
 }
 
+/// A spreadsheet opens as the Markdown the engine makes of it, rendered, and with no way to edit
+/// it: no source to view and no find, so nothing to save over the file.
+#[test]
+fn a_spreadsheet_opens_rendered_and_is_never_edited() {
+    let (store, mut ui) = store_with_session();
+    let path = "data/book.xlsx";
+    assert!(
+        click(&store, &mut ui, &format!("doc:open:{path}")).contains(&Intent::ReadFile {
+            session: 1,
+            path: path.into()
+        })
+    );
+    ui.applied(&Event::FileRead {
+        session: 1,
+        path: path.into(),
+        text: Some("## Ventas\n\n| | A |\n|---|---|\n| 1 | Mes |\n".into()),
+    });
+    let document = ui.document().unwrap();
+    assert!(document.converted() && document.rendered());
+    settle(&store, &mut ui);
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    // Each cell is a text of its own: the table is drawn, not its pipes.
+    let drawn = |words: &str| {
+        (frame.commands.iter())
+            .any(|c| matches!(c, limn::DrawCommand::Text { text, .. } if text.trim() == words))
+    };
+    assert!(drawn("Ventas") && drawn("Mes") && drawn("A"));
+    let has = |id: &str| frame.regions.iter().any(|r| r.id == id);
+    assert!(has(crate::files::RELOAD));
+    assert!(!has(view::DOC_PREVIEW) && !has(newen_components::find::FIND_OPEN));
+}
+
 #[test]
 fn outputs_open_in_a_document_pane_that_saves_and_follows_the_agent() {
     use newen_model::{ChangeKind, FileEffect};

@@ -16,3 +16,13 @@ ignore = "0.4"
 trash = "5"
 # renameat2 with RENAME_NOREPLACE: a rename in the tree never replaces a file.
 libc = "0.2"
+# Reads spreadsheets (xlsx, xls, xlsb, ods) for the Files pane to show them as Markdown.
+calamine = { version = "0.38", default-features = false }
+# A Word document is a zip of XML parts (the engine's version, so no second copy).
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# Walks a Word document's XML; already in the build through resvg.
+roxmltree = "0.21"
+# Opens a Word 97-2003 document (.doc), an OLE compound file, for its text.
+cfb = "0.16"
+# A .doc's narrow text is Windows-1252; already in the build through calamine.
+encoding_rs = "0.8"
