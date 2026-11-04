@@ -815,6 +815,37 @@ fn result(store: &mut Store, call: &str, output: &str) {
 }
 
 #[test]
+fn a_delegated_agents_long_name_is_cut_with_an_ellipsis_not_faded() {
+    let (mut store, ui) = store_with_session();
+    let long = "Look through every crate for the places that still read the old setting ".repeat(4);
+    tool(
+        &mut store,
+        "a1",
+        "Agent",
+        serde_json::json!({ "description": long, "prompt": "Go." }),
+        None,
+    );
+    result(&mut store, "a1", "Done.");
+    let window = limn::Size::new(1100.0, 800.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let cut: Vec<&str> = (frame.commands.iter())
+        .filter_map(|command| match command {
+            limn::DrawCommand::Text { text, .. } if text.starts_with("Looked through") => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!cut.is_empty(), "the agent's row is drawn");
+    // As the sidebar cuts a name: the words that fit, then "…", never the whole run faded.
+    assert!(
+        cut.iter()
+            .all(|text| text.ends_with('\u{2026}') && text.len() < long.len()),
+        "{cut:?}"
+    );
+}
+
+#[test]
 fn the_task_tools_keep_a_list_and_no_steps() {
     let (mut store, _) = store_with_session();
     for (call, subject) in [("c1", "Create a.txt"), ("c2", "List the files")] {
@@ -9656,9 +9687,9 @@ fn waiting_store() -> (Store, Ui) {
 /// Under the turns, "Waiting for «…» · Codex" with the agent's name from its list: it sweeps a
 /// highlight while the other session works, and in a narrow column fades out before Cancel.
 #[test]
-fn a_wait_shimmers_under_the_turns_and_fades_before_its_cancel() {
+fn a_wait_shimmers_under_the_turns_and_is_cut_before_its_cancel() {
     let (store, ui) = waiting_store();
-    let words = "Waiting for \u{ab}hola como estas";
+    let words = "Waiting for \u{ab}hola";
     for width in [648.0, 1408.0] {
         let window = limn::Size::new(width, 844.0);
         let mut tree = UiTree::new(view(&store, &ui, window));
@@ -9666,32 +9697,22 @@ fn a_wait_shimmers_under_the_turns_and_fades_before_its_cancel() {
         tree.layout_at(window, start);
         let frame = tree.layout_at(window, start + std::time::Duration::from_millis(500));
         let cancel = region(&frame, "wait-cancel:1:2").expect("its Cancel");
-        let bands: Vec<(f32, f32, limn::Color)> = (frame.commands.iter())
-            .filter_map(|command| match command {
-                limn::DrawCommand::Text {
-                    text,
-                    color,
-                    position,
-                    ..
-                } if text.starts_with(words) => Some((position.x, position.y, *color)),
-                _ => None,
-            })
-            .collect();
-        assert!(!bands.is_empty(), "{width}: no wait row");
-        let mut inks = vec![];
-        for band in &bands {
-            if !inks.contains(&band.2) {
-                inks.push(band.2);
-            }
-        }
-        assert!(inks.len() > 1, "{width}: it shimmers");
-        let spans: Vec<_> = (text_spans(&frame).into_iter())
+        let spans = drawn_spans(&frame);
+        // The shimmer paints the name in bands, each cut at its own edge.
+        let mut edges: Vec<f32> = (spans.iter())
             .filter(|s| s.0.starts_with(words))
+            .map(|s| s.3)
             .collect();
-        assert!(spans.iter().all(|s| s.3 <= cancel.x), "{width}: {spans:?}");
-        if width == 1408.0 {
-            assert!(spans.iter().any(|s| s.0.ends_with("\u{bb} \u{b7} Codex")));
-        }
+        edges.dedup();
+        assert!(!edges.is_empty(), "{width}: no wait row");
+        assert!(edges.len() > 1, "{width}: it shimmers");
+        let row: Vec<_> = (spans.iter()).filter(|s| s.0.starts_with(words)).collect();
+        assert!(row.iter().all(|s| s.3 <= cancel.x), "{width}: {row:?}");
+        // Too long for the row at either width, it is cut with "…" as the sidebar cuts a name.
+        assert!(
+            row.iter().all(|s| s.0.ends_with('\u{2026}')),
+            "{width}: {row:?}"
+        );
     }
 }
 
