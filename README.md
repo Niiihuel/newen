@@ -18,6 +18,8 @@ OpenCode and Hermes Agent), written in Rust and drawn with
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey)](#download-and-install)
 [![Sponsors](https://img.shields.io/github/sponsors/Niiihuel?label=Sponsors&logo=githubsponsors)](https://github.com/sponsors/Niiihuel)
 
+[Website](https://newen-web.newen-web.workers.dev) ·
+[Docs](https://newen-web.newen-web.workers.dev/docs/) ·
 [Download](https://github.com/Niiihuel/newen/releases/latest) ·
 [Features](#features) ·
 [Install](#download-and-install) ·

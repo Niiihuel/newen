@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "newen: a native desktop app for coding-agent CLIs, drawn with limn."
+homepage = "https://newen-web.newen-web.workers.dev"
+documentation = "https://newen-web.newen-web.workers.dev/docs/"
+repository = "https://github.com/Niiihuel/newen"
 
 [dependencies]
 limn.workspace = true
