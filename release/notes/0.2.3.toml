@@ -1,0 +1,8 @@
+# The notes of 0.2.3 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Settings › Storage, also /storage, shows what Newen keeps on this computer and frees what no longer serves: old sessions, unused worktrees, caches.",
+]
+improved = [
+    "Large spreadsheets open much faster: only the rows shown are read.",
+]
