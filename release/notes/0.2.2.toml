@@ -1,0 +1,12 @@
+# The notes of 0.2.2 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Spreadsheets (xlsx, xls, xlsb, ods) and Word documents (docx, doc) open in the Files pane, read as tables, headings, lists and text.",
+    "Tables in an agent's reply are drawn as tables, with a bold header and columns that scroll sideways when they don't fit.",
+]
+improved = [
+    "The model menu groups models under their provider, and a name too long for the menu shows whole in a tooltip.",
+]
+fixed = [
+    "A long greeting on a new page gets smaller in a narrow window instead of running past the card.",
+]
