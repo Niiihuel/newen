@@ -15,7 +15,6 @@ Newen follows it on the same versions.
 | [#180](https://github.com/Niiihuel/limn/pull/180) | `feat/code-look` | newen-ide's look: a diff in the editor's syntax inks, fold chevrons shown over the gutter | open |
 | [#181](https://github.com/Niiihuel/limn/pull/181) | `feat/rust-1.99` | Rust 1.99.1, the toolchain Newen builds with | open |
 | [#182](https://github.com/Niiihuel/limn/pull/182) | `feat/drag-handle` | the right panel's cards moved by their grip, with the system's hand cursors | open |
-| [#184](https://github.com/Niiihuel/limn/pull/184) | `feat/markdown-tables` | pipe tables in Markdown: spreadsheets and Word documents in the Files pane, and tables in replies | open |
 
 Keeping it so:
 
