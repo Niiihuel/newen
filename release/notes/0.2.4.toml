@@ -1,0 +1,18 @@
+# The notes of 0.2.4 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Agents run commands in a Terminal tab you see: type a sudo password or answer a yes/no there, and the agent reads how it went. It never sees the password.",
+    "The Progress card lights up step by step: a dot for each step, a line that fills as they finish and a shimmer on the one under way.",
+]
+improved = [
+    "Used in this session names the connectors used, each with its logo.",
+    "Every model's top effort level gets the animated track, OpenCode's and Hermes' models too.",
+    "A model's hint in the model menu opens beside the menu, no longer over the rows above.",
+]
+fixed = [
+    "The Terminal works with fish 4: it shows the prompt and takes what you type.",
+    "A background command's output opens in the Terminal again.",
+    "A question of several pages shows its Next arrow instead of a white box.",
+    "A session opened after another no longer shows the other agent's model.",
+    "Long web searches stay inside their card in Used in this session.",
+]
