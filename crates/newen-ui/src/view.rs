@@ -515,7 +515,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
                 composer,
                 Element::spacer().size(None, Some(12.0)),
             ],
-            None => home(ui, below, composer),
+            None => home(ui, width, below, composer),
         };
         row.push(Element::column(body).size(Some(layout.main), Some(below)));
     }
@@ -2906,10 +2906,13 @@ fn status_dot(session: &Session) -> Element {
 /// A new session's page: the greeting and the composer as one block, centered across the
 /// column with the greeting's line 42 % down it, as a chat app's new page sits, never nearer
 /// the top than 24 px. The greeting is words that follow the local hour and day
-/// (`greeting`), 40 px in the interface's face: limn bundles no serif.
-fn home(ui: &Ui, height: f32, composer: Element) -> Vec<Element> {
+/// (`greeting`), 40 px in the interface's face: limn bundles no serif. A long one ("Burning
+/// the midnight oil, Ana?") gets smaller in a narrow column rather than run past the card.
+fn home(ui: &Ui, width: f32, height: f32, composer: Element) -> Vec<Element> {
     let greeting = crate::greeting::now(ui.utc_offset, ui.name.as_deref());
-    let line = text(greeting).font_size(40.0);
+    // About 0.6 of its size a character.
+    let size = (width / (greeting.chars().count() as f32 * 0.6)).clamp(24.0, 40.0);
+    let line = text(greeting).font_size(size);
     let top = (height * 0.42 - 48.0).max(24.0);
     vec![
         Element::spacer().size(None, Some(24.0)),
