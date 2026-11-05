@@ -1,7 +1,8 @@
 //! A workbook (xlsx, xlsm, xls, xlsb, ods) as Markdown: each sheet under its name, as a table
 //! the way the spreadsheet shows it: the columns by letter, the rows by number.
 use super::{inline, table};
-use calamine::{Data, Range, Reader};
+use calamine::{Cell, Data, Range, Reader, Sheets, Xlsx};
+use std::io::{Read, Seek};
 use std::path::Path;
 
 /// Of the 20,000 characters limn's Markdown shows, what the sheets share, so that every sheet
@@ -11,6 +12,24 @@ const SHOWN: usize = 18_000;
 const LEAST: usize = 1_500;
 /// The columns of a sheet that are shown, A to Z.
 const COLUMNS: usize = 26;
+/// The rows of an .xlsx sheet read from its first: far more than 18,000 characters hold, so a
+/// long sheet is never read whole.
+const READ_ROWS: u32 = 2_000;
+
+/// What was read of a sheet: its values, its formulas, and what of it was not read.
+struct Grid {
+    values: Range<Data>,
+    formulas: Range<String>,
+    rest: Rest,
+}
+
+/// What of a sheet was not read: nothing, its rows up to where it says it ends, or rows it
+/// does not say how many.
+enum Rest {
+    Nothing,
+    To(u32, u32),
+    Unknown,
+}
 
 pub(super) fn reads(path: &Path) -> bool {
     matches!(
@@ -23,20 +42,61 @@ pub(super) fn markdown(path: &Path) -> Result<String, String> {
     let mut book = calamine::open_workbook_auto(path).map_err(|e| e.to_string())?;
     let mut sheets = vec![];
     for name in book.sheet_names() {
-        let values = book.worksheet_range(&name).map_err(|e| e.to_string())?;
-        // A sheet with no formulas, or a format that keeps none, has an empty range of them.
-        let formulas = book.worksheet_formula(&name).unwrap_or_default();
-        sheets.push((name, values, formulas));
+        let read = if let Sheets::Xlsx(xlsx) = &mut book {
+            top_of(xlsx, &name)?
+        } else {
+            Grid {
+                values: book.worksheet_range(&name).map_err(|e| e.to_string())?,
+                // A sheet with no formulas, or a format that keeps none, has an empty range.
+                formulas: book.worksheet_formula(&name).unwrap_or_default(),
+                rest: Rest::Nothing,
+            }
+        };
+        sheets.push((name, read));
     }
     let wanted: Vec<usize> = (sheets.iter())
-        .map(|(_, values, formulas)| sheet(values, formulas, SHOWN).chars().count())
+        .map(|(_, read)| sheet(read, SHOWN).chars().count())
         .collect();
     let mut out = String::new();
-    for ((name, values, formulas), budget) in sheets.iter().zip(share(&wanted)) {
+    for ((name, read), budget) in sheets.iter().zip(share(&wanted)) {
         out += &format!("## {}\n\n", inline(name));
-        out += &sheet(values, formulas, budget);
+        out += &sheet(read, budget);
     }
     Ok(out)
+}
+
+/// The first rows of an .xlsx sheet, read cell by cell with their formulas in one pass, and
+/// where the sheet says it ends.
+fn top_of<RS: Read + Seek>(book: &mut Xlsx<RS>, name: &str) -> Result<Grid, String> {
+    let mut cells = book
+        .worksheet_cells_reader(name)
+        .map_err(|e| e.to_string())?;
+    let declared = cells.dimensions().end;
+    let (mut values, mut formulas) = (vec![], vec![]);
+    let (mut first, mut rest) = (None, Rest::Nothing);
+    while let Some(cell) = cells.next_cell_with_formula().map_err(|e| e.to_string())? {
+        // Cells come row by row.
+        let last = *first.get_or_insert(cell.pos.0) + READ_ROWS;
+        if cell.pos.0 > last {
+            rest = match declared.0 > last {
+                true => Rest::To(declared.0, declared.1),
+                false => Rest::Unknown,
+            };
+            break;
+        }
+        if let Some(formula) = cell.formula.filter(|f| !f.is_empty()) {
+            formulas.push(Cell::new(cell.pos, formula));
+        }
+        let value = Data::from(cell.value);
+        if value != Data::Empty {
+            values.push(Cell::new(cell.pos, value));
+        }
+    }
+    Ok(Grid {
+        values: Range::from_sparse(values),
+        formulas: Range::from_sparse(formulas),
+        rest,
+    })
 }
 
 /// What each sheet may use of `SHOWN`: the ones that want less than an even share have it, and
@@ -69,7 +129,8 @@ fn share(wanted: &[usize]) -> Vec<usize> {
 /// The cells from the first that holds something to the last, a value or else the formula
 /// that has none saved (a file written by a program that does not compute them): the rows that
 /// fit in `budget` characters.
-fn sheet(values: &Range<Data>, formulas: &Range<String>, budget: usize) -> String {
+fn sheet(grid: &Grid, budget: usize) -> String {
+    let (values, formulas) = (&grid.values, &grid.formulas);
     let corners = [
         values.start().zip(values.end()),
         formulas.start().zip(formulas.end()),
@@ -79,7 +140,15 @@ fn sheet(values: &Range<Data>, formulas: &Range<String>, budget: usize) -> Strin
     else {
         return "This sheet is empty.\n\n".into();
     };
-    let (rows, columns) = ((bottom - top + 1) as usize, (right - left + 1) as usize);
+    // A sheet read only at its top goes on to where it says it ends.
+    let (end_row, end_column) = match grid.rest {
+        Rest::To(row, column) => (row.max(bottom), column.max(right)),
+        Rest::Nothing | Rest::Unknown => (bottom, right),
+    };
+    let (rows, columns) = (
+        (end_row - top + 1) as usize,
+        (end_column - left + 1) as usize,
+    );
     let shown_columns = columns.min(COLUMNS);
     let mut lines = vec![std::iter::once(String::new())
         .chain((0..shown_columns).map(|c| column(left as usize + c)))
@@ -106,7 +175,12 @@ fn sheet(values: &Range<Data>, formulas: &Range<String>, budget: usize) -> Strin
     }
     let shown_rows = lines.len() - 1;
     let mut out = table(&lines);
-    if shown_rows < rows || shown_columns < columns {
+    let more = matches!(grid.rest, Rest::Unknown);
+    if more {
+        out += &format!(
+            "Showing the first {shown_rows} rows, of more, and {shown_columns} of {columns} columns.\n\n"
+        );
+    } else if shown_rows < rows || shown_columns < columns {
         out += &format!(
             "Showing the first {shown_rows} of {rows} rows and {shown_columns} of {columns} columns.\n\n"
         );
@@ -185,7 +259,12 @@ mod tests {
                 values.set_value((row, col), Data::Int(row as i64));
             }
         }
-        let shown = sheet(&values, &Range::default(), LEAST);
+        let grid = Grid {
+            values,
+            formulas: Range::default(),
+            rest: Rest::Nothing,
+        };
+        let shown = sheet(&grid, LEAST);
         assert!(shown.chars().count() <= LEAST + 200, "{}", shown.len());
         assert!(shown.contains("| 1 | 0 | 0 | 0 |"));
         let rows = shown
@@ -218,10 +297,8 @@ mod tests {
         );
     }
 
-    /// A sheet by its letters and row numbers from where its cells start: numbers, text, a
-    /// boolean, a cell that holds Markdown's marks, and a formula with no value saved.
-    #[test]
-    fn a_workbook_reads_as_a_table_per_sheet() {
+    /// A workbook of one sheet, "Ventas", with this worksheet XML.
+    fn book(name: &str, sheet: &str) -> std::path::PathBuf {
         let parts = [
             (
                 "[Content_Types].xml",
@@ -239,20 +316,51 @@ mod tests {
                 "xl/_rels/workbook.xml.rels",
                 r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
             ),
-            (
-                "xl/worksheets/sheet1.xml",
-                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+            ("xl/worksheets/sheet1.xml", sheet),
+        ];
+        zipped(name, &parts)
+    }
+
+    /// A sheet by its letters and row numbers from where its cells start: numbers, text, a
+    /// boolean, a cell that holds Markdown's marks, and a formula with no value saved.
+    #[test]
+    fn a_workbook_reads_as_a_table_per_sheet() {
+        let path = book(
+            "a.xlsx",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
                     <row r="2"><c r="B2" t="inlineStr"><is><t>Mes</t></is></c><c r="C2" t="inlineStr"><is><t>Total</t></is></c></row>
                     <row r="3"><c r="B3" t="inlineStr"><is><t>a|*b*</t></is></c><c r="C3"><v>1.5</v></c><c r="D3" t="b"><v>1</v></c></row>
                     <row r="4"><c r="E4"><f>C3*2</f></c></row>
                 </sheetData></worksheet>"#,
-            ),
-        ];
-        let path = zipped("a.xlsx", &parts);
+        );
         assert_eq!(
             markdown(&path).unwrap(),
             "## Ventas\n\n|  | B | C | D | E |\n|---|---|---|---|---|\n| 2 | Mes | Total |  |  |\n\
              | 3 | a\\|\\*b\\* | 1.5 | TRUE |  |\n| 4 |  |  |  | =C3\\*2 |\n\n"
         );
+    }
+
+    /// A long .xlsx sheet is read only at its top: the rows it says it has, or "of more"
+    /// when it does not say.
+    #[test]
+    fn a_long_sheet_is_read_only_at_its_top() {
+        let rows: String = (1..=READ_ROWS + 100)
+            .map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#))
+            .collect();
+        let sheet = |dimension: &str| {
+            format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{dimension}<sheetData>{rows}</sheetData></worksheet>"#
+            )
+        };
+        let said = book("said.xlsx", &sheet(r#"<dimension ref="A1:A5000"/>"#));
+        let shown = markdown(&said).unwrap();
+        assert!(
+            shown.contains(" of 5000 rows and 1 of 1 columns."),
+            "{shown}"
+        );
+        let unsaid = book("unsaid.xlsx", &sheet(""));
+        assert!(markdown(&unsaid)
+            .unwrap()
+            .contains(" rows, of more, and 1 of 1 columns."));
     }
 }
