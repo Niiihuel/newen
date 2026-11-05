@@ -13371,6 +13371,21 @@ fn storage_lists_what_newen_keeps_and_frees_only_what_is_inactive() {
     ] {
         assert!(drawn(&ui, words), "{words}");
     }
+    // Every kind's Details ends where Open folder does, whether or not something can go.
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let right = |id: &str| {
+        let r = (frame.regions.iter())
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("{id}"));
+        r.rect.x + r.rect.width
+    };
+    let edge = right(view::SETTINGS_STORAGE_OPEN);
+    for kind in ["sessions", "history", "worktrees", "app", "caches"] {
+        assert!(
+            (right(&format!("storage:details:{kind}")) - edge).abs() < 1.0,
+            "{kind}"
+        );
+    }
     // Details lists the inactive sessions first.
     click(&store, &mut ui, "storage:details:sessions");
     assert!(drawn(&ui, "Task 4") && drawn(&ui, "inactive"));

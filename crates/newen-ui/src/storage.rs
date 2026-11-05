@@ -244,13 +244,25 @@ fn detail(name: String, note: String, bytes: u64) -> Element {
 /// A kind's row: its name and what it holds, then its size, Details, and what can go.
 fn row(ui: &Ui, part: Part, title: &str, about: String, bytes: u64, free: Option<&str>) -> Setting {
     let palette = look::palette();
-    // The size in a column of its own and the buttons after it, so every kind's line up.
+    // The size in a column of its own at the start, and Details at the end, at the page's right
+    // edge as Refresh and Open folder are: every kind's line up, what can go just before Details.
     let size = Element::row(vec![
         Element::spacer().flex(1.0),
         muted(view::human_bytes(bytes)).centered_y(),
     ])
     .size(Some(SIZE), None);
-    let mut controls = vec![size.centered_y()];
+    let mut controls = vec![size.centered_y(), Element::spacer().flex(1.0)];
+    if ui.storage_view.working == Some(part) {
+        controls.push(
+            limn::Spinner::new(format!("storage:working:{}", part.key()), look::muted())
+                .size(14.0)
+                .render()
+                .centered_y(),
+        );
+    } else if let Some(label) = free {
+        let id = format!("{CLEAR}{}", part.key());
+        controls.push(keyed_button(&id, label, "", false, true, palette).centered_y());
+    }
     let open = ui.storage_view.details.contains(&part);
     controls.push(
         keyed_button(
@@ -263,17 +275,6 @@ fn row(ui: &Ui, part: Part, title: &str, about: String, bytes: u64, free: Option
         )
         .centered_y(),
     );
-    if ui.storage_view.working == Some(part) {
-        controls.push(
-            limn::Spinner::new(format!("storage:working:{}", part.key()), look::muted())
-                .size(14.0)
-                .render()
-                .centered_y(),
-        );
-    } else if let Some(label) = free {
-        let id = format!("{CLEAR}{}", part.key());
-        controls.push(keyed_button(&id, label, "", false, true, palette).centered_y());
-    }
     setting(
         title,
         &about,
