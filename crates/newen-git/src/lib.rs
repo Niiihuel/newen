@@ -22,12 +22,7 @@ impl Shadow {
     /// The shadow of `work`, kept under `root` (created on first use).
     pub fn open(root: &Path, work: &Path) -> io::Result<Self> {
         let work = work.canonicalize()?;
-        let name: String = work
-            .to_string_lossy()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let git_dir = root.join(format!("{}.git", name.trim_matches('-')));
+        let git_dir = shadow_dir(root, &work);
         let shadow = Self { git_dir, work };
         if !shadow.git_dir.join("HEAD").exists() {
             std::fs::create_dir_all(&shadow.git_dir)?;
@@ -390,16 +385,137 @@ pub fn branch(dir: &Path) -> Option<String> {
     (output.status.success() && !name.is_empty()).then_some(name)
 }
 
-/// The repository `dir` belongs to, the same for each of its worktrees: its common git
-/// folder, absolute.
-pub fn common_dir(dir: &Path) -> Option<PathBuf> {
+/// Where under `root` the shadow repository of the folder `work` (absolute, as canonicalized)
+/// is kept: its path with every other character a `-`.
+pub fn shadow_dir(root: &Path, work: &Path) -> PathBuf {
+    let name: String = (work.to_string_lossy().chars())
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    root.join(format!("{}.git", name.trim_matches('-')))
+}
+
+/// A worktree of a repository, as `git worktree list` says it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    pub head: String,
+    pub branch: Option<String>,
+    pub locked: bool,
+}
+
+/// The worktrees of the repository `dir` is in, its main one left out.
+pub fn worktrees(dir: &Path) -> Vec<Worktree> {
+    // `-z`: each line ends in a NUL, so a path may hold a line break; a worktree ends in two.
+    let Some(listed) = git_in(dir, &["worktree", "list", "--porcelain", "-z"]) else {
+        return vec![];
+    };
+    let mut all = vec![];
+    for block in listed.split("\0\0") {
+        let mut worktree = Worktree {
+            path: PathBuf::new(),
+            head: String::new(),
+            branch: None,
+            locked: false,
+        };
+        for line in block.split('\0') {
+            let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+            match key {
+                "worktree" => worktree.path = PathBuf::from(value),
+                "HEAD" => worktree.head = value.to_owned(),
+                "branch" => {
+                    worktree.branch = Some(value.trim_start_matches("refs/heads/").to_owned())
+                }
+                "locked" => worktree.locked = true,
+                _ => {}
+            }
+        }
+        if !worktree.path.as_os_str().is_empty() {
+            all.push(worktree);
+        }
+    }
+    // The first is the main worktree.
+    all.into_iter().skip(1).collect()
+}
+
+/// Nothing in `dir`'s worktree is uncommitted: untracked files count whatever the
+/// repository's `status.showUntrackedFiles` says, and so do submodules' changes.
+pub fn is_clean(dir: &Path) -> bool {
+    let args = [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ];
+    git_in(dir, &args).is_some_and(|s| s.trim().is_empty())
+}
+
+/// Some branch, remote branch or tag holds `commit`: a worktree at it loses no commit when
+/// it goes.
+pub fn is_kept(dir: &Path, commit: &str) -> bool {
+    let contains = format!("--contains={commit}");
+    let args = [
+        "for-each-ref",
+        "--count=1",
+        &contains,
+        "refs/heads",
+        "refs/remotes",
+        "refs/tags",
+    ];
+    git_in(dir, &args).is_some_and(|refs| !refs.trim().is_empty())
+}
+
+/// When the git state of `dir`'s worktree last changed: its HEAD, its index or its log.
+pub fn changed_at(dir: &Path) -> Option<std::time::SystemTime> {
+    let git_dir = PathBuf::from(git_in(dir, &["rev-parse", "--absolute-git-dir"])?.trim());
+    (["HEAD", "index", "logs/HEAD"].iter())
+        .filter_map(|name| std::fs::metadata(git_dir.join(name)).ok()?.modified().ok())
+        .max()
+}
+
+/// Remove the worktree at `path` from its repository, only if [`is_clean`]: git itself lets
+/// untracked files go when the repository hides them from `status`. Its branch stays; the
+/// files git ignores in it go.
+pub fn remove_worktree(path: &Path) -> io::Result<()> {
+    if !is_clean(path) {
+        return Err(io::Error::other("it has changes"));
+    }
+    let common = common_dir(path).ok_or_else(|| io::Error::other("not a worktree"))?;
     let output = newen_files::command("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .args(["worktree", "remove"])
+        .arg(path)
+        .current_dir(common)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ))
+    }
+}
+
+/// What `git args` prints in `dir`, when it succeeds. It only reads: without the optional
+/// locks, `status` neither takes the index's lock (an agent's commit there would fail) nor
+/// rewrites it.
+fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
+    let output = newen_files::command("git")
+        .arg("--no-optional-locks")
+        .args(args)
         .current_dir(dir)
         .output()
         .ok()?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (output.status.success() && !path.is_empty()).then(|| PathBuf::from(path))
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The repository `dir` belongs to, the same for each of its worktrees: its common git
+/// folder, absolute.
+pub fn common_dir(dir: &Path) -> Option<PathBuf> {
+    let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+    let path = git_in(dir, &args)?.trim().to_owned();
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 #[cfg(test)]
@@ -496,6 +612,97 @@ mod tests {
         assert_eq!(working_text(&inner, "big.txt"), None);
         assert_eq!(working_text(&inner, "/etc/hostname"), None);
         assert_eq!(working_text(&inner, "../shadow/HEAD"), None);
+    }
+
+    /// A repository's worktrees, its main one left out: one clean on a branch, one with a
+    /// change, one detached at a commit no ref holds; only the clean one goes, its branch kept.
+    #[test]
+    fn worktrees_are_listed_and_only_a_clean_one_is_removed() {
+        let (_, work) = folder("worktrees");
+        let git = |dir: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                ok.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&ok.stderr)
+            );
+            String::from_utf8_lossy(&ok.stdout).trim().to_owned()
+        };
+        git(&work, &["init", "-q", "-b", "main"]);
+        fs::write(work.join("a.txt"), "a\n").unwrap();
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-q", "-m", "a"]);
+        let base = work.parent().unwrap();
+        let (clean, dirty, loose) = (base.join("clean"), base.join("dirty"), base.join("loose"));
+        git(
+            &work,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat",
+                clean.to_str().unwrap(),
+            ],
+        );
+        git(
+            &work,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "wip",
+                dirty.to_str().unwrap(),
+            ],
+        );
+        fs::write(dirty.join("b.txt"), "b\n").unwrap();
+        git(
+            &work,
+            &["worktree", "add", "-q", "--detach", loose.to_str().unwrap()],
+        );
+        git(
+            &loose,
+            &["commit", "-q", "--allow-empty", "-m", "only here"],
+        );
+        let listed = worktrees(&work);
+        let names: Vec<_> = listed
+            .iter()
+            .map(|w| w.path.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["clean", "dirty", "loose"]);
+        assert_eq!(listed[0].branch.as_deref(), Some("feat"));
+        assert_eq!(listed[2].branch, None);
+        assert!(is_clean(&clean) && !is_clean(&dirty));
+        // An untracked file counts even where the repository hides them from `status`.
+        git(&work, &["config", "status.showUntrackedFiles", "no"]);
+        assert!(!is_clean(&dirty));
+        // Reading it leaves its index as it was: its last change stays.
+        let before = changed_at(&clean);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(clean.join("a.txt"), "a\n").unwrap();
+        assert!(is_clean(&clean));
+        assert_eq!(changed_at(&clean), before);
+        assert!(is_kept(&clean, &listed[0].head));
+        assert!(!is_kept(&loose, &git(&loose, &["rev-parse", "HEAD"])));
+        assert!(changed_at(&clean).is_some());
+        assert!(remove_worktree(&dirty).is_err() && dirty.exists());
+        remove_worktree(&clean).unwrap();
+        assert!(!clean.exists());
+        assert_eq!(git(&work, &["branch", "--list", "feat"]), "feat");
+        assert_eq!(worktrees(&work).len(), 2);
     }
 
     #[test]

@@ -17,6 +17,7 @@ mod pixels;
 mod providers;
 pub mod remote;
 mod slash;
+mod storage;
 mod terminals;
 pub mod tour;
 mod updates;
@@ -240,6 +241,16 @@ pub struct Task {
 }
 
 impl Session {
+    /// When it last had a message, in seconds since 1970; `None` when none says.
+    pub fn last_message_at(&self) -> Option<u64> {
+        (self.items.iter())
+            .filter_map(|item| match item {
+                Item::User { at, .. } | Item::Assistant { at, .. } => *at,
+                _ => None,
+            })
+            .max()
+    }
+
     /// Whether its agent is at work on a turn, or waiting on the person within one.
     pub fn working(&self) -> bool {
         matches!(
@@ -664,7 +675,7 @@ impl Store {
             | Event::GithubCode { .. }
             | Event::GithubFailed { .. }
             | Event::GithubContributions(_)
-            | Event::Storage { .. }
+            | Event::Storage(_)
             | Event::Restored
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
@@ -1483,8 +1494,10 @@ pub struct Ui {
     pub settings_page: Option<String>,
     pub settings_query: String,
     pub settings_menu: Option<String>,
-    /// Where Newen keeps its data and how much it takes, as last measured.
-    pub storage: Option<(PathBuf, u64)>,
+    /// What Newen keeps on this computer, by kind, as last measured (Settings › Storage).
+    pub storage: Option<newen_model::StorageReport>,
+    /// What the Storage page is doing.
+    pub storage_view: storage::View,
     /// Why the last change in Settings was not kept, until the next one.
     pub settings_error: Option<String>,
     /// Each agent's plugins and skills, as the engine last read them, by agent id.
@@ -2265,6 +2278,7 @@ impl Ui {
             settings_query: String::new(),
             settings_menu: None,
             storage: None,
+            storage_view: storage::View::default(),
             settings_error: None,
             extensions: std::collections::HashMap::new(),
             connectors: Connectors::default(),
@@ -2847,11 +2861,13 @@ impl Ui {
     pub fn applied(&mut self, event: &Event) -> Vec<Intent> {
         mention::heard(self, event);
         providers::heard(self, event);
+        let measure = storage::heard(self, event);
         updates::heard(self, event);
         whats_new::heard(self, event);
         tour::heard(self, event);
         remote::heard(self, event);
         let mut intents = account::heard(self, event);
+        intents.extend(measure);
         intents.extend(github::heard(self, event));
         intents.extend(files::heard(self, event));
         intents.extend(self.mcp_heard(event));
@@ -2960,10 +2976,6 @@ impl Ui {
         if let Event::Logo { key, light, dark } = event {
             self.logos
                 .insert(key.clone(), (light.clone(), dark.clone()));
-            return vec![];
-        }
-        if let Event::Storage { path, bytes } = event {
-            self.storage = Some((path.clone(), *bytes));
             return vec![];
         }
         if let Event::SettingsNotSaved { error } = event {
@@ -4109,6 +4121,9 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         return intents;
     }
     if let Some(intents) = connectors_clicked(ui, id) {
+        return intents;
+    }
+    if let Some(intents) = storage::clicked(store, ui, id) {
         return intents;
     }
     if let Some(intents) = settings_clicked(ui, id) {
@@ -6039,7 +6054,7 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         ui.account_menu = false;
         ui.settings_page = Some(view::SETTINGS_FIRST.into());
         ui.settings_query.clear();
-        return Some(vec![Intent::MeasureStorage]);
+        return Some(vec![]);
     }
     ui.settings_page.as_ref()?;
     if id == view::SETTINGS_CLOSE {
@@ -6184,15 +6199,7 @@ pub fn inactive(store: &Store, days: u32, now: u64) -> Vec<SessionId> {
     let limit = now.saturating_sub(u64::from(days) * 86_400);
     (store.sessions.iter())
         .filter(|s| !s.archived && !s.pinned && !s.working())
-        .filter(|s| {
-            let last = (s.items.iter())
-                .filter_map(|i| match i {
-                    Item::User { at, .. } | Item::Assistant { at, .. } => *at,
-                    _ => None,
-                })
-                .max();
-            last.is_some_and(|last| last < limit)
-        })
+        .filter(|s| s.last_message_at().is_some_and(|last| last < limit))
         .map(|s| s.id)
         .collect()
 }

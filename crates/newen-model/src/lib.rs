@@ -615,6 +615,70 @@ pub struct ContributionCalendar {
     pub weeks: Vec<[Option<ContributionDay>; 7]>,
 }
 
+/// Days without a message after which a session is inactive, and without a change after which
+/// a worktree no active session works in is unused (Settings › Storage).
+pub const STORAGE_IDLE_DAYS: u64 = 30;
+
+/// What Newen keeps on this computer, by kind, as Settings › Storage lists it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StorageReport {
+    /// Newen's data folder, and all it takes.
+    pub root: PathBuf,
+    pub total: u64,
+    /// The sessions' conversations and the pictures their tools gave back: all of it, then
+    /// about how much each session takes.
+    pub sessions: u64,
+    pub by_session: Vec<(SessionId, u64)>,
+    /// What each folder's files were before a turn (its shadow repository).
+    pub history: Vec<StoredHistory>,
+    /// The worktrees of the repositories the sessions work in, their main one left out.
+    pub worktrees: Vec<StoredWorktree>,
+    /// Newen itself: its versions, and the programs it downloaded. Nothing to free.
+    pub app: Vec<(String, u64)>,
+    /// What is fetched or written again when needed: logos, the browser's cache, logs; and how
+    /// much of it Clear frees.
+    pub caches: Vec<(String, u64)>,
+    pub clearable_caches: u64,
+    /// What the last clear could not free, and why.
+    pub failed: Vec<String>,
+}
+
+/// One folder's file history.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StoredHistory {
+    /// The folder, when a session works in it; else the shadow repository's own name.
+    pub name: String,
+    pub bytes: u64,
+    /// A session works in the folder: its history stays.
+    pub used: bool,
+}
+
+/// A worktree of a repository a session works in.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StoredWorktree {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub bytes: u64,
+    /// Nothing in it is uncommitted.
+    pub clean: bool,
+    /// Days since anything in its git state changed.
+    pub idle_days: u64,
+    /// Clean, unlocked, its commits held by a branch, remote branch or tag, no active session
+    /// in it or around it, and no change for `STORAGE_IDLE_DAYS`: removing it loses no work.
+    pub unused: bool,
+}
+
+/// What Settings › Storage frees.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum StorageClear {
+    /// The file history of folders no session works in.
+    History,
+    /// These worktrees, each removed only if still unused.
+    Worktrees(Vec<PathBuf>),
+    /// Logos now, the browser's cache at the next start.
+    Caches,
+}
+
 /// What the UI asks of the engine.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Intent {
@@ -838,8 +902,17 @@ pub enum Intent {
     /// Keep these settings and act on them (start at login, keep awake…); answered by
     /// `Event::Settings`.
     SaveSettings(Settings),
-    /// How much room Newen's own data takes; answered by `Event::Storage`.
-    MeasureStorage,
+    /// What Newen keeps on this computer, by kind (Settings › Storage); answered by
+    /// `Event::Storage`. `folders` are the sessions' folders, each with whether a session that
+    /// is not inactive works in it.
+    MeasureStorage {
+        folders: Vec<(PathBuf, bool)>,
+    },
+    /// Free some of what Newen keeps; answered by `Event::Storage`, measured again.
+    ClearStorage {
+        clear: StorageClear,
+        folders: Vec<(PathBuf, bool)>,
+    },
     /// Logos for connectors and plugins not yet kept, each by its key; answered by one
     /// `Event::Logo` per key, when it is found or not.
     Logos {
@@ -1598,11 +1671,8 @@ pub enum Event {
         light: Option<PathBuf>,
         dark: Option<PathBuf>,
     },
-    /// Where Newen keeps its data and how many bytes it takes.
-    Storage {
-        path: PathBuf,
-        bytes: u64,
-    },
+    /// What Newen keeps on this computer, by kind.
+    Storage(StorageReport),
     /// Settings could not be written: what is in force stays as it was.
     SettingsNotSaved {
         error: String,
@@ -1806,7 +1876,7 @@ impl Event {
             Event::Settings { .. }
             | Event::Restored
             | Event::Logo { .. }
-            | Event::Storage { .. }
+            | Event::Storage(_)
             | Event::SettingsNotSaved { .. }
             | Event::Update(_)
             | Event::UpdateChecked { .. }

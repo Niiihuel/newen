@@ -25,6 +25,103 @@ use std::time::{Duration, Instant};
 /// Whose tabs: Newen's session id.
 pub type Owner = u64;
 
+/// What a Chromium profile keeps only to go faster and fetches again: its caches, at its top
+/// or in a profile folder under it. Cookies and sites' data, and so sign-ins, are not among
+/// them.
+const CACHES: [&str; 7] = [
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "GrShaderCache",
+    "ShaderCache",
+];
+
+/// Left in a profile to have its caches cleared the next time Chromium starts on it: clearing
+/// them under a running Chromium is not safe.
+pub const CLEAR_CACHE: &str = "clear-cache";
+
+/// The cache folders of the Chromium profile `profile`.
+pub fn cache_dirs(profile: &std::path::Path) -> Vec<PathBuf> {
+    let mut dirs = vec![];
+    let mut look = |dir: &std::path::Path| {
+        (CACHES.iter())
+            .map(|name| dir.join(name))
+            .filter(|cache| cache.is_dir())
+            .for_each(|cache| dirs.push(cache))
+    };
+    look(profile);
+    for entry in std::fs::read_dir(profile).into_iter().flatten().flatten() {
+        let named = |name: &&str| entry.file_name() == **name;
+        if entry.path().is_dir() && !CACHES.iter().any(named) {
+            look(&entry.path());
+        }
+    }
+    dirs
+}
+
+/// What a cleared cache folder is renamed to, until a thread deletes it.
+const CLEARED: &str = ".newen-cleared-";
+
+/// Clear `profile`'s caches if it was asked to ([`CLEAR_CACHE`]) and no Chromium has it open,
+/// before one opens it. This runs as the window opens: the folders are renamed aside at once
+/// and deleted on a thread of their own, with any a crash left aside before.
+pub fn clear_cache_if_asked(profile: &std::path::Path) {
+    let mark = profile.join(CLEAR_CACHE);
+    let mut aside: Vec<PathBuf> = [profile.to_path_buf()]
+        .into_iter()
+        .chain(subfolders(profile))
+        .flat_map(|dir| subfolders(&dir).chain(std::iter::once(dir)))
+        .filter(|dir| (dir.file_name()).is_some_and(|n| n.to_string_lossy().starts_with(CLEARED)))
+        .collect();
+    if mark.exists() && !in_use(profile) {
+        for (n, dir) in cache_dirs(profile).into_iter().enumerate() {
+            let to = dir.with_file_name(format!("{CLEARED}{}-{n}", std::process::id()));
+            if std::fs::rename(&dir, &to).is_ok() {
+                aside.push(to);
+            }
+        }
+        let _ = std::fs::remove_file(mark);
+    }
+    if !aside.is_empty() {
+        std::thread::spawn(move || {
+            for dir in aside {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        });
+    }
+}
+
+fn subfolders(dir: &std::path::Path) -> impl Iterator<Item = PathBuf> {
+    (std::fs::read_dir(dir).into_iter().flatten().flatten())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+}
+
+/// Another Newen's Chromium has `profile` open: its `SingletonLock` names a process that runs
+/// (Unix), or its `lockfile` cannot be deleted (Windows).
+fn in_use(profile: &std::path::Path) -> bool {
+    if cfg!(windows) {
+        let lock = profile.join("lockfile");
+        return lock.exists() && std::fs::remove_file(&lock).is_err();
+    }
+    let Ok(target) = std::fs::read_link(profile.join("SingletonLock")) else {
+        return false;
+    };
+    // `{host}-{pid}`; where no /proc tells, it counts as running.
+    let pid = target
+        .to_string_lossy()
+        .rsplit('-')
+        .next()
+        .map(str::to_owned);
+    let proc = std::path::Path::new("/proc");
+    match pid {
+        Some(pid) if proc.is_dir() => proc.join(pid).exists(),
+        _ => true,
+    }
+}
+
 /// Where updates go, for the engine to pass to the UI.
 pub type Updates = Arc<dyn Fn(Owner, BrowserUpdate) + Send + Sync>;
 
@@ -1621,6 +1718,54 @@ fn note_request(tab: &mut Tab, method: &str, params: &Value) {
                 request.status = Some(status);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    /// Asked, a profile loses its caches, at its top and in a profile folder, and keeps its
+    /// cookies; not asked, it keeps them.
+    #[test]
+    fn a_profiles_caches_go_when_asked_and_its_cookies_stay() {
+        let dir = std::env::temp_dir().join(format!("newen-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for path in [
+            "GPUCache",
+            "Default/Cache/Cache_Data",
+            "Default/Code Cache/js",
+        ] {
+            std::fs::create_dir_all(dir.join(path)).unwrap();
+        }
+        std::fs::write(dir.join("Default/Cookies"), "c").unwrap();
+        assert_eq!(cache_dirs(&dir).len(), 3);
+        clear_cache_if_asked(&dir);
+        assert_eq!(cache_dirs(&dir).len(), 3);
+        std::fs::write(dir.join(CLEAR_CACHE), "").unwrap();
+        // Open by a running Chromium (this process stands for it): kept, and still asked.
+        #[cfg(unix)]
+        {
+            let lock = format!("host-{}", std::process::id());
+            std::os::unix::fs::symlink(lock, dir.join("SingletonLock")).unwrap();
+            clear_cache_if_asked(&dir);
+            assert_eq!(cache_dirs(&dir).len(), 3);
+            std::fs::remove_file(dir.join("SingletonLock")).unwrap();
+        }
+        clear_cache_if_asked(&dir);
+        assert!(cache_dirs(&dir).is_empty() && !dir.join(CLEAR_CACHE).exists());
+        assert!(dir.join("Default/Cookies").is_file());
+        // The thread deletes what was set aside.
+        for _ in 0..100 {
+            let left =
+                subfolders(&dir.join("Default")).any(|d| d.to_string_lossy().contains(CLEARED));
+            if !left {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!subfolders(&dir.join("Default")).any(|d| d.to_string_lossy().contains(CLEARED)));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

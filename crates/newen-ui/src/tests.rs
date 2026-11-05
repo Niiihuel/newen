@@ -4362,10 +4362,7 @@ fn settings_save_through_the_engine_and_shape_what_comes_next() {
         });
     };
     heard(&mut ui, Settings::default());
-    assert_eq!(
-        click(&store, &mut ui, view::SETTINGS_OPEN),
-        vec![Intent::MeasureStorage]
-    );
+    assert_eq!(click(&store, &mut ui, view::SETTINGS_OPEN), vec![]);
     // A switch is kept by the engine before the UI shows it.
     let saved = click(&store, &mut ui, "set:keep_awake");
     let [Intent::SaveSettings(settings)] = saved.as_slice() else {
@@ -13265,4 +13262,160 @@ fn a_long_customize_page_lays_out_only_the_rows_in_view() {
     let most = std::time::Duration::from_millis(if cfg!(debug_assertions) { 25 } else { 10 });
     assert!(connectors_time < most, "{connectors_time:?} a frame");
     assert!(skills_time < most, "{skills_time:?} a frame");
+}
+
+/// Settings › Storage, opened by `/storage`: what Newen keeps by kind with its sizes, the
+/// sessions' folders measured with whether an active session works in each. "Delete inactive"
+/// asks, then deletes only the sessions with no message for 30 days that are not pinned or at
+/// work, and measures again once the last of them is gone, without their folders.
+#[test]
+fn storage_lists_what_newen_keeps_and_frees_only_what_is_inactive() {
+    use newen_model::{StorageReport, StoredHistory, StoredWorktree};
+    let mut store = Store::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let old = now - 40 * 86_400;
+    let session = |store: &mut Store, id: SessionId, cwd: &str, at: u64| {
+        store.apply(Event::SessionCreated {
+            session: id,
+            agent: "claude".into(),
+            cwd: cwd.into(),
+        });
+        store.apply(Event::Queued {
+            session: id,
+            request: format!("r{id}"),
+            text: format!("Task {id}"),
+            at: Some(at),
+            images: vec![],
+        });
+        // Read back from disk: its process ended.
+        store.apply(Event::Status {
+            session: id,
+            status: newen_model::SessionStatus::Exited,
+        });
+    };
+    session(&mut store, 1, "/work/a", old);
+    session(&mut store, 2, "/work/a", now);
+    session(&mut store, 3, "/work/b", old);
+    store.apply(Event::Pinned {
+        session: 3,
+        pinned: true,
+    });
+    session(&mut store, 4, "/work/c", old);
+    let mut ui = Ui::new("/work".into());
+    ui.skip_welcome = true;
+    let opened = click(&store, &mut ui, crate::storage::OPEN);
+    assert_eq!(ui.settings_page.as_deref(), Some(crate::storage::PAGE));
+    let [Intent::MeasureStorage { folders }] = opened.as_slice() else {
+        panic!("{opened:?}");
+    };
+    // One measure at a time: Refresh waits for this one.
+    assert!(click(&store, &mut ui, "storage:refresh").is_empty());
+    assert_eq!(
+        folders,
+        &[
+            ("/work/a".into(), true),
+            ("/work/b".into(), true),
+            ("/work/c".into(), false)
+        ]
+    );
+    ui.applied(&Event::Storage(StorageReport {
+        root: "/data/newen".into(),
+        total: 5 << 20,
+        sessions: 3 << 20,
+        by_session: vec![(1, 1000), (4, 2000)],
+        history: vec![StoredHistory {
+            name: "gone.git".into(),
+            bytes: 70,
+            used: false,
+        }],
+        worktrees: vec![
+            StoredWorktree {
+                path: "/work/a-feat".into(),
+                branch: Some("feat".into()),
+                bytes: 300,
+                clean: true,
+                idle_days: 40,
+                unused: true,
+            },
+            StoredWorktree {
+                path: "/work/a-wip".into(),
+                branch: Some("wip".into()),
+                bytes: 300,
+                clean: false,
+                idle_days: 40,
+                unused: false,
+            },
+        ],
+        app: vec![("Newen's installed versions".into(), 2 << 20)],
+        caches: vec![("Logos".into(), 20)],
+        clearable_caches: 20,
+        failed: vec!["The worktree /work/old: it has changes".into()],
+    }));
+    let window = limn::Size::new(1408.0, 844.0);
+    let drawn = |ui: &Ui, words: &str| {
+        let frame = UiTree::new(view(&store, ui, window)).layout(window);
+        (frame.commands.iter())
+            .any(|c| matches!(c, limn::DrawCommand::Text { text, .. } if text.contains(words)))
+    };
+    for words in [
+        "Not freed: The worktree /work/old",
+        "Newen uses 5.0 MB",
+        "Sessions",
+        "File history",
+        "Caches and logs",
+        "Delete inactive",
+        "Remove unused",
+    ] {
+        assert!(drawn(&ui, words), "{words}");
+    }
+    // Details lists the inactive sessions first.
+    click(&store, &mut ui, "storage:details:sessions");
+    assert!(drawn(&ui, "Task 4") && drawn(&ui, "inactive"));
+    // An unused worktree is named in the question, and only it goes.
+    click(&store, &mut ui, "storage:clear:worktrees");
+    assert!(drawn(&ui, "Remove 1 unused worktree?") && drawn(&ui, "/work/a-feat"));
+    assert!(matches!(
+        click(&store, &mut ui, "storage:confirm").as_slice(),
+        [Intent::ClearStorage {
+            clear: newen_model::StorageClear::Worktrees(paths),
+            ..
+        }] if paths == &[PathBuf::from("/work/a-feat")]
+    ));
+    assert!(click(&store, &mut ui, "storage:clear:sessions").is_empty());
+    assert!(drawn(&ui, "Delete 2 inactive sessions?"));
+    assert_eq!(
+        click(&store, &mut ui, "storage:confirm"),
+        [Intent::Delete { session: 1 }, Intent::Delete { session: 4 }]
+    );
+    let measured = |intents: Vec<Intent>| {
+        intents.into_iter().find_map(|i| match i {
+            Intent::MeasureStorage { folders } => Some(folders),
+            _ => None,
+        })
+    };
+    store.apply(Event::Deleted { session: 1 });
+    assert_eq!(measured(ui.applied(&Event::Deleted { session: 1 })), None);
+    store.apply(Event::Deleted { session: 4 });
+    assert_eq!(
+        measured(ui.applied(&Event::Deleted { session: 4 })),
+        Some(vec![("/work/a".into(), true), ("/work/b".into(), true)])
+    );
+    // The file history no session needs goes through the engine.
+    click(&store, &mut ui, "storage:clear:history");
+    assert!(matches!(
+        click(&store, &mut ui, "storage:confirm").as_slice(),
+        [Intent::ClearStorage {
+            clear: newen_model::StorageClear::History,
+            ..
+        }]
+    ));
+    // Caches cleared, the logos shown are asked for again.
+    ui.logo_asked.insert("mcp:github".into());
+    click(&store, &mut ui, "storage:clear:caches");
+    click(&store, &mut ui, "storage:confirm");
+    ui.applied(&Event::Storage(StorageReport::default()));
+    assert!(ui.logo_asked.is_empty());
 }

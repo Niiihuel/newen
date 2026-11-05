@@ -170,6 +170,7 @@ impl Native {
             }
             x11 && imports
         });
+        crate::clear_cache_if_asked(cache);
         std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
         let args = cef::args::Args::new();
         let mut settings = Settings {

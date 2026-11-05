@@ -145,6 +145,12 @@ fn own_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<Own> {
             view::SETTINGS_OPEN,
         ),
         own(
+            "storage",
+            &[],
+            "See and free what Newen keeps on this computer",
+            crate::storage::OPEN,
+        ),
+        own(
             "usage",
             &["stats", "cost"],
             "Show plan usage and rate limits",

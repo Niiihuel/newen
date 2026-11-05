@@ -154,6 +154,22 @@ impl Install {
         }
     }
 
+    /// What this installation takes on disk: its own folder, or on macOS, where it shares a
+    /// folder with other apps, its bundle; and the downloads waiting.
+    pub fn footprint(&self) -> Vec<PathBuf> {
+        let home = if cfg!(target_os = "macos") {
+            self.root.join(BUNDLE)
+        } else {
+            self.root.clone()
+        };
+        let downloads = self.downloads();
+        let mut all = vec![home];
+        if !downloads.starts_with(&all[0]) {
+            all.push(downloads);
+        }
+        all
+    }
+
     /// Where downloads wait until they are installed.
     pub fn downloads(&self) -> PathBuf {
         if cfg!(any(windows, target_os = "macos")) {

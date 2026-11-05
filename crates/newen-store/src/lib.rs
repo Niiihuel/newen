@@ -192,6 +192,22 @@ impl Store {
     }
 }
 
+/// About how many bytes each session kept in the database at `path` takes, its events', read
+/// on a connection of its own: the scan never holds up the one that writes, and the log lets
+/// them read and write together.
+pub fn sizes(path: &Path) -> Result<Vec<(SessionId, u64)>> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut statement = conn
+        .prepare("SELECT session, SUM(LENGTH(CAST(event AS BLOB))) FROM events GROUP BY session")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)? as SessionId,
+            row.get::<_, i64>(1)? as u64,
+        ))
+    })?;
+    rows.collect()
+}
+
 /// The database at `path` (never made: an error when it is not there) with every write its
 /// write-ahead log holds folded into the file and the log emptied: true when all of it went in,
 /// false when a connection still reading part of it held it back. Once true and closed, the file
@@ -267,6 +283,29 @@ mod tests {
             store.load_session(1).unwrap()[0],
             queued(vec!["/d/newen/attachments/a.png".into()])
         );
+    }
+
+    #[test]
+    fn each_session_is_measured_by_its_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("record.db");
+        let store = Store::open(&path).unwrap();
+        let queued = |text: &str| Event::Queued {
+            session: 0,
+            request: "r".into(),
+            text: text.into(),
+            at: None,
+            images: vec![],
+        };
+        store.append(1, &queued("hola")).unwrap();
+        store.append(1, &queued("otra")).unwrap();
+        store.append(2, &queued("una mucho más larga")).unwrap();
+        // Read while the writer is open, in bytes.
+        let measured = sizes(&path).unwrap();
+        let of = |id| measured.iter().find(|(s, _)| *s == id).unwrap().1;
+        assert!(of(2) > of(1) / 2 && of(1) > 0, "{measured:?}");
+        store.delete(1).unwrap();
+        assert_eq!(sizes(&path).unwrap().len(), 1);
     }
 
     #[test]

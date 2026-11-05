@@ -634,6 +634,7 @@ pub fn view(store: &Store, ui: &Ui, window: Size) -> Element {
         _ => root,
     };
     let root = settings_dialog(store, ui, root, window, palette);
+    let root = crate::storage::dialog(store, ui, root);
     let root = mcp_dialog(store, ui, root, window, palette);
     let root = directory_dialog(ui, root, window, palette);
     let root = marketplace_dialog(ui, root, palette);
@@ -11778,14 +11779,6 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
         pages.push(agent_page(store, ui, agent, palette));
     }
     pages.push(crate::accounts::page(store, ui, palette));
-    let kept = match &ui.storage {
-        Some((path, bytes)) => format!(
-            "Sessions and their file history are kept in {} ({}).",
-            path.display(),
-            human_bytes(*bytes)
-        ),
-        None => "Sessions and their file history are kept on this computer.".to_owned(),
-    };
     pages.push(SettingsPage {
         key: "system".into(),
         title: "System".into(),
@@ -11811,16 +11804,9 @@ fn settings_pages(store: &Store, ui: &Ui, palette: ComponentPalette) -> Vec<Sett
                 "Updates".into(),
                 crate::updates::settings(ui, s.auto_update, palette),
             ),
-            (
-                "Storage".into(),
-                vec![setting(
-                    "Data folder",
-                    &kept,
-                    setting_button(SETTINGS_STORAGE_OPEN, "Open"),
-                )],
-            ),
         ],
     });
+    pages.push(crate::storage::page(store, ui));
     // Customize is a page of its own; Settings keeps the way there.
     if let Some(general) = pages.iter_mut().find(|p| p.key == SETTINGS_FIRST) {
         general.groups.push((
@@ -13341,7 +13327,7 @@ fn agent_page(
 }
 
 /// A size in bytes as people read it.
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     let units = ["bytes", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
     let mut unit = 0;
@@ -13665,7 +13651,7 @@ fn settings_dialog(
     if !agents.is_empty() {
         groups.push(("Agents", agents));
     }
-    groups.push(("This computer", owned(&["system"])));
+    groups.push(("This computer", owned(&["system", crate::storage::PAGE])));
     settings::dialog(
         base,
         pages,

@@ -189,6 +189,10 @@ pub const MENU: &str = icon!("<path d='M2.75 5h14.5M2.75 10h14.5M2.75 15h9'/>");
 pub const MONITOR: &str = icon!(
     "<rect x='2.25' y='3' width='15.5' height='10.75' rx='2'/><path d='M10 13.75v3M6.75 17h6.5'/>"
 );
+/// Settings' Storage: a drive, its front with two lights.
+pub const HARD_DRIVE: &str = icon!(
+    "<rect x='2.5' y='11' width='15' height='5.75' rx='1.75'/><path d='M4.1 11l2.2-6.05a1.5 1.5 0 0 1 1.41-.99h4.58a1.5 1.5 0 0 1 1.41.99l2.2 6.05'/><path d='M13.75 13.9h.01M11.5 13.9h.01'/>"
+);
 pub const SUN: &str = icon!(
     "<circle cx='10' cy='10' r='3.4'/><path d='M15.90 10.00L17.60 10.00M14.17 14.17L15.37 15.37M10.00 15.90L10.00 17.60M5.83 14.17L4.63 15.37M4.10 10.00L2.40 10.00M5.83 5.83L4.63 4.63M10.00 4.10L10.00 2.40M14.17 5.83L15.37 4.63'/>"
 );
@@ -296,6 +300,7 @@ pub const ALL: &[(&str, &str)] = &[
     ("chat", CHAT),
     ("code", CODE),
     ("monitor", MONITOR),
+    ("hard-drive", HARD_DRIVE),
     ("sun", SUN),
     ("moon", MOON),
     ("fork", FORK),

@@ -1343,8 +1343,8 @@ impl eframe::App for App {
                 }
                 // Settings' data folder shows in the desktop's own file manager.
                 if id == newen_ui::view::SETTINGS_STORAGE_OPEN {
-                    if let Some((path, _)) = &self.ui.storage {
-                        open_external(path);
+                    if let Some(report) = &self.ui.storage {
+                        open_external(&report.root);
                     }
                 }
                 match id.as_str() {

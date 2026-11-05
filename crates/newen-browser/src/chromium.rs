@@ -88,6 +88,7 @@ pub fn launch(_: &Path, _: &Path, _: f32) -> std::io::Result<Process> {
 
 #[cfg(unix)]
 pub fn launch(program: &Path, profile: &Path, scale: f32) -> std::io::Result<Process> {
+    crate::clear_cache_if_asked(profile);
     let (ours_read, theirs_write) = pipe()?;
     let (theirs_read, ours_write) = pipe()?;
     // The pipe's ends are first moved above 4, so putting them on 3 and 4 in the child never

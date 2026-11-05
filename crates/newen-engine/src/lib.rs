@@ -28,6 +28,7 @@ mod servers;
 mod shared;
 mod sign_in;
 mod skills;
+mod storage;
 mod suggest;
 mod update;
 
@@ -419,6 +420,9 @@ struct Router {
     sessions: HashMap<SessionId, UnboundedSender<Input>>,
     /// Each session's folder, for what is uncommitted in it.
     folders: HashMap<SessionId, std::path::PathBuf>,
+    /// Settings › Storage's work, one at a time, and whether a measure already waits for it.
+    storage_turn: Arc<tokio::sync::Mutex<()>>,
+    storage_queued: Arc<std::sync::atomic::AtomicBool>,
     /// What reads each session's uncommitted changes again when told to ([`follow_tree`]).
     trees: HashMap<SessionId, UnboundedSender<()>>,
     /// How each session started, which a fork of it or a session it starts starts as too.
@@ -678,6 +682,8 @@ impl Router {
             provider_attempts: Default::default(),
             sessions: HashMap::new(),
             folders: HashMap::new(),
+            storage_turn: Default::default(),
+            storage_queued: Default::default(),
             trees: HashMap::new(),
             started: HashMap::new(),
             agent_ids,
@@ -2327,23 +2333,12 @@ impl Router {
                 self.updates.opened();
                 return;
             }
-            Intent::MeasureStorage => {
-                let path = self
-                    .config
-                    .database
-                    .as_ref()
-                    .and_then(|db| db.parent())
-                    .map(PathBuf::from);
-                if let Some(path) = path {
-                    let ui = self.ui.clone();
-                    tokio::spawn(async move {
-                        let at = path.clone();
-                        let bytes = tokio::task::spawn_blocking(move || size_of(&at))
-                            .await
-                            .unwrap_or(0);
-                        ui(Event::Storage { path, bytes });
-                    });
-                }
+            Intent::MeasureStorage { folders } => {
+                self.storage(None, folders);
+                return;
+            }
+            Intent::ClearStorage { clear, folders } => {
+                self.storage(Some(clear), folders);
                 return;
             }
             Intent::ReadAloud { session, text } => {
@@ -2805,6 +2800,52 @@ impl Router {
             });
         }
         self.waits.retain(|_, waits| !waits.is_empty());
+    }
+
+    /// What Newen keeps, measured after `clear` frees its part (Settings › Storage), off the
+    /// loop: walking the folders takes a while. One at a time and in order, so a clear's report
+    /// never lands under an older measure's; a measure asked while another waits is that one.
+    fn storage(&self, clear: Option<newen_model::StorageClear>, mut folders: Vec<(PathBuf, bool)>) {
+        if clear.is_none()
+            && self
+                .storage_queued
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        // The sessions this run started count as active too: the engine has the last word on
+        // what goes.
+        folders.extend(self.folders.values().map(|folder| (folder.clone(), true)));
+        let places = storage::Places::of(&self.config);
+        let (turn, queued, ui) = (
+            self.storage_turn.clone(),
+            self.storage_queued.clone(),
+            self.ui.clone(),
+        );
+        tokio::spawn(async move {
+            let _turn = turn.lock().await;
+            if clear.is_none() {
+                queued.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            let report = tokio::task::spawn_blocking(move || {
+                let Some(places) = places else {
+                    return newen_model::StorageReport::default();
+                };
+                let folders = storage::Folders::of(&folders);
+                let failed = (clear.as_ref())
+                    .map(|clear| storage::clear(&places, clear, &folders))
+                    .unwrap_or_default();
+                let sizes = newen_store::sizes(&places.database).unwrap_or_default();
+                newen_model::StorageReport {
+                    failed,
+                    ..storage::measure(&places, &sizes, &folders)
+                }
+            })
+            .await;
+            if let Ok(report) = report {
+                ui(Event::Storage(report));
+            }
+        });
     }
 
     /// End every wait on `on`: each session that waited hears `outcome`, with `text` and what it
