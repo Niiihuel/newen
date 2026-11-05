@@ -182,7 +182,9 @@ fn ours(name: &str) -> bool {
         name.strip_prefix(&format!("mcp__{server}__"))
             .is_some_and(|t| tools.iter().any(|(n, ..)| *n == t))
     };
-    tool(HOST_SERVER, &HOST_TOOLS) || tool("browser", &BROWSER_TOOLS)
+    tool(HOST_SERVER, &HOST_TOOLS)
+        || tool("browser", &BROWSER_TOOLS)
+        || tool(newen_agent::TERMINAL_SERVER, &newen_agent::TERMINAL_TOOLS)
 }
 
 /// What a request Newen sent waits to hear.

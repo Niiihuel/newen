@@ -7,9 +7,19 @@ license.workspace = true
 description = "Newen's terminal: a shell on a PTY, its output parsed into the cells limn's TerminalView paints."
 publish = false
 
+[features]
+default = ["view"]
+# What the window needs: the screen as limn's TerminalView cells and the bytes of a key. The
+# engine runs terminals without it.
+view = ["dep:limn"]
+
 [dependencies]
-limn.workspace = true
+limn = { workspace = true, optional = true }
 # The pseudo-terminal the shell runs on.
 portable-pty = "0.9"
 # Parses the shell's VT output into a screen of cells.
 vt100 = "0.16"
+
+[target.'cfg(unix)'.dependencies]
+# The terminal's echo and line flags (a password is read without echo); already in the tree.
+libc = "0.2"

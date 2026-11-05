@@ -23,7 +23,9 @@ pub(crate) fn output_file(session: &Session, call: &str) -> Option<PathBuf> {
             ..
         } if c == call => {
             let (_, rest) = result.output.split_once("Output is being written to: ")?;
-            Some(PathBuf::from(rest.split_whitespace().next()?))
+            // The sentence's own period follows the path: "…/b1.output. You will be notified…".
+            let path = rest.split_whitespace().next()?.trim_end_matches('.');
+            Some(PathBuf::from(path))
         }
         _ => None,
     })

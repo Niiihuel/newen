@@ -3072,6 +3072,7 @@ dependencies = [
  "newen-files",
  "newen-git",
  "newen-model",
+ "newen-pty",
  "newen-store",
  "newen-update",
  "resvg",
@@ -3152,6 +3153,7 @@ dependencies = [
 name = "newen-pty"
 version = "0.2.3"
 dependencies = [
+ "libc",
  "limn",
  "portable-pty",
  "vt100",

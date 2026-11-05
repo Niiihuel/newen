@@ -386,7 +386,7 @@ Decisiones:
 | OSC 133 | Scripts de integración **propios** para bash y zsh (mismo mecanismo: rcfile/`ZDOTDIR` que primero carga los dotfiles del usuario). Parser con `vte` (callback `osc_dispatch`). Nonce por PTY para descartar marcas falsificadas; si aparece fuera de marca, dejar de confiar. Produce `CommandRun{origin: user_terminal}` atribuido al turno abierto o al "último turno" con `actor: user`. |
 | Comandos `!` | MVP: un PTY oculto por sesión (reusa `newen-pty`) para que `cd`/`export` persistan entre comandos. Recorte por marcas C/D, tope 100 KiB, timeout 30 s sin datos, Ctrl-C → SIGKILL al grupo. Resultado → `CommandRun{origin: user_bang}` + mensaje a la conversación. |
 | `!` → modelo | Enviar como `user` con el comando y la salida en un bloque de texto con formato propio de Newen (p. ej. "El usuario ejecutó `cmd` (exit N): …"). Cómo lo hace el CLI nativamente (modo bash de la TUI) *(verificar)*; no copiar etiquetas internas sin confirmar qué espera el modelo. |
-| Agente ↔ terminal | Aviso de actividad del usuario al modelo vía `UserPromptSubmit.additionalContext` (MVP). Tools MCP de terminal vía `mcp_message`: post-MVP. |
+| Agente ↔ terminal | Hecho (2026-11-05): el agente corre comandos en una pestaña propia de la terminal de Newen, que la persona ve y contesta, con `TERMINAL_TOOLS` ([terminal.md](terminal.md)). Los PTY viven en `newen_pty::Terminals`, del motor, que la ventana comparte. |
 
 ---
 

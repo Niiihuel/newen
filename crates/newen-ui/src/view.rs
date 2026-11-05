@@ -133,6 +133,10 @@ pub const TERMINAL: &str = "terminal";
 /// The terminal's scroll area, which follows new output while it is at the end.
 pub const TERMINAL_SCROLL: &str = "terminal:scroll";
 pub const TERMINAL_NEW: &str = "terminal:new";
+/// "Open" on a command the agent ran in the shared terminal: the pane on its tab.
+pub const TERMINAL_AGENT: &str = "terminal-agent:open";
+/// The band over the terminal that says what the tab on screen needs (docs/terminal.md §6).
+const TERMINAL_BAND: f32 = 30.0;
 /// The field a tab's pill turns into while the person renames it.
 pub const TERMINAL_RENAME: &str = "terminal:rename";
 pub const TERMINAL_CLOSE_CONFIRM: &str = "terminal:close-confirm";
@@ -455,9 +459,10 @@ pub fn terminal_grid(store: &Store, ui: &Ui, window: Size) -> (u16, u16) {
         .unwrap_or(0);
     // The height it rests at: the shell is not resized frame by frame as the stack moves.
     let height = pane_heights(&layout, ui, window)[at.min(layout.panes.len().saturating_sub(1))].0;
+    let band = terminal_band(ui).map_or(0.0, |_| TERMINAL_BAND);
     let inner = Size::new(
         pane_width(&layout) - 2.0 * TERMINAL_PADDING[0],
-        height - look::PANE_HEADER - 1.0 - 2.0 * TERMINAL_PADDING[1],
+        height - look::PANE_HEADER - 1.0 - 2.0 * TERMINAL_PADDING[1] - band,
     );
     let (cols, rows) = limn::TerminalView::grid_size(inner, TERMINAL_FONT);
     (cols as u16, rows as u16)
@@ -735,6 +740,27 @@ fn pane_tools(pane: Pane, ui: &Ui, palette: ComponentPalette) -> Vec<Element> {
 
 /// The session's shells: "Terminal" and the folder while there is one, pills once
 /// there are more, "New terminal" after them.
+/// What the band over the terminal says of the tab on screen, if it needs saying: a password
+/// to type there, an answer the agent's command waits for, or output that takes no typing.
+fn terminal_band(ui: &Ui) -> Option<(&'static str, Color)> {
+    let tab = ui.terminal.tabs.get(ui.terminal.active)?;
+    match (tab.waiting, tab.read_only) {
+        (Some(true), _) => Some((
+            "Type the password here; the agent never sees it.",
+            look::awaiting(),
+        )),
+        (Some(false), _) => Some((
+            "The agent's command is waiting for your answer.",
+            look::awaiting(),
+        )),
+        (None, true) => Some((
+            "This shows a command's output; it takes no typing.",
+            look::muted(),
+        )),
+        _ => None,
+    }
+}
+
 fn terminal_pane(
     session: Option<&Session>,
     ui: &Ui,
@@ -777,12 +803,17 @@ fn terminal_pane(
                         return (id, rename_field(TERMINAL_RENAME, name, 160.0, palette));
                     }
                 }
-                // "Terminal 2  work ×": a named tab drops the folder.
+                // "Terminal 2  work ×": a named tab drops the folder. One whose command waits
+                // for the person carries a dot.
+                let title = match tab.waiting {
+                    Some(_) => format!("\u{25cf} {}", tab.title),
+                    None => tab.title.clone(),
+                };
                 let pill = pane_tab(
                     &id,
                     &format!("terminal:close:{i}"),
                     "Close terminal",
-                    &tab.title,
+                    &title,
                     (!tab.named).then_some(folder.as_str()),
                     i == ui.terminal.active,
                 );
@@ -815,7 +846,119 @@ fn terminal_pane(
         ),
         None => Element::spacer(),
     };
-    Element::column(vec![header, body.flex(1.0)]).size(Some(width), Some(height))
+    let mut column = vec![header];
+    if let Some((words, ink)) = terminal_band(ui) {
+        column.push(pad(
+            Element::row(vec![
+                Element::icon(icons::of(icons::INFO))
+                    .foreground(ink)
+                    .size(Some(14.0), Some(14.0))
+                    .centered_y(),
+                Element::truncated_text(words)
+                    .font_family(FontFamily::Sans)
+                    .font_size(SMALL)
+                    .foreground(ink)
+                    .flex(1.0)
+                    .centered_y(),
+            ])
+            .gap(8.0)
+            .size(Some(width - 2.0 * TERMINAL_PADDING[0]), Some(TERMINAL_BAND)),
+            TERMINAL_PADDING[0],
+            0.0,
+        ));
+    }
+    column.push(body.flex(1.0));
+    Element::column(column).size(Some(width), Some(height))
+}
+
+/// The JSON line a shared-terminal tool's answer starts with (docs/terminal.md §3.2).
+pub fn terminal_head(output: &str) -> Option<Value> {
+    let head: Value = serde_json::from_str(output.lines().next()?).ok()?;
+    (head["type"] == "terminal").then_some(head)
+}
+
+/// How a shared-terminal answer reads in a line: "Waiting for your password", "Exited with
+/// code 2".
+fn terminal_state(head: &Value) -> (String, bool) {
+    match head["state"].as_str() {
+        Some("waiting") if head["secret"] == true => ("Waiting for your password".into(), true),
+        Some("waiting") => ("Waiting for your answer".into(), true),
+        Some("running") => ("Still running".into(), false),
+        _ => match head["exit"].as_i64() {
+            Some(0) | None => ("Done".into(), false),
+            Some(code) => (format!("Exited with code {code}"), false),
+        },
+    }
+}
+
+/// A command the agent ran in the shared terminal (docs/terminal.md §6): the command, how it
+/// stood when the call came back, its last lines, and "Open", which shows the pane on the
+/// agent's tab.
+fn terminal_card(step: &Step, column: f32, palette: ComponentPalette) -> Element {
+    let width = column.min(560.0);
+    let command = step.input["command"].as_str().unwrap_or_default();
+    let (line, waiting, lines) = match step.result {
+        None => ("Running in Terminal".to_owned(), false, vec![]),
+        Some(result) => match terminal_head(&result.output) {
+            Some(head) => {
+                let (line, waiting) = terminal_state(&head);
+                let body: Vec<&str> = result.output.lines().skip(1).collect();
+                let last = body[body.len().saturating_sub(6)..].to_vec();
+                (line, waiting, last.into_iter().map(str::to_owned).collect())
+            }
+            None => (result.output.clone(), false, vec![]),
+        },
+    };
+    let ink = if waiting {
+        look::awaiting()
+    } else {
+        look::muted()
+    };
+    let head = Element::row(vec![
+        Element::icon(icons::of(icons::TERMINAL))
+            .foreground(look::palette().text)
+            .size(Some(16.0), Some(16.0))
+            .centered_y(),
+        Element::column(vec![
+            Element::truncated_text(command.to_owned())
+                .font_family(FontFamily::Monospace)
+                .font_size(SMALL)
+                .foreground(look::palette().text),
+            Element::truncated_text(line)
+                .font_family(FontFamily::Sans)
+                .font_size(SMALL)
+                .foreground(ink),
+        ])
+        .gap(2.0)
+        .flex(1.0)
+        .centered_y(),
+        keyed_button(TERMINAL_AGENT, "Open", "", false, true, palette).centered_y(),
+    ])
+    .gap(12.0);
+    let mut rows = vec![head];
+    if !lines.is_empty() {
+        let output = lines
+            .iter()
+            .map(|l| {
+                Element::truncated_text(l.clone())
+                    .font_family(FontFamily::Monospace)
+                    .font_size(SMALL)
+                    .foreground(look::command_ink())
+            })
+            .collect();
+        rows.push(
+            Element::panel(Element::column(output).gap(2.0))
+                .background(look::command_box())
+                .radius(6.0)
+                .padding(10.0)
+                .size(Some(width - 24.0), None),
+        );
+    }
+    Element::panel(Element::column(rows).gap(10.0).padding(12.0))
+        .background(palette.surface)
+        .border(look::card_border(), 1.0)
+        .radius(12.0)
+        .size(Some(width), None)
 }
 
 /// The Files pane, as Desktop's file tile: the open files' tabs, the tree's toggle beside expand and close, and the file
@@ -3115,6 +3258,12 @@ fn entries<'a>(
                     // Its sources as a block of their own; an error or a stop stays a step.
                     flush(&mut steps, &mut items);
                     items.push(web_search_block(&step, ui, transcript, column, palette));
+                } else if name.ends_with("terminal__terminal_run") {
+                    // A command in the shared terminal shows as a card under its step.
+                    let card = terminal_card(&step, column, palette);
+                    steps.push(step);
+                    flush(&mut steps, &mut items);
+                    items.push(card);
                 } else if let Some(opened) = opened_tab(name, result.as_ref()) {
                     // A tab the agent opened shows as a card under its step, as Desktop's.
                     steps.push(step);
@@ -3249,6 +3398,9 @@ fn permission_heading(who: &str, tool: &str, input: &Value) -> String {
         if input["kind"] == "server" {
             let name = input["name"].as_str().unwrap_or_default();
             return format!("Allow the agent to start the dev server {name}?");
+        }
+        if input["kind"] == "command" {
+            return "Allow the agent to run this command in the Terminal?".to_owned();
         }
         if input["kind"] == "connectors" {
             return "Connectors that could help".to_owned();
@@ -3396,7 +3548,11 @@ fn monitor_card(child: Option<&Session>, title: &str, ui: &Ui, width: f32) -> El
     let inner = width - 32.0;
     let info = child.and_then(|c| ui.agents.iter().find(|a| a.id == c.agent));
     let mut about = info.map(|a| a.name.clone()).unwrap_or_default();
-    if let Some(model) = child.and_then(|c| c.model.as_deref()) {
+    if let Some(id) = child.and_then(|c| c.model.as_deref()) {
+        let listed = child.and_then(|c| c.capabilities.as_ref());
+        let model = (listed.into_iter().flat_map(|c| &c.models))
+            .find(|m| m.id == id)
+            .map_or(bare_model(id), |m| m.name.as_str());
         about = if about.is_empty() {
             model.to_owned()
         } else {
@@ -5438,51 +5594,85 @@ pub fn step_words(steps: usize, current: usize) -> String {
     }
 }
 
-/// The Progress card's steps, as Desktop's rail draws them: a line down their left with the
-/// accent's dot on the step under way; done steps muted, the rest in the text's colour.
-fn progress_rows(list: &[Todo], current: usize, width: f32) -> Vec<Element> {
+/// The Progress card's steps: a dot per step on a line down their left, the line lit as far
+/// as the step under way, which carries the accent's dot and, while the agent works, its words
+/// in a shimmer. Done steps are muted with a filled dot, the rest an empty ring. Each row lights
+/// under the pointer, and its hint has the whole step and how it stands.
+fn progress_rows(list: &[Todo], current: usize, working: bool, width: f32) -> Vec<Element> {
     const ROW: f32 = 30.0;
-    let steps = list.iter().enumerate().map(|(at, todo)| {
-        let line = Element::spacer()
-            .background(look::divider())
-            .size(Some(1.0), Some(ROW))
-            .centered_x();
-        let mark = if at == current {
-            let dot = Element::spacer()
-                .background(look::spark())
-                .radius(3.0)
-                .size(Some(6.0), Some(6.0))
-                .centered_x()
-                .centered_y();
-            Element::stack(vec![line, dot])
-        } else {
-            line
+    let last = list.len().saturating_sub(1);
+    let segment = |lit: bool, shown: bool| {
+        let color = match (shown, lit) {
+            (false, _) => Color::TRANSPARENT,
+            (true, true) => look::muted(),
+            (true, false) => look::divider(),
         };
-        let ink = if todo.status == "completed" {
+        Element::spacer()
+            .background(color)
+            .size(Some(1.0), Some((ROW - 6.0) / 2.0))
+            .centered_x()
+    };
+    let steps = list.iter().enumerate().map(|(at, todo)| {
+        let done = todo.status == "completed";
+        let dot = Element::spacer().radius(3.0).size(Some(6.0), Some(6.0));
+        let dot = match (at == current, done) {
+            (true, _) => dot.background(look::spark()),
+            (false, true) => dot.background(look::muted()),
+            (false, false) => dot.border(look::muted(), 1.0),
+        }
+        .centered_x();
+        // The line above a step is lit once it is reached, the one below once it is passed.
+        let mark = Element::column(vec![
+            segment(at <= current, at > 0),
+            dot,
+            segment(at < current, at < last),
+        ])
+        .size(Some(12.0), Some(ROW));
+        let room = (width - 66.0).max(60.0);
+        let words = match (at == current, working) {
+            (true, true) => Element::shimmer_truncated_text(
+                format!("progress:{}:words", todo.id),
+                todo.subject.clone(),
+                look::palette().text,
+            ),
+            _ => Element::truncated_text(todo.subject.clone()),
+        }
+        .font_family(FontFamily::Sans)
+        .font_size(BODY)
+        .foreground(if done {
             look::muted()
         } else {
             look::palette().text
+        })
+        .max_width(room)
+        .centered_y();
+        let state = match todo.status.as_str() {
+            "completed" => "Done",
+            "in_progress" => "In progress",
+            _ => "To do",
         };
-        Element::row(vec![
-            mark.size(Some(12.0), Some(ROW)),
-            Element::truncated_text(todo.subject.clone())
-                .font_family(FontFamily::Sans)
-                .font_size(BODY)
-                .foreground(ink)
-                .max_width((width - 58.0).max(60.0))
-                .centered_y(),
-        ])
-        .gap(12.0)
-        .size(None, Some(ROW))
+        let id = format!("progress:step:{}", todo.id);
+        let row = ComponentPalette {
+            hover: look::chip_hover(),
+            ..look::palette()
+        }
+        .interactive_surface(Element::clickable(
+            id.clone(),
+            Element::row(vec![hgap(0.0), mark, words])
+                .gap(10.0)
+                .size(Some(width - 36.0), Some(ROW)),
+        ))
+        .radius(6.0)
         .accessible(limn::Access::new(limn::Role::ListItem).name(format!(
             "{}, {}",
             todo.subject,
-            match todo.status.as_str() {
-                "completed" => "done",
-                "in_progress" => "in progress",
-                _ => "to do",
-            }
-        )))
+            state.to_lowercase()
+        )));
+        limn::Tooltip::new(row, id, todo.subject.clone(), look::palette())
+            // The rail is at the window's right edge: the hint opens to its left.
+            .placement(limn::TooltipPlacement::Left)
+            .description(format!("Step {} of {} \u{b7} {state}", at + 1, list.len()))
+            .render()
     });
     vec![Element::column(steps.collect())]
 }
@@ -5514,9 +5704,12 @@ pub fn used(session: &Session) -> Used {
         let Item::Tool { name, input, .. } = item else {
             continue;
         };
-        // A connector's tool is "mcp__{server}__{tool}"; Newen's own tools are not one.
+        // A connector's tool is "mcp__{server}__{tool}"; Newen's own tools are not one, nor
+        // its shared terminal, which has a card of its own.
         if let Some((server, tool)) = name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
-            if !newen_model::HOST_TOOLS.iter().any(|(own, ..)| *own == tool) {
+            if !newen_model::HOST_TOOLS.iter().any(|(own, ..)| *own == tool)
+                && server != newen_model::TERMINAL_SERVER
+            {
                 bump(&mut used.connectors, server);
             }
         } else if name == "WebSearch" {
@@ -5542,6 +5735,9 @@ fn site_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_owned())
 }
 
+/// The logo key of Newen's own browser among the connectors a session used.
+pub(crate) const BROWSER_CONNECTOR: &str = "mcp:Browser";
+
 /// A connector the agent names `server` ("claude_ai_Figma"), as the person knows it: the
 /// listed or running server whose name the agent's spelling comes from ("claude.ai Figma"),
 /// and the key its logo is kept under.
@@ -5558,6 +5754,10 @@ pub(crate) fn connector(ui: &Ui, session: &Session, server: &str) -> (String, St
             })
             .collect()
     };
+    // Newen's own browser server, `mcp__browser__*`.
+    if server == "browser" {
+        return ("Browser".into(), BROWSER_CONNECTOR.into());
+    }
     let listed = (ui.connectors.listed.values())
         .flat_map(|l| l.servers.iter().flatten())
         .map(|s| (s.name.as_str(), s.label.as_str()));
@@ -5574,6 +5774,11 @@ pub(crate) fn connector(ui: &Ui, session: &Session, server: &str) -> (String, St
 /// three logos and, while the pointer is on it, a card of what it was used for, as Desktop's.
 fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
     let used = used(session);
+    // Newen's own browser has no logo to look up: its globe.
+    let fallback = |key: &str| match key == BROWSER_CONNECTOR {
+        true => icons::GLOBE,
+        false => icons::PLUG,
+    };
     let logo = |key: &str, fallback: &'static str, side: f32| match logo_picture(ui, key) {
         Some(picture) => Element::raster_image(picture.clone())
             .size(Some(side), Some(side))
@@ -5588,6 +5793,9 @@ fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
             .font_size(SMALL)
             .centered_y()
     };
+    // The card's width; a line is as wide as its inside, its words cut where they would
+    // leave it.
+    const CARD: f32 = 320.0;
     let line = |lead: Element, words: String, trail: Option<Element>| {
         let mut row = vec![
             lead,
@@ -5595,53 +5803,60 @@ fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
                 .font_family(FontFamily::Sans)
                 .font_size(BODY)
                 .foreground(look::palette().text)
-                .shrink_to_fit()
+                .flex(1.0)
                 .centered_y(),
-            Element::spacer().flex(1.0),
         ];
         row.extend(trail);
-        Element::row(row).gap(10.0).size(None, Some(28.0))
+        Element::row(row)
+            .gap(10.0)
+            .size(Some(CARD - 24.0), Some(28.0))
     };
     let heading = |words: &str| muted(words).font_size(SMALL);
-    let row =
-        |id: &str, icon: &'static str, label: &str, logos: Vec<Element>, card: Vec<Element>| {
-            let mut row = vec![
-                Element::icon(icons::of(icon))
-                    .foreground(look::palette().text)
-                    .size(Some(16.0), Some(16.0))
-                    .centered_y(),
-                text(label).centered_y(),
-                Element::spacer().flex(1.0),
-            ];
-            row.extend(logos);
-            let anchor = ComponentPalette {
-                hover: look::chip_hover(),
-                ..look::palette()
-            }
-            .interactive_surface(Element::clickable(
-                id,
-                Element::row(row)
-                    .gap(8.0)
-                    .padding(4.0)
-                    .size(Some(width - 36.0), Some(32.0)),
-            ))
-            .radius(6.0);
-            let card = Element::column(std::iter::once(text(label)).chain(card).collect())
-                .gap(6.0)
-                .padding(12.0);
-            limn::Popover::new(
-                anchor,
-                card,
-                true,
-                format!("{id}:card"),
-                look::menu_palette(),
-            )
-            .width(320.0)
-            .placement(limn::PopoverPlacement::LeftStart)
-            .render()
-            .popover_on_hover()
-            .popover_gap(6.0)
-        };
+    // `label` names the card; `words` are the row's, which may be cut at its width.
+    let row = |id: &str,
+               lead: Element,
+               label: &str,
+               words: String,
+               logos: Vec<Element>,
+               card: Vec<Element>| {
+        let mut row = vec![
+            lead,
+            Element::truncated_text(words)
+                .font_family(FontFamily::Sans)
+                .font_size(BODY)
+                .foreground(look::palette().text)
+                .flex(1.0)
+                .centered_y(),
+        ];
+        row.extend(logos);
+        let anchor = ComponentPalette {
+            hover: look::chip_hover(),
+            ..look::palette()
+        }
+        .interactive_surface(Element::clickable(
+            id,
+            Element::row(row)
+                .gap(8.0)
+                .padding(4.0)
+                .size(Some(width - 36.0), Some(32.0)),
+        ))
+        .radius(6.0);
+        let card = Element::column(std::iter::once(text(label)).chain(card).collect())
+            .gap(6.0)
+            .padding(12.0);
+        limn::Popover::new(
+            anchor,
+            card,
+            true,
+            format!("{id}:card"),
+            look::menu_palette(),
+        )
+        .width(CARD)
+        .placement(limn::PopoverPlacement::LeftStart)
+        .render()
+        .popover_on_hover()
+        .popover_gap(6.0)
+    };
     let mut rows = vec![];
     if !used.connectors.is_empty() {
         let named: Vec<(String, String, usize)> = (used.connectors.iter())
@@ -5650,15 +5865,16 @@ fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
                 (shown, key, *calls)
             })
             .collect();
-        let logos = named
-            .iter()
-            .take(3)
-            .map(|(_, key, _)| logo(key, icons::PLUG, 14.0))
+        // The row names them, the first's logo leading; the others' follow at its end.
+        let names: Vec<&str> = named.iter().map(|(shown, ..)| shown.as_str()).collect();
+        let lead = logo(&named[0].1, fallback(&named[0].1), 16.0);
+        let logos = (named.iter().skip(1).take(3))
+            .map(|(_, key, _)| logo(key, fallback(key), 14.0))
             .collect();
         let card = (named.iter())
             .map(|(shown, key, calls)| {
                 line(
-                    logo(key, icons::PLUG, 16.0),
+                    logo(key, fallback(key), 16.0),
                     shown.clone(),
                     Some(count(*calls, "call", "calls")),
                 )
@@ -5666,8 +5882,9 @@ fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
             .collect();
         rows.push(row(
             "used:connectors",
-            icons::CONNECTORS,
+            lead,
             "Connectors",
+            names.join(", "),
             logos,
             card,
         ));
@@ -5699,7 +5916,18 @@ fn used_rows(session: &Session, ui: &Ui, width: f32) -> Vec<Element> {
                 )
             }));
         }
-        rows.push(row("used:web", icons::GLOBE, "Web search", logos, card));
+        let lead = Element::icon(icons::of(icons::GLOBE))
+            .foreground(look::palette().text)
+            .size(Some(16.0), Some(16.0))
+            .centered_y();
+        rows.push(row(
+            "used:web",
+            lead,
+            "Web search",
+            "Web search".into(),
+            logos,
+            card,
+        ));
     }
     rows
 }
@@ -6215,6 +6443,34 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
                 "Offering connectors",
                 names.join(", "),
             )
+        }
+        // The shared terminal's, by what its answer says (docs/terminal.md §6).
+        name if name.ends_with("terminal__terminal_run") => {
+            ("Ran in Terminal", "Running in Terminal", said("command"))
+        }
+        name if name.ends_with("terminal__terminal_write") => {
+            let head = step.result.and_then(|r| terminal_head(&r.output));
+            let waiting = head.as_ref().is_some_and(|h| h["state"] == "waiting");
+            match (said("text").is_empty(), waiting) {
+                (_, true) => (
+                    "Waiting for you in Terminal",
+                    "Waiting for you in Terminal",
+                    String::new(),
+                ),
+                (true, false) => (
+                    "Followed the command",
+                    "Following the command",
+                    String::new(),
+                ),
+                (false, false) => (
+                    "Answered the command",
+                    "Answering the command",
+                    said("text"),
+                ),
+            }
+        }
+        name if name.ends_with("terminal__terminal_read") => {
+            ("Read the terminal", "Reading the terminal", String::new())
         }
         "AskUserQuestion" => (
             "Asked",
@@ -7445,8 +7701,17 @@ fn site_permission(
     palette: ComponentPalette,
 ) -> Element {
     let inner = width - 32.0;
-    // A dev server shows what it runs and where, as a command's card does.
-    if input["kind"] == "server" {
+    // A dev server shows what it runs and where, as a command's card does; so does a command
+    // for the shared terminal.
+    let command = input["kind"] == "command";
+    if input["kind"] == "server" || command {
+        let always = match command {
+            true => (
+                "Always allow in this session",
+                "Every command it runs there",
+            ),
+            false => ("Always allow this server", "Until Newen quits"),
+        };
         let rows = vec![
             text(permission_heading(
                 "the agent",
@@ -7468,14 +7733,7 @@ fn site_permission(
             .background(look::command_box())
             .radius(6.0)
             .padding(14.0),
-            actions(
-                id,
-                true,
-                ("Always allow this server", "Until Newen quits"),
-                "Don't allow",
-                ui,
-                palette,
-            ),
+            actions(id, true, always, "Don't allow", ui, palette),
         ];
         return Element::panel(Element::column(rows).gap(12.0))
             .background(palette.surface)
@@ -8970,13 +9228,13 @@ pub(crate) fn agent_capabilities<'a>(
     })
 }
 
-/// The models the menu lists: the session's agent's, for a new session the last session's,
-/// The stop past max that the slider draws alive: Claude Code's `ultracode` and Codex's
-/// `ultra` (model/list, account.jsonl:7) are the same top setting under each program's name.
-pub(crate) fn ultra_effort(effort: &str) -> bool {
-    matches!(effort, "ultracode" | "ultra")
+/// Whether stop `shown` of `efforts` is the one the slider draws alive: every model's top
+/// level, whatever its agent names it (`ultracode`, `ultra`, `max`, a variant's own word).
+pub(crate) fn top_effort(efforts: &[String], shown: usize) -> bool {
+    efforts.len() > 1 && shown + 1 == efforts.len()
 }
 
+/// The models the menu lists: the session's agent's, for a new session the last session's,
 /// and before any session of the agent what its program offered when asked.
 pub(crate) fn offered_models<'a>(
     store: &'a Store,
@@ -9163,7 +9421,9 @@ fn model_menu(
     let name = match current {
         Some(model) if ui.model.is_none() => named(model),
         Some(model) => model.name.clone(),
-        None => ui.model.clone().unwrap_or_else(|| "Default".into()),
+        // Not among the agent's models (yet): its own part of the id, never a `provider/` that
+        // leaves the name cut.
+        None => ui.model.as_deref().map_or("Default", bare_model).to_owned(),
     };
     let content = vec![chip_text(name, look::palette().text)];
     let anchor = chip(MODEL_MENU, content, open, "Model", Some("Ctrl+Shift+I"));
@@ -9177,7 +9437,10 @@ fn model_menu(
         // shortcut: a label this long may be cut at the menu's width, so it gets the whole name in
         // a hint; a short one never does. Hint only cut labels once limn's menu can tell.
         match label.chars().count() > 12 {
-            true => row.tooltip_with(limn::TooltipSpec::new(label)),
+            // Beside the menu, so the hint never covers the rows over it.
+            true => row.tooltip_with(
+                limn::TooltipSpec::new(label).placement(limn::TooltipPlacement::Right),
+            ),
             false => row,
         }
     };
@@ -9257,6 +9520,11 @@ fn model_menu(
     )
 }
 
+/// A model id without the provider it comes through: `openai/gpt-5.5` is `gpt-5.5`.
+pub(crate) fn bare_model(id: &str) -> &str {
+    id.rsplit('/').next().unwrap_or(id)
+}
+
 /// The model the composer runs: the one picked, matched by id or by name, else the agent's
 /// default.
 pub(crate) fn current_model<'a>(
@@ -9266,7 +9534,11 @@ pub(crate) fn current_model<'a>(
 ) -> Option<&'a newen_model::ModelInfo> {
     let models = offered_models(store, session, ui);
     match ui.model.as_deref() {
-        Some(id) => (models.iter()).find(|m| m.id == id || m.name.to_lowercase().contains(id)),
+        // One the agent does not list (another agent's, left from elsewhere) is not shown as
+        // its: the agent's default stands for it.
+        Some(id) => (models.iter())
+            .find(|m| m.id == id || m.name.to_lowercase().contains(id))
+            .or_else(|| models.iter().find(|m| m.default)),
         None => models.iter().find(|m| m.default),
     }
 }
@@ -9318,12 +9590,10 @@ fn effort_state(store: &Store, ui: &Ui) -> Option<EffortState> {
     })
 }
 
-/// The level the effort slider's thumb is nearest, while its popover is open.
-pub fn effort_shown(store: &Store, ui: &Ui) -> Option<String> {
-    if ui.open_menu != Some(EFFORT_MENU) {
-        return None;
-    }
-    effort_state(store, ui).map(|s| s.efforts[s.shown].clone())
+/// Whether the open effort slider's thumb is nearest its top level, drawn alive.
+pub fn effort_at_top(store: &Store, ui: &Ui) -> bool {
+    ui.open_menu == Some(EFFORT_MENU)
+        && effort_state(store, ui).is_some_and(|s| top_effort(&s.efforts, s.shown))
 }
 
 /// The effort chip and its popover, as the person's Desktop has them: "Effort  High", "Faster … Smarter" over a slider with a stop
@@ -9361,7 +9631,7 @@ fn effort_menu(store: &Store, ui: &Ui) -> Element {
     let last = n.saturating_sub(1).max(1) as f32;
     let rest = if n > 1 { chosen as f32 / last } else { 0.5 };
     let recommended = efforts.iter().position(|e| e == "medium");
-    let ultra = ultra_effort(&efforts[shown]);
+    let ultra = top_effort(&efforts, shown);
     let stop_x = |i: usize| {
         if n > 1 {
             i as f32 / last * EFFORT_TRAVEL
@@ -10135,7 +10405,14 @@ fn question_card(
                 .font_size(12.0)
                 .centered_y(),
         );
-        band.push(arrow("next", icons::CARET_RIGHT, "Next", page + 1 < count));
+        // Not `next`: that is the Next button's id, and two elements under one id share its
+        // look, the arrow drawn as the button's white fill.
+        band.push(arrow(
+            "forward",
+            icons::CARET_RIGHT,
+            "Next",
+            page + 1 < count,
+        ));
     }
     let mut rows = vec![
         Element::panel(Element::row(band).gap(6.0).min_size(0.0, 24.0))
@@ -10454,7 +10731,15 @@ fn right_panel(
             PROGRESS_CARD,
             open(PROGRESS_CARD, true),
             vec![],
-            progress_rows(&list, current, inner),
+            progress_rows(
+                &list,
+                current,
+                matches!(
+                    session.status,
+                    SessionStatus::Running | SessionStatus::Starting
+                ),
+                inner,
+            ),
             inner,
             ui,
         ));

@@ -441,7 +441,14 @@ fn newen_s_tools_are_declared_to_a_new_thread_and_answered_through_the_engine() 
         wait.unwrap()["inputSchema"]["required"],
         json!(["session_id", "then"])
     );
-    assert_eq!(tools.len(), newen_agent::HOST_TOOLS.len());
+    assert_eq!(
+        tools.len(),
+        newen_agent::HOST_TOOLS.len() + newen_agent::TERMINAL_TOOLS.len()
+    );
+    // Every one of the shared terminal's tools is declared.
+    for (terminal, ..) in newen_agent::TERMINAL_TOOLS {
+        assert!(tools.iter().any(|t| t["name"] == terminal), "{terminal}");
+    }
     let start = tools.iter().find(|t| t["name"] == "start_session");
     assert_eq!(
         start.unwrap()["inputSchema"]["properties"]["agent"]["type"],

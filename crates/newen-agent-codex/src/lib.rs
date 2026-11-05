@@ -238,8 +238,9 @@ impl Codex {
             // Newen's own tools, as tools the client declares. Only `thread/start` takes them: a
             // resumed or forked thread keeps the ones it started with, from its saved session
             // (codex-rs core `session/mod.rs`, verified end to end with 0.163.0 and 0.166.0).
-            params["dynamicTools"] = newen_agent::HOST_TOOLS
-                .iter()
+            // The shared terminal's too: Codex's own commands are not the person's to answer.
+            params["dynamicTools"] = (newen_agent::HOST_TOOLS.iter())
+                .chain(&newen_agent::TERMINAL_TOOLS)
                 .map(|(name, description, schema)| {
                     let schema: Value = serde_json::from_str(schema).unwrap_or_default();
                     // The canonical form (`DynamicToolSpec`, tagged by `type`); 0.163.0 still
@@ -1078,6 +1079,11 @@ impl Codex {
                     .any(|(tool, ..)| *tool == name)
                 {
                     name = format!("sessions__{name}");
+                } else if newen_agent::TERMINAL_TOOLS
+                    .iter()
+                    .any(|(tool, ..)| *tool == name)
+                {
+                    name = format!("terminal__{name}");
                 }
                 if !done {
                     return self.tool_use(id, &name, input, out);

@@ -290,6 +290,22 @@ fn newens_tools_are_offered_as_its_own_servers_and_read_as_newens() {
         TOOLS.tool(&browse, &servers).unwrap().0,
         "mcp__browser__navigate"
     );
+    // The shared terminal's server, as the engine adds it (bridge.rs `servers`).
+    let servers = vec![
+        "sessions".to_owned(),
+        "browser".to_owned(),
+        "terminal".to_owned(),
+    ];
+    for (tool, ..) in newen_agent::TERMINAL_TOOLS {
+        let direct = Call {
+            name: format!("terminal_{tool}"),
+            ..Default::default()
+        };
+        assert_eq!(
+            TOOLS.tool(&direct, &servers).unwrap().0,
+            format!("mcp__terminal__{tool}")
+        );
+    }
     let _ = (Decision::Allow, InjectedServer::default());
 }
 

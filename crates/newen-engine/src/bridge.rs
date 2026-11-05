@@ -12,7 +12,10 @@
 //! listens on (`/proc/net/tcp*` and the process tree); worth it if other local apps' pages
 //! start landing in sessions.
 
-use newen_agent::{InjectedServer, ToolContent, BROWSER_TOOLS, HOST_SERVER, HOST_TOOLS};
+use newen_agent::{
+    InjectedServer, ToolContent, BROWSER_TOOLS, HOST_SERVER, HOST_TOOLS, TERMINAL_SERVER,
+    TERMINAL_TOOLS,
+};
 use newen_browser::Browser;
 use newen_model::{BrowserOp, SessionId};
 use serde_json::{json, Value};
@@ -115,7 +118,7 @@ impl Bridge {
         if ours.len() < 2 {
             return vec![];
         }
-        [HOST_SERVER, BROWSER_SERVER]
+        [HOST_SERVER, BROWSER_SERVER, TERMINAL_SERVER]
             .map(|name| InjectedServer {
                 name: name.into(),
                 target: self.exe.display().to_string(),
@@ -183,10 +186,10 @@ async fn serve(
     server: &str,
     host: Host,
 ) {
-    let tools: &[(&str, &str, &str)] = if server == BROWSER_SERVER {
-        &BROWSER_TOOLS
-    } else {
-        &HOST_TOOLS
+    let tools: &[(&str, &str, &str)] = match server {
+        BROWSER_SERVER => &BROWSER_TOOLS,
+        TERMINAL_SERVER => &TERMINAL_TOOLS,
+        _ => &HOST_TOOLS,
     };
     let (out, mut lines_out) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
@@ -326,5 +329,34 @@ mod tests {
         .await;
         let tools = heard[0]["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), BROWSER_TOOLS.len());
+    }
+
+    /// An agent that starts Newen's servers itself gets the three: sessions, browser and the
+    /// shared terminal.
+    #[test]
+    fn a_session_is_given_all_three_of_newens_servers() {
+        let bridge = Bridge {
+            socket: "/tmp/newen-test.sock".into(),
+            shim: "/tmp/newen-browser".into(),
+            exe: "/usr/bin/newen".into(),
+            theirs: true,
+            keys: Arc::default(),
+        };
+        let env = bridge.env(7);
+        let names: Vec<String> = bridge.servers(&env).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, [HOST_SERVER, BROWSER_SERVER, TERMINAL_SERVER]);
+    }
+
+    #[tokio::test]
+    async fn the_terminal_server_offers_the_terminal_tools() {
+        let heard = heard(
+            TERMINAL_SERVER,
+            &[json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })],
+        )
+        .await;
+        let names: Vec<&str> = (heard[0]["result"]["tools"].as_array().unwrap().iter())
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, TERMINAL_TOOLS.map(|(name, ..)| name));
     }
 }

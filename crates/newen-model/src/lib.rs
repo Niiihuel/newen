@@ -10,6 +10,7 @@ pub use newen_agent::{
     McpStatus, McpTool, ModeTone, ModeWords, ModelInfo, NewServer, PlanLimits, Plugin, PluginOffer,
     Provider, SignInMethod, Skill, Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, Todo,
     ToolContent, ToolPolicy, ToolRule, Usage, UsageWindow, WebSearchRun, WebSource, HOST_TOOLS,
+    TERMINAL_SERVER,
 };
 
 /// One environment variable or header of a global server. A secret lives in the system's

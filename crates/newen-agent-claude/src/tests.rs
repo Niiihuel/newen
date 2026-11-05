@@ -328,6 +328,7 @@ fn adding_a_server_keeps_newens_own_and_the_ones_added_before() {
         json!({"subtype": "mcp_set_servers", "servers": {
             "sessions": {"type": "sdk", "name": "sessions"},
             "browser": {"type": "sdk", "name": "browser"},
+            "terminal": {"type": "sdk", "name": "terminal"},
             "context7": {"type": "http", "url": "https://mcp.context7.com/mcp"},
             "probe": {"type": "stdio", "command": "python3", "args": ["probe.py"], "env": {"TOKEN": "x=y"}},
         }})
@@ -373,7 +374,7 @@ fn adding_a_server_keeps_newens_own_and_the_ones_added_before() {
     let servers = request["request"]["servers"].as_object().unwrap();
     assert_eq!(
         servers.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["browser", "last", "sessions"]
+        ["browser", "last", "sessions", "terminal"]
     );
 }
 
@@ -1184,6 +1185,59 @@ fn the_browser_server_lists_its_tools_and_its_calls_never_ask() {
     assert!(allowed.events.is_empty());
     let reply: Value = serde_json::from_str(&allowed.replies[0]).unwrap();
     assert_eq!(reply["response"]["response"]["behavior"], "allow");
+}
+
+/// The shared terminal's server is offered with the others and lists every terminal tool; its
+/// calls go to the engine, which asks about a command in the session's mode.
+#[test]
+fn the_terminal_server_lists_its_tools_and_its_calls_reach_the_engine() {
+    let mut claude = Claude::new();
+    let start: Value = serde_json::from_str(&claude.encode(AgentCommand::Start)[0]).unwrap();
+    let servers = &start["request"]["sdkMcpServers"];
+    assert!(
+        servers.as_array().unwrap().contains(&"terminal".into()),
+        "{servers}"
+    );
+    assert!(start["request"]["appendSystemPrompt"]
+        .as_str()
+        .unwrap()
+        .contains("# Shared terminal"));
+    let ask = |claude: &mut Claude, id: &str, request: Value| {
+        claude.decode(
+            &serde_json::json!({ "type": "control_request", "request_id": id, "request": request })
+                .to_string(),
+        )
+    };
+    let listed = ask(
+        &mut claude,
+        "r1",
+        serde_json::json!({ "subtype": "mcp_message", "server_name": "terminal",
+            "message": { "jsonrpc": "2.0", "id": 1, "method": "tools/list" } }),
+    );
+    let reply: Value = serde_json::from_str(&listed.replies[0]).unwrap();
+    let tools = reply["response"]["response"]["mcp_response"]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(tools.len(), newen_agent::TERMINAL_TOOLS.len());
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(names, ["terminal_run", "terminal_write", "terminal_read"]);
+    let allowed = ask(
+        &mut claude,
+        "r2",
+        serde_json::json!({ "subtype": "can_use_tool", "tool_name": "mcp__terminal__terminal_run",
+            "input": { "command": "sudo true" }, "tool_use_id": "t1" }),
+    );
+    assert!(allowed.events.is_empty());
+    let called = ask(
+        &mut claude,
+        "r3",
+        serde_json::json!({ "subtype": "mcp_message", "server_name": "terminal",
+            "message": { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "terminal_run", "arguments": { "command": "sudo true" } } } }),
+    );
+    assert!(matches!(&called.events[..],
+        [AgentEvent::HostTool { name, input, .. }] if name == "terminal_run" && input["command"] == "sudo true"));
 }
 
 #[test]

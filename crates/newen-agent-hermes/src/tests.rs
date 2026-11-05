@@ -252,6 +252,22 @@ fn newens_tools_read_as_newens_from_the_names_hermes_gives_a_sessions_servers() 
             format!("mcp__sessions__{tool}")
         );
     }
+    let servers = vec![
+        "sessions".to_owned(),
+        "browser".to_owned(),
+        "terminal".to_owned(),
+    ];
+    for (tool, ..) in newen_agent::TERMINAL_TOOLS {
+        let call = Call {
+            title: format!("mcp__editor_terminal_0a1b2c3d__{tool}"),
+            kind: "other".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            TOOLS.tool(&call, &servers).unwrap().0,
+            format!("mcp__terminal__{tool}")
+        );
+    }
     let own = Call {
         title: "mcp__github__create_issue".into(),
         ..Default::default()

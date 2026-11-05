@@ -87,7 +87,7 @@ struct App {
     /// when the copy could not be written.
     annotated: Arc<Mutex<Vec<AnnotatedCopy>>>,
     /// The terminal tabs of each folder, kept while the window lives.
-    terminals: HashMap<PathBuf, newen_pty::Tabs>,
+    terminals: newen_engine::Terminals,
     fonts_attached: bool,
     /// The interface font and code font in force, as Settings chose them.
     fonts_in_force: (newen_model::InterfaceFont, String),
@@ -135,7 +135,7 @@ struct App {
 impl App {
     /// Start, size and read the shells of the folder on screen while the pane is open, and do
     /// what the person asked of them.
-    fn sync_terminal(&mut self, ctx: &egui::Context, window: Size) {
+    fn sync_terminal(&mut self, window: Size) {
         let folder = newen_ui::folder(&self.store, &self.ui);
         let (cols, rows) = newen_ui::view::terminal_grid(&self.store, &self.ui, window);
         if !self.ui.pane_open(Pane::Terminal) {
@@ -146,12 +146,10 @@ impl App {
         let pane = &mut self.ui.terminal;
         pane.screen = None;
         let requests = std::mem::take(&mut pane.requests);
-        let tabs = self.terminals.entry(folder.clone()).or_default();
+        let mut folders = self.terminals.folders();
+        let tabs = folders.entry(folder.clone()).or_default();
         let had = !tabs.is_empty();
-        let wake = || {
-            let ctx = ctx.clone();
-            move || ctx.request_repaint()
-        };
+        let wake = || self.terminals.waker();
         for request in requests {
             match request {
                 TerminalRequest::New => {
@@ -165,6 +163,11 @@ impl App {
                 TerminalRequest::Rename(tab, name) => tabs.rename(tab, name),
                 TerminalRequest::Clear(tab) => tabs.clear(tab),
                 TerminalRequest::Move { from, to } => tabs.move_tab(from, to),
+                TerminalRequest::Agent(owner) => {
+                    if let Some((at, _)) = tabs.agent_mut(&owner) {
+                        tabs.select(at);
+                    }
+                }
                 // The output of a command the agent left running, followed as it grows.
                 TerminalRequest::Output { name, path } => {
                     let path = path.display().to_string();
@@ -211,6 +214,9 @@ impl App {
                 title: tab.title,
                 busy: tab.busy,
                 named: tab.named,
+                agent: tab.agent,
+                waiting: tab.waiting,
+                read_only: tab.read_only,
             })
             .collect();
         pane.active = tabs.active();
@@ -225,7 +231,8 @@ impl App {
             return false;
         }
         let folder = newen_ui::folder(&self.store, &self.ui);
-        let terminal = self.terminals.get_mut(&folder).and_then(|t| t.active_mut());
+        let mut folders = self.terminals.folders();
+        let terminal = folders.get_mut(&folder).and_then(|t| t.active_mut());
         if let limn::UiEvent::Paste(text) = event {
             if let Some(terminal) = terminal {
                 terminal.paste(text);
@@ -938,7 +945,7 @@ impl eframe::App for App {
             || self
                 .tree
                 .is_scroll_at_end(newen_ui::view::TERMINAL_SCROLL, 4.0);
-        self.sync_terminal(&ctx, window);
+        self.sync_terminal(window);
         // The hidden sidebar peeks while the pointer is on its button or the window's edge.
         self.ui.pointer = ctx
             .input(|i| i.pointer.hover_pos())
@@ -1451,7 +1458,7 @@ impl eframe::App for App {
         if let Some(words) = self.ui.files_copy.take() {
             ctx.copy_text(words);
         }
-        self.sync_terminal(&ctx, window);
+        self.sync_terminal(window);
         let changed = match (&shown, &self.ui.terminal.screen) {
             (Some(before), Some(now)) => !Arc::ptr_eq(before, now),
             (None, Some(_)) => true,
@@ -2059,6 +2066,10 @@ fn main() -> eframe::Result {
             let frames = newen_engine::Frames::default();
             let ctx = creation.egui_ctx.clone();
             frames.on_frame(move || ctx.request_repaint());
+            // The terminals' output wakes it too, an agent's tab's as well as the person's.
+            let terminals = newen_engine::Terminals::default();
+            let ctx = creation.egui_ctx.clone();
+            terminals.on_output(move || ctx.request_repaint());
             let gpu = creation
                 .wgpu_render_state
                 .as_ref()
@@ -2085,6 +2096,7 @@ fn main() -> eframe::Result {
                             .map(|(agent, program)| (agent.to_owned(), program.to_owned()))
                             .collect(),
                         frames: frames.clone(),
+                        terminals: terminals.clone(),
                         native: native.clone(),
                         // The stand-in's sign-in page opens too, so the flow can be watched.
                         open_pages: true,
@@ -2103,6 +2115,7 @@ fn main() -> eframe::Result {
                     sink,
                     newen_engine::Config {
                         frames: frames.clone(),
+                        terminals: terminals.clone(),
                         native: native.clone(),
                         codec: codec_release(),
                         ..newen_engine::Config::default_database()
@@ -2176,7 +2189,7 @@ fn main() -> eframe::Result {
                 sizes_done: Arc::default(),
                 sizes_asked: Default::default(),
                 annotated: Arc::default(),
-                terminals: HashMap::new(),
+                terminals,
                 transcript: None,
                 beside: None,
                 helper: None,

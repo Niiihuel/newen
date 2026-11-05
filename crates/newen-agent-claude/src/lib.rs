@@ -8,7 +8,8 @@ use newen_agent::{
     ExtensionOp, FileChange, LaunchPlan, Marketplace, McpServer, McpSource, McpStatus, McpTool,
     ModeWords, ModelInfo, PlanLimits, Plugin, PluginOffer, ProgramRun, SessionSpec, Skill,
     Suggestion, TaskAgent, TaskPhase, TaskState, TaskUsage, ToolContent, Usage, UsageWindow,
-    WebSearchRun, WebSource, BROWSER_GUIDE, BROWSER_TOOLS, HOST_TOOLS, WORK_GUIDE,
+    WebSearchRun, WebSource, BROWSER_GUIDE, BROWSER_TOOLS, HOST_TOOLS, TERMINAL_GUIDE,
+    TERMINAL_SERVER, TERMINAL_TOOLS, WORK_GUIDE,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -125,11 +126,14 @@ impl Claude {
         let id_text = id.as_str().unwrap_or_default().to_owned();
         match request["subtype"].as_str() {
             // Newen's own tools are Newen's to run: they never ask the person (an
-            // `own_initiative` call only proposes, and its card is where the person answers).
+            // `own_initiative` call only proposes, and its card is where the person answers;
+            // a terminal command is asked about by the engine, in the session's mode).
             Some("can_use_tool")
-                if [SERVER, BROWSER_SERVER].iter().any(|server| {
-                    text(&request["tool_name"]).starts_with(&format!("mcp__{server}__"))
-                }) =>
+                if [SERVER, BROWSER_SERVER, TERMINAL_SERVER]
+                    .iter()
+                    .any(|server| {
+                        text(&request["tool_name"]).starts_with(&format!("mcp__{server}__"))
+                    }) =>
             {
                 decoded.replies.push(success(
                     &id,
@@ -138,12 +142,14 @@ impl Claude {
                 ));
             }
             Some("mcp_message")
-                if request["server_name"] == SERVER || request["server_name"] == BROWSER_SERVER =>
+                if [SERVER, BROWSER_SERVER, TERMINAL_SERVER]
+                    .iter()
+                    .any(|server| request["server_name"] == *server) =>
             {
-                let tools: &[(&str, &str, &str)] = if request["server_name"] == SERVER {
-                    &HOST_TOOLS
-                } else {
-                    &BROWSER_TOOLS
+                let tools: &[(&str, &str, &str)] = match request["server_name"].as_str() {
+                    Some(SERVER) => &HOST_TOOLS,
+                    Some(TERMINAL_SERVER) => &TERMINAL_TOOLS,
+                    _ => &BROWSER_TOOLS,
                 };
                 self.host_message(
                     id,
@@ -873,9 +879,9 @@ impl AgentAdapter for Claude {
                 let mut request = json!({
                     "subtype": "initialize",
                     "hooks": { "PostToolUse": [{ "hookCallbackIds": [POST_TOOL_HOOK] }] },
-                    "sdkMcpServers": [SERVER, BROWSER_SERVER],
+                    "sdkMcpServers": [SERVER, BROWSER_SERVER, TERMINAL_SERVER],
                     "appendSystemPrompt": format!(
-                        "{WORK_GUIDE}\n\n{SESSIONS_GUIDE}\n\n{BROWSER_GUIDE}\n\n{LAUNCH_GUIDE}"
+                        "{WORK_GUIDE}\n\n{SESSIONS_GUIDE}\n\n{BROWSER_GUIDE}\n\n{TERMINAL_GUIDE}\n\n{LAUNCH_GUIDE}"
                     ),
                 });
                 // Answered by a `prompt_suggestion` after a turn's `result` (2.1.316 [F:suggest]).
@@ -993,7 +999,7 @@ impl AgentAdapter for Claude {
                 self.added
                     .insert(server.name.clone(), server_config(&server));
                 let mut servers = serde_json::Map::new();
-                for sdk in [SERVER, BROWSER_SERVER] {
+                for sdk in [SERVER, BROWSER_SERVER, TERMINAL_SERVER] {
                     servers.insert(sdk.into(), json!({ "type": "sdk", "name": sdk }));
                 }
                 servers.extend(self.added.clone());

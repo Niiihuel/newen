@@ -1033,6 +1033,7 @@ fn line_changes(before: Option<&str>, after: Option<&str>) -> (usize, usize) {
 pub const NOTICE_PERMISSION: &str = "An agent needs your approval to use a tool.";
 pub const NOTICE_QUESTION: &str = "An agent is asking you to choose between options.";
 pub const NOTICE_DONE: &str = "An agent finished and is waiting for your input.";
+pub const NOTICE_TERMINAL: &str = "A command is waiting for you in the Terminal.";
 
 /// The pointer over a row of the open "/" or "@" list: that row becomes the chosen one, so the
 /// list has one highlight, as Desktop's palettes (the pointer moves the selection, the arrow
@@ -1069,6 +1070,12 @@ pub fn notice(
         AgentEvent::PermissionRequest {
             interactive: true, ..
         } => (ui.settings.notify_question, NOTICE_QUESTION),
+        // A command in the shared terminal asks something only the person can answer.
+        AgentEvent::ToolResult { output, .. }
+            if view::terminal_head(output).is_some_and(|h| h["state"] == "waiting") =>
+        {
+            (ui.settings.notify_question, NOTICE_TERMINAL)
+        }
         // Desktop's "Task complete" has no badge, so it reads as a banner.
         AgentEvent::TurnFinished { .. } if !s.is_some_and(|s| s.aside) => (
             match ui.settings.notify_done {
@@ -2109,6 +2116,12 @@ pub struct TerminalTab {
     pub busy: bool,
     /// Named by the person: its pill drops the folder.
     pub named: bool,
+    /// An agent runs its commands in it (docs/terminal.md).
+    pub agent: bool,
+    /// Its command waits for someone to type: `Some(true)` for a secret.
+    pub waiting: Option<bool>,
+    /// It shows the output of a command that takes no input.
+    pub read_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2135,6 +2148,8 @@ pub enum TerminalRequest {
         name: String,
         path: PathBuf,
     },
+    /// The tab the session (by its id) runs its agent's commands in.
+    Agent(String),
 }
 
 impl Ui {
@@ -2469,6 +2484,10 @@ impl Ui {
             let used = view::used(session);
             for (server, _) in &used.connectors {
                 let (name, key) = view::connector(self, session, server);
+                // Newen's own browser is not looked up: a "Browser" logo would be anyone's.
+                if key == view::BROWSER_CONNECTOR {
+                    continue;
+                }
                 let url = (self.connectors.listed.values())
                     .flat_map(|l| l.servers.iter().flatten())
                     .find(|c| c.name == name || c.label == name)
@@ -2665,7 +2684,7 @@ impl Ui {
                 }
             }
         }
-        let ultra = view::effort_shown(store, self).is_some_and(|e| view::ultra_effort(&e));
+        let ultra = view::effort_at_top(store, self);
         match (ultra, self.ultra_since) {
             (true, None) => self.ultra_since = Some(std::time::Instant::now()),
             (false, Some(_)) => self.ultra_since = None,
@@ -4152,6 +4171,15 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
         }
         return vec![];
     }
+    // "Open" on a command's card: the pane, on the agent's tab.
+    if id == view::TERMINAL_AGENT {
+        if let Some(session) = ui.selected {
+            let tab = TerminalRequest::Agent(session.to_string());
+            ui.terminal.requests.push(tab);
+        }
+        ui.open_pane(Pane::Terminal);
+        return vec![];
+    }
     if id.starts_with("terminal:") {
         terminal_clicked(&mut ui.terminal, id);
         return vec![];
@@ -4405,15 +4433,12 @@ fn clicked(store: &Store, ui: &mut Ui, id: &str) -> Vec<Intent> {
             ui.mark_new(store, session);
         }
         ui.selected = Some(session);
-        // The composer shows the model and effort this session runs at, as Desktop's does;
-        // a session from before they were kept leaves them as they are.
+        // The composer shows the model and effort this session runs at, as Desktop's does; a
+        // session from before they were kept shows its agent's default, never what another
+        // session (maybe of another agent) had.
         if let Some(s) = store.session(session) {
-            if s.model.is_some() {
-                ui.model = s.model.clone();
-            }
-            if s.effort.is_some() {
-                ui.effort = s.effort.clone();
-            }
+            ui.model = s.model.clone();
+            ui.effort = s.effort.clone();
         }
         // Going somewhere from the peek puts it away, as Desktop's does ("navigated").
         ui.sidebar.peek = false;
@@ -4883,7 +4908,7 @@ fn answer(store: &Store, ui: &mut Ui, rest: &str) -> Vec<Intent> {
             }
             ui.question.insert(permission.to_owned(), page + 1);
         }
-        "next" => {
+        "next" | "forward" => {
             ui.question.insert(permission.to_owned(), page + 1);
         }
         "prev" => {

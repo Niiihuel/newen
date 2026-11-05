@@ -19,6 +19,9 @@ newen-store = { path = "../newen-store" }
 newen-git = { path = "../newen-git" }
 # The built-in browser, a Chromium driven over DevTools (docs/browser.md).
 newen-browser = { path = "../newen-browser" }
+# The terminal tabs an agent runs its commands in, which the person sees and types into
+# (docs/terminal.md); without limn's view.
+newen-pty = { path = "../newen-pty", default-features = false }
 # The Files pane's listing and file operations, run on the disk.
 newen-files = { path = "../newen-files" }
 serde_json.workspace = true

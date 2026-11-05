@@ -1280,9 +1280,6 @@ pub trait AgentAdapter: Send {
     fn decode(&mut self, line: &str) -> Decoded;
 }
 
-/// The built-in browser's tools (docs/browser.md §4), served like [`HOST_TOOLS`] by a server of
-/// their own, `browser`. Their meaning follows Claude Desktop's browser tools;
-/// the words are Newen's.
 /// One dev server of a project's launch file (Claude Desktop's format):
 /// `{"version": "0.0.1", "configurations": [{"name", "runtimeExecutable", "runtimeArgs",
 /// "port", "url"?}]}`.
@@ -1299,6 +1296,9 @@ pub struct LaunchConfig {
     pub url: Option<String>,
 }
 
+/// The built-in browser's tools (docs/browser.md §4), served like [`HOST_TOOLS`] by a server of
+/// their own, `browser`. Their meaning follows Claude Desktop's browser tools;
+/// the words are Newen's.
 pub const BROWSER_TOOLS: [(&str, &str, &str); 19] = [
     (
         "navigate",
@@ -1404,6 +1404,33 @@ pub const WORK_GUIDE: &str = "# Working with the user\n\n- Ask before real work 
 
 /// What an agent is told of the built-in browser, in words of Newen's own.
 pub const BROWSER_GUIDE: &str = "# Built-in browser\n\nYou have a browser built into this app, with the browser tools (navigate, read_page, find, get_page_text, form_input, computer, javascript_tool, read_console_messages, read_network_requests, tabs_*). The user sees its tab beside the conversation and can use it too. Use it to check what you build for the web: start the dev server, open it, read the console and the page, act on it, and take a screenshot to show the result instead of asking the user to look. Prefer read_page and find to pick elements by ref; use screenshots to see layout. Local addresses are always allowed; other sites may ask the user first. Do not use it for what a plain fetch answers.";
+
+/// The server that carries [`TERMINAL_TOOLS`] (`mcp__terminal__terminal_run`).
+pub const TERMINAL_SERVER: &str = "terminal";
+
+/// The shared terminal's tools (docs/terminal.md §3), served like [`BROWSER_TOOLS`] by a server
+/// of their own, `terminal`: the agent runs commands in a tab of Newen's terminal that the
+/// person sees and types into, and reads it.
+pub const TERMINAL_TOOLS: [(&str, &str, &str); 3] = [
+    (
+        "terminal_run",
+        "Run a shell command in this session's tab of the terminal built into this app, which the user sees and can type into. Use it for any command that may ask for something (sudo, installers, git with credentials, rm -i, prompts that want y/n), so the user can answer there; your own shell tool gives a command no keyboard. Returns once the command ends (with its exit code), waits for someone to type, goes quiet for 2 s, or yield_ms passes: a first line of JSON {\"type\":\"terminal\",\"state\",\"exit\",\"secret\",\"idle_ms\",\"prompt\"}, then what it printed. state \"waiting\" with secret true is a password: tell the user to type it in the Terminal, then call terminal_write with empty text to wait for the command to go on. Only one command at a time: while one runs, answer it with terminal_write.",
+        r#"{"type":"object","properties":{"command":{"type":"string"},"yield_ms":{"type":"integer","description":"How long to wait before returning while it runs: 10000 when left out, from 250 to 30000."},"max_chars":{"type":"integer","description":"The most of its output to return, keeping the end: 20000 when left out."}},"required":["command"]}"#,
+    ),
+    (
+        "terminal_write",
+        "Send text to the command running in this session's terminal tab (an answer such as y, a choice, Enter; \\u0003 is Ctrl+C), then return as terminal_run does. Empty text only waits and reads: use it to follow a long command or to wait while the user types. Refused while the command reads a secret (the user types it) and when nothing runs (use terminal_run).",
+        r#"{"type":"object","properties":{"text":{"type":"string"},"enter":{"type":"boolean","description":"Press Enter after the text: true when left out, unless the text is empty."},"yield_ms":{"type":"integer","description":"How long to wait before returning: 2000 when left out, from 250 to 30000."},"max_chars":{"type":"integer"}},"required":["text"]}"#,
+    ),
+    (
+        "terminal_read",
+        "This session's terminal tab as the user sees it now, and how its command stands, in the same JSON line as terminal_run. lines also returns that many lines above the screen.",
+        r#"{"type":"object","properties":{"lines":{"type":"integer"}}}"#,
+    ),
+];
+
+/// What the agent is told of the shared terminal, beside its tools' own words.
+pub const TERMINAL_GUIDE: &str = "# Shared terminal\n\nThis app has a terminal the user sees, and a tab of it is yours (terminal_run, terminal_write, terminal_read). Run there any command that may ask for something (sudo, installers, logins, confirmations): the user answers in it, and you read what happened. You never type a password: when a command waits for a secret, ask the user to type it in the Terminal and wait with terminal_write and empty text.";
 
 /// One entry of an agent's task list.
 #[derive(Clone, Debug, PartialEq)]

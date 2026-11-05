@@ -27,9 +27,9 @@ Lo que ACP no tiene y queda degradado: desglose del contexto por categoría (sol
 
 ## Las herramientas de Newen (`SessionExtras::host`)
 
-Ninguno de los dos acepta herramientas del cliente por el propio ACP (OpenCode rechaza el transporte MCP `acp`; Hermes no lo implementa), pero los dos arrancan los servidores MCP stdio que les llegan en `session/new`. Así que las herramientas de Newen van como **dos servidores MCP propios**, `sessions` (`HOST_TOOLS`) y `browser` (`BROWSER_TOOLS`):
+Ninguno de los dos acepta herramientas del cliente por el propio ACP (OpenCode rechaza el transporte MCP `acp`; Hermes no lo implementa), pero los dos arrancan los servidores MCP stdio que les llegan en `session/new`. Así que las herramientas de Newen van como **tres servidores MCP propios**, `sessions` (`HOST_TOOLS`), `browser` (`BROWSER_TOOLS`) y `terminal` (`TERMINAL_TOOLS`, [terminal.md](terminal.md)):
 
-1. Un adaptador con `SessionExtras::host` recibe esos dos servidores en `SessionSpec::servers`: el motor los agrega en `inject` (`Bridge::servers`), con el programa de Newen y `--mcp-host <servidor>`, y en su entorno el socket y la clave de la sesión (las mismas variables del puente de `$BROWSER`).
+1. Un adaptador con `SessionExtras::host` recibe esos tres servidores en `SessionSpec::servers`: el motor los agrega en `inject` (`Bridge::servers`), con el programa de Newen y `--mcp-host <servidor>`, y en su entorno el socket y la clave de la sesión (las mismas variables del puente de `$BROWSER`).
 2. `newen --mcp-host <servidor>` (apps/newen) pasa su stdio al socket del puente con la clave.
 3. El puente (`newen-engine/src/bridge.rs`, `serve`) contesta el handshake y `tools/list`, y cada `tools/call` corre como una llamada del propio agente: `Internal::HostTool` con un id `bridge-…`, y la respuesta vuelve por `Relayed` (`Router::host_answer`) en vez de ir al stdin del agente.
 

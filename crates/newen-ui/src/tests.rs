@@ -8,6 +8,9 @@ fn tab(title: &str, busy: bool) -> TerminalTab {
         title: title.into(),
         busy,
         named: false,
+        agent: false,
+        waiting: None,
+        read_only: false,
     }
 }
 
@@ -1183,6 +1186,9 @@ fn the_rail_shows_the_steps_and_the_bar_where_the_agent_is() {
 /// spelling of it) with its calls, Newen's own tools left out, and the web's searches, once
 /// each, and the sites read with their pages; a card of them while the pointer is on a row,
 /// and their logos asked for.
+const LONG_QUERY: &str =
+    "Claude Code desktop app environment local cloud worktree SSH session side panel";
+
 #[test]
 fn the_rail_says_what_the_session_used_beyond_its_folder() {
     let (mut store, mut ui) = store_with_session();
@@ -1208,6 +1214,11 @@ fn the_rail_says_what_the_session_used_beyond_its_folder() {
             "w2",
             "WebSearch",
             serde_json::json!({ "query": "Store policy Windows" }),
+        ),
+        (
+            "w3",
+            "WebSearch",
+            serde_json::json!({ "query": LONG_QUERY }),
         ),
         (
             "f1",
@@ -1239,7 +1250,7 @@ fn the_rail_says_what_the_session_used_beyond_its_folder() {
         view::used(session),
         view::Used {
             connectors: vec![("claude_ai_Figma".into(), 2), ("context7".into(), 1)],
-            searches: vec!["Store policy Windows".into()],
+            searches: vec!["Store policy Windows".into(), LONG_QUERY.into()],
             sites: vec![("learn.microsoft.com".into(), 2)],
         }
     );
@@ -1247,13 +1258,20 @@ fn the_rail_says_what_the_session_used_beyond_its_folder() {
         view::connector(&ui, session, "claude_ai_Figma").0,
         "claude.ai Figma"
     );
+    // Newen's own browser is a connector by its name, never looked up.
+    assert_eq!(
+        view::connector(&ui, session, "browser"),
+        ("Browser".into(), view::BROWSER_CONNECTOR.into())
+    );
     let window = limn::Size::new(1408.0, 844.0);
     let mut tree = UiTree::new(view(&store, &ui, window));
     let frame = tree.layout(window);
     let words = text_spans(&frame);
-    for row in ["Used in this session", "Connectors", "Web search"] {
+    for row in ["Used in this session", "Web search"] {
         assert!(words.iter().any(|w| w.0 == row), "{row}");
     }
+    // The row names the connectors used, not just "Connectors".
+    assert!(words.iter().any(|w| w.0.starts_with("claude.ai Figma")));
     assert!(
         !words.iter().any(|w| w.0 == "2 calls"),
         "the card waits for the pointer"
@@ -1272,6 +1290,26 @@ fn the_rail_says_what_the_session_used_beyond_its_folder() {
     for said in ["claude.ai Figma", "2 calls", "context7", "1 call"] {
         assert!(words.iter().any(|w| w.0 == said), "{said}");
     }
+    // A long search is cut at the card's edge, never drawn past it.
+    let web = (tree.layout(window).regions.iter())
+        .find(|r| r.id == "used:web")
+        .unwrap()
+        .rect;
+    tree.handle_event(limn::UiEvent::PointerMove(limn::Point::new(
+        web.x + 20.0,
+        web.y + 10.0,
+    )));
+    let words = text_spans(&tree.layout(window));
+    let long = (words.iter())
+        .find(|w| w.0.starts_with("\u{201c}Claude Code desktop"))
+        .expect("the long search");
+    assert!(long.0.ends_with('\u{2026}'), "{}", long.0);
+    assert!(
+        long.3 <= web.x,
+        "{} past the card, which ends at {}",
+        long.3,
+        web.x
+    );
     // Their logos are asked for, the sites' too.
     let asked = format!("{:?}", ui.logos_due(&store));
     for key in [
@@ -1717,6 +1755,26 @@ fn an_answer_is_read_back_from_the_tool_result() {
 }
 
 #[test]
+fn a_session_without_a_kept_model_drops_the_one_another_session_had() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "opencode".into(),
+        cwd: "/work".into(),
+    });
+    ui.model = Some("claude-opus".into());
+    ui.effort = Some("max".into());
+    update(
+        &store,
+        &mut ui,
+        &UiAction::Clicked {
+            id: "session:2".into(),
+        },
+    );
+    assert_eq!((ui.model, ui.effort), (None, None));
+}
+
+#[test]
 fn questions_page_take_several_choices_their_own_words_and_skips() {
     let (mut store, mut ui) = store_with_session();
     agent(
@@ -1752,7 +1810,8 @@ fn questions_page_take_several_choices_their_own_words_and_skips() {
         },
     );
     let click = |ui: &mut Ui, id: &str| update(&store, ui, &UiAction::Clicked { id: id.into() });
-    assert!(click(&mut ui, "ask:p1:next").is_empty());
+    // The band's arrow goes on as Next does, under an id of its own.
+    assert!(click(&mut ui, "ask:p1:forward").is_empty());
     let intents = click(&mut ui, "ask:p1:skip");
     let [Intent::Decide {
         decision: Decision::Answer(answers),
@@ -5750,6 +5809,92 @@ fn a_notice_is_a_banner_only_while_its_session_is_out_of_view() {
     assert_eq!(notice(&store, &ui, &asked, false), None);
 }
 
+/// A command the agent runs in the shared terminal (docs/terminal.md §6): a card under its
+/// step with the command, how it stands and its last lines; "Open" shows the pane on the
+/// agent's tab; a command that waits for the person is a notice; and the pane says what its
+/// tab needs. Asking to run one is a card with the command and its folder.
+#[test]
+fn a_command_in_the_shared_terminal_is_a_card_a_notice_and_a_band() {
+    let (mut store, mut ui) = store_with_session();
+    let input = serde_json::json!({ "command": "sudo pacman -Syu" });
+    tool(&mut store, "t1", "mcp__terminal__terminal_run", input, None);
+    let head = r#"{"type":"terminal","state":"waiting","exit":null,"secret":true,"idle_ms":120,"prompt":"[sudo] password for nihuel:"}"#;
+    let output =
+        format!("{head}\n:: Synchronizing package databases...\n[sudo] password for nihuel:");
+    result(&mut store, "t1", &output);
+    let window = limn::Size::new(1408.0, 844.0);
+    let words = text_spans(&UiTree::new(view(&store, &ui, window)).layout(window));
+    // The step, then its card; the terminal is no connector of the session.
+    assert!(!words.iter().any(|w| w.0 == "terminal"));
+    for said in [
+        "Ran in Terminal sudo pacman -Syu",
+        "sudo pacman -Syu",
+        "Waiting for your password",
+        "[sudo] password for nihuel:",
+        "Open",
+    ] {
+        assert!(words.iter().any(|w| w.0 == said), "{said}: {words:?}");
+    }
+    assert_eq!(click(&store, &mut ui, view::TERMINAL_AGENT), []);
+    assert!(ui.pane_open(Pane::Terminal));
+    assert_eq!(ui.terminal.requests, [TerminalRequest::Agent("1".into())]);
+    // Waiting for the person: the question's notice, while the session is out of view.
+    let waited = Event::Agent {
+        session: 1,
+        request: Some("r1".into()),
+        event: AgentEvent::ToolResult {
+            call: "t1".into(),
+            output: output.clone(),
+            is_error: false,
+            files: vec![],
+            command: None,
+            web: None,
+            images: vec![],
+            inline: vec![],
+        },
+    };
+    assert!(matches!(notice(&store, &ui, &waited, false),
+        Some((_, Intent::Notify { body, .. })) if body == NOTICE_TERMINAL));
+    // The pane's band on the agent's tab, which waits for a secret.
+    ui.terminal.tabs = vec![TerminalTab {
+        title: "Fix the bug".into(),
+        busy: true,
+        named: true,
+        agent: true,
+        waiting: Some(true),
+        read_only: false,
+    }];
+    ui.terminal.screen = Some(std::sync::Arc::default());
+    settle(&store, &mut ui);
+    let words = text_spans(&UiTree::new(view(&store, &ui, window)).layout(window));
+    // Cut at a narrow pane's width, its start says it.
+    assert!(words
+        .iter()
+        .any(|w| w.0.starts_with("Type the password here")));
+    // Asking first: the command and where it runs.
+    let asked = serde_json::json!({ "kind": "command", "command": "sudo true", "folder": "/work" });
+    agent(
+        &mut store,
+        AgentEvent::PermissionRequest {
+            id: "site-1".into(),
+            call: None,
+            tool: newen_model::SITE_PERMISSION.into(),
+            input: asked,
+            title: None,
+            interactive: false,
+            suggestions: vec![],
+        },
+    );
+    let words = text_spans(&UiTree::new(view(&store, &ui, window)).layout(window));
+    for said in [
+        "Allow the agent to run this command in the Terminal?",
+        "sudo true",
+        "/work",
+    ] {
+        assert!(words.iter().any(|w| w.0 == said), "{said}");
+    }
+}
+
 #[test]
 fn each_notice_says_its_own_text_and_a_status_alone_is_none() {
     use newen_model::NotifyLevel;
@@ -8726,9 +8871,13 @@ fn a_new_codex_session_never_takes_a_claude_model() {
 }
 
 #[test]
-fn both_programs_top_effort_is_drawn_alive() {
-    assert!(view::ultra_effort("ultracode") && view::ultra_effort("ultra"));
-    assert!(!view::ultra_effort("max"));
+fn every_models_top_effort_is_drawn_alive() {
+    let levels = |l: &[&str]| l.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+    assert!(view::top_effort(&levels(&["low", "max", "ultracode"]), 2));
+    assert!(!view::top_effort(&levels(&["low", "max", "ultracode"]), 1));
+    // A variant list's last (OpenCode's, Hermes') is its top as well.
+    assert!(view::top_effort(&levels(&["low", "high", "max"]), 2));
+    assert!(!view::top_effort(&levels(&["max"]), 0));
 }
 
 #[test]
@@ -10079,7 +10228,7 @@ fn a_command_left_running_is_listed_stopped_and_followed_in_a_terminal() {
         &mut store,
         AgentEvent::ToolResult {
             call: "c1".into(),
-            output: "Command running in background with ID: b1. Output is being written to: /tmp/q/tasks/b1.output".into(),
+            output: "Command running in background with ID: b1. Output is being written to: /tmp/q/tasks/b1.output. You will be notified when it completes.".into(),
             is_error: false,
             files: vec![],
             command: None,

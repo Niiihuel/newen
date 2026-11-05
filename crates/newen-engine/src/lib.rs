@@ -30,9 +30,11 @@ mod sign_in;
 mod skills;
 mod storage;
 mod suggest;
+mod terminal;
 mod update;
 
 pub use newen_browser::{native, Frame, Frames, Native, Pixels, Present};
+pub use newen_pty::Terminals;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -162,6 +164,8 @@ pub struct Config {
     pub frames: newen_browser::Frames,
     /// Chromium inside the window, when the host started it (`Native::start`).
     pub native: Option<newen_browser::Native>,
+    /// The terminal tabs, the window's and the agents' (docs/terminal.md).
+    pub terminals: newen_pty::Terminals,
 }
 
 impl Config {
@@ -459,6 +463,8 @@ struct Router {
     busy: std::collections::HashSet<SessionId>,
     /// The built-in browser, shared by every session (each in a context of its own).
     browser: newen_browser::Browser,
+    /// The shared terminal's commands under way and the sessions allowed every command.
+    terminal: terminal::Shared,
     /// Site permissions the browser waits on, by the card's id: the site and where the
     /// answer goes.
     site_waits: SiteWaits,
@@ -566,8 +572,9 @@ impl Router {
                 // once, as Desktop waives it.
                 let mode = modes.lock().unwrap().get(&session).cloned();
                 let (agent, mode) = mode.unzip();
+                // A command in the shared terminal too, as the agent's own shell would run it.
                 if waives_server_consent(agent.as_deref(), mode.as_deref())
-                    && input["kind"] == "server"
+                    && matches!(input["kind"].as_str(), Some("server" | "command"))
                 {
                     let _ = answer.send(newen_browser::Grant::Once);
                     return heard;
@@ -677,6 +684,7 @@ impl Router {
             bridge,
             relayed,
             browser,
+            terminal: Default::default(),
             site_waits,
             logo_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             provider_attempts: Default::default(),
@@ -2501,6 +2509,7 @@ impl Router {
             self.archived.insert(session);
             let browser = self.browser.clone();
             tokio::spawn(async move { browser.forget(session).await });
+            terminal::forget(&self.config.terminals, &self.terminal, session);
         } else {
             self.archived.remove(&session);
         }
@@ -2578,6 +2587,44 @@ impl Router {
                 let (browser, internal) = (self.browser.clone(), self.internal.clone());
                 tokio::spawn(async move {
                     let (content, is_error) = browser.tool(session, &name, input).await;
+                    let _ = internal.send(Internal::HostAnswered {
+                        session,
+                        id,
+                        content,
+                        is_error,
+                    });
+                });
+            }
+            // The shared terminal's tools wait on a command: beside the router, too.
+            Internal::HostTool {
+                session,
+                id,
+                name,
+                input,
+            } if newen_agent::TERMINAL_TOOLS
+                .iter()
+                .any(|(tool, ..)| *tool == name) =>
+            {
+                let Some(cwd) = self.folders.get(&session).cloned() else {
+                    let text = "This session has no folder to run commands in.";
+                    self.host_answer(session, id, newen_agent::ToolContent::text(text), true);
+                    return;
+                };
+                let title = self.names.lock().unwrap().get(&session).cloned();
+                let place = terminal::Place {
+                    cwd,
+                    title: title.unwrap_or_default(),
+                };
+                let (terminals, shared, ask, internal) = (
+                    self.config.terminals.clone(),
+                    self.terminal.clone(),
+                    self.ask.clone(),
+                    self.internal.clone(),
+                );
+                tokio::spawn(async move {
+                    let (content, is_error) =
+                        terminal::tool(&terminals, &shared, &ask, session, place, &name, &input)
+                            .await;
                     let _ = internal.send(Internal::HostAnswered {
                         session,
                         id,
