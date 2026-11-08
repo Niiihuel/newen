@@ -987,8 +987,10 @@ fn connectors(ui: &Ui, page: &Page, width: f32) -> Vec<Block> {
                         "Connectors give {} tools and data from other apps and services.",
                         agent.name
                     ),
+                    // An id of its own: limn keeps a control's look by its id, and the header's
+                    // Discover took this one's light fill under its own light label.
                     Some(customize::button(
-                        "srv:tab:discover",
+                        &format!("srv:tab:discover:{}", agent.id),
                         "Discover connectors",
                         Some(icons::DISCOVER),
                         false,

@@ -13372,6 +13372,31 @@ fn connectors_have_one_row_of_tools_and_discover_leads_back() {
     assert!(!ui.connectors.discover);
 }
 
+/// An agent with no connectors offers Discover on its card under an id of its own: sharing
+/// the header's, it lent that one its light fill under a light label, an empty light box.
+#[test]
+fn an_empty_agents_discover_has_an_id_of_its_own() {
+    use newen_model::McpStatus;
+    let (store, mut ui) = two_agents_on(view::SETTINGS_CONNECTORS);
+    let github = configured("github", "npx -y server-github", McpStatus::Connected);
+    for (agent, servers) in [("claude", vec![github]), ("codex", vec![])] {
+        ui.applied(&Event::Servers {
+            agent: agent.into(),
+            folder: "/work".into(),
+            servers,
+            scopes: vec![],
+            error: None,
+        });
+    }
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let count = |id: &str| frame.regions.iter().filter(|r| r.id == id).count();
+    assert_eq!(count("srv:tab:discover"), 1, "the header's alone");
+    assert_eq!(count("srv:tab:discover:codex"), 1, "Codex's card");
+    click(&store, &mut ui, "srv:tab:discover:codex");
+    assert!(ui.connectors.discover);
+}
+
 /// Customize with 300 connectors and 300 skills for each agent: a frame builds and lays out
 /// about the rows in view, not all of them, in a bounded time.
 #[test]

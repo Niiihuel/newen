@@ -5587,7 +5587,8 @@ fn connectors_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
     let rest = id.strip_prefix("srv:")?;
     let c = &mut ui.connectors;
     match rest.split_once(':').unwrap_or((rest, "")) {
-        ("tab", tab) => c.discover = tab == "discover",
+        // The header's Discover, or an agent's with no connectors (`discover:<agent>`).
+        ("tab", tab) => c.discover = tab.starts_with("discover"),
         // From the header, for the agent a new session would run; ticking more is the dialog's.
         ("add", agent) => {
             let agent = if agent.is_empty() {
