@@ -4,8 +4,9 @@
 //! its own), how its tools read as Newen's, and its connectors.
 
 use newen_agent::{
-    AgentAdapter, AgentCommand, AgentId, Choices, ConfiguredServer, Decision, Decoded, ExtensionOp,
-    LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun, SessionExtras, SessionSpec,
+    AgentAdapter, AgentCommand, AgentId, AgentOption, Choices, ConfiguredServer, Decision, Decoded,
+    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun, SessionExtras,
+    SessionSpec,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Map, Value};
@@ -17,6 +18,58 @@ const DEFAULT: &str = "default";
 const AUTO: &str = "auto";
 const PLAN: &str = "plan";
 const ALWAYS: &str = "always-approve";
+
+/// The person's options (Settings, docs/grok.md "Opciones"): its switches, each set by one of
+/// its variables (`1` on, `0` off) only when moved from its default, so Grok's own settings
+/// decide otherwise.
+const SWITCHES: [(&str, &str, &str, &str, &str); 5] = [
+    (
+        "subagents",
+        "Subagents",
+        "Let Grok hand parts of a task to agents of its own. Applies to new sessions.",
+        "true",
+        "GROK_SUBAGENTS",
+    ),
+    (
+        "memory",
+        "Memory",
+        "Let Grok remember what it learns across sessions (experimental). Applies to new sessions.",
+        "false",
+        "GROK_MEMORY",
+    ),
+    (
+        "workflows",
+        "Background workflows",
+        "Let goals and long tasks run as workflows in the background. Applies to new sessions.",
+        "true",
+        "GROK_WORKFLOWS",
+    ),
+    (
+        "gitignore",
+        "Skip ignored files",
+        "Search and read only what .gitignore does not list. Applies to new sessions.",
+        "false",
+        "GROK_RESPECT_GITIGNORE",
+    ),
+    (
+        "telemetry",
+        "Usage data",
+        "Send usage data and session traces to xAI. Applies to new sessions.",
+        "true",
+        "GROK_TELEMETRY_ENABLED",
+    ),
+];
+/// Web search and fetch, off with `--disable-web-search` before `agent`.
+const WEB: &str = "web";
+/// Its sandbox's profile (`GROK_SANDBOX`); none chosen leaves Grok's own.
+const SANDBOX: &str = "sandbox";
+const SANDBOXES: [(&str, &str); 5] = [
+    ("", "As Grok is set"),
+    ("off", "Off"),
+    ("workspace", "This folder"),
+    ("read-only", "Read only"),
+    ("strict", "Strict"),
+];
 
 /// Its requests that wait on the person (docs/grok.md "Preguntas y planes").
 const ASK_QUESTION: &str = "_x.ai/ask_user_question";
@@ -307,13 +360,70 @@ impl AgentAdapter for Grok {
 
     fn launch(&self, spec: &SessionSpec) -> LaunchPlan {
         self.0.remember(spec);
+        let chosen = |key: &str, default: &str| {
+            spec.options.get(key).map_or(default, |v| v.as_str()) == "true"
+        };
+        let mut env: Vec<(String, String)> = (SWITCHES.iter())
+            .filter(|(key, _, _, default, _)| chosen(key, default) != (*default == "true"))
+            .map(|(key, _, _, default, variable)| {
+                let on = chosen(key, default);
+                (
+                    (*variable).to_owned(),
+                    if on { "1" } else { "0" }.to_owned(),
+                )
+            })
+            .collect();
+        if let Some(profile) = spec.options.get(SANDBOX).filter(|p| !p.is_empty()) {
+            env.push(("GROK_SANDBOX".into(), profile.clone()));
+        }
+        // Its flags of the whole program go before `agent`.
+        let mut args = vec![];
+        if !chosen(WEB, "true") {
+            args.push("--disable-web-search".to_owned());
+        }
+        args.extend(["agent".into(), "stdio".into()]);
         LaunchPlan {
             program: program(),
-            args: vec!["agent".into(), "stdio".into()],
-            env: vec![],
+            args,
+            env,
             env_remove: vec![],
             cwd: spec.cwd.clone(),
         }
+    }
+
+    fn options(&self) -> Vec<AgentOption> {
+        let mut options = vec![
+            AgentOption {
+                key: SANDBOX.into(),
+                label: "Sandbox".into(),
+                description: "Where Grok's commands may write and connect. This folder: here and \
+                    temporary files; Read only: nowhere but temporary files, without the network; \
+                    Strict: as Read only, and it reads only this folder. Applies to new sessions."
+                    .into(),
+                choices: SANDBOXES.map(|(v, l)| (v.into(), l.into())).into(),
+                default: String::new(),
+            },
+            AgentOption {
+                key: WEB.into(),
+                label: "Web search and fetch".into(),
+                description: "Let Grok search the web and read pages. Applies to new sessions."
+                    .into(),
+                choices: vec![],
+                default: "true".into(),
+            },
+        ];
+        options.extend(
+            SWITCHES
+                .iter()
+                .map(|(key, label, description, default, _)| AgentOption {
+                    key: (*key).into(),
+                    label: (*label).into(),
+                    description: (*description).into(),
+                    choices: vec![],
+                    default: (*default).into(),
+                }),
+        );
+        options
     }
 
     /// Always-approve and auto start a dev server without a card, as bypass and auto do.
@@ -426,6 +536,11 @@ impl AgentAdapter for Grok {
 
     fn default_mode(&self) -> &'static str {
         DEFAULT
+    }
+
+    /// Grok's mark, as svgl.app lists it (svgl.app/library/grok-dark.svg), in currentColor.
+    fn icon(&self) -> Option<&'static str> {
+        Some(include_str!("../assets/grok.svg"))
     }
 
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {

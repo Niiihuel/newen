@@ -4,9 +4,9 @@
 //! as Newen's, and its connectors.
 
 use newen_agent::{
-    AgentAdapter, AgentCommand, AgentEvent, AgentId, Choices, ConfiguredServer, Decoded,
-    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun, SessionExtras,
-    SessionSpec,
+    AgentAdapter, AgentCommand, AgentEvent, AgentId, AgentOption, Choices, ConfiguredServer,
+    Decoded, ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun,
+    SessionExtras, SessionSpec,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Value};
@@ -20,6 +20,25 @@ const EDITS: &str = "accept-edits";
 const PLAN: &str = "plan";
 /// Newen's id for `--dangerously-skip-permissions`, which ACP's modes do not have.
 const SKIP: &str = "skip-permissions";
+
+/// The person's options (Settings, docs/antigravity.md "Opciones"): `agy acp`'s switches, as
+/// (key, label, description, default, the flag it takes when not at its default).
+const OPTIONS: [(&str, &str, &str, &str, &str); 2] = [
+    (
+        "sandbox",
+        "Sandbox",
+        "Run Antigravity's commands in a sandbox that restricts the terminal. Applies to new sessions.",
+        "false",
+        "--sandbox",
+    ),
+    (
+        "telemetry",
+        "Usage data",
+        "Send usage data to Google. Applies to new sessions.",
+        "true",
+        "--disable-telemetry",
+    ),
+];
 
 /// How Antigravity's tools read as Newen's (docs/antigravity.md "Herramientas"): its input's
 /// keys are capitalized (`Path`, `CommandLine`…), and a tool it does not name by kind is
@@ -149,6 +168,11 @@ impl AgentAdapter for Antigravity {
         if skip {
             args.push("--dangerously-skip-permissions".into());
         }
+        for (key, _, _, default, flag) in OPTIONS {
+            if spec.options.get(key).map_or(default, String::as_str) != default {
+                args.push(flag.into());
+            }
+        }
         LaunchPlan {
             program: "agy".into(),
             args,
@@ -156,6 +180,18 @@ impl AgentAdapter for Antigravity {
             env_remove: vec![],
             cwd: spec.cwd.clone(),
         }
+    }
+
+    fn options(&self) -> Vec<AgentOption> {
+        (OPTIONS.iter())
+            .map(|(key, label, description, default, _)| AgentOption {
+                key: (*key).into(),
+                label: (*label).into(),
+                description: (*description).into(),
+                choices: vec![],
+                default: (*default).into(),
+            })
+            .collect()
     }
 
     fn launch_mode(&self, mode: &str) -> bool {
@@ -263,6 +299,12 @@ impl AgentAdapter for Antigravity {
 
     fn default_mode(&self) -> &'static str {
         DEFAULT
+    }
+
+    /// Antigravity's mark, as svgl.app lists it (svgl.app/library/antigravity.svg): its shape
+    /// alone, in currentColor, without the gradient.
+    fn icon(&self) -> Option<&'static str> {
+        Some(include_str!("../assets/antigravity.svg"))
     }
 
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {

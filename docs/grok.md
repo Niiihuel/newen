@@ -58,6 +58,26 @@ Son pedidos propios, no `elicitation/create` (`Flavor::ask` / `Flavor::answer`):
 
 `session/new` toma servidores MCP stdio, HTTP y SSE (`SessionExtras::host`): los tres de Newen corren en el proceso de Grok, que no los muestra al modelo directamente sino por `search_tool` y `use_tool` (captura `host`: `sessions__list_sessions`, sin tarjeta).
 
+## Opciones (Settings)
+
+Para las sesiones nuevas. `grok agent stdio` toma pocas opciones de línea de comandos; el resto, sus variables (`1`/`0`), que van solo cuando la opción deja su valor por defecto, así su `config.toml` decide si no:
+
+| Opción | Por defecto | Cómo |
+|---|---|---|
+| Sandbox | como esté Grok | `GROK_SANDBOX`: `off`, `workspace` ("This folder"), `read-only`, `strict` |
+| Web search and fetch | sí | `--disable-web-search` antes de `agent` |
+| Subagents | sí | `GROK_SUBAGENTS` |
+| Memory (experimental) | no | `GROK_MEMORY` |
+| Background workflows | sí | `GROK_WORKFLOWS` |
+| Skip ignored files | no | `GROK_RESPECT_GITIGNORE` |
+| Usage data | sí | `GROK_TELEMETRY_ENABLED` |
+
+Verificado con el 1.0.77: arranca y abre sesión con todas puestas.
+
+## Logo
+
+Su marca de svgl.app (`grok-dark.svg`) en `currentColor` (`assets/grok.svg`): solo donde Newen nombra a sus agentes (AGENTS.md).
+
 ## Customize
 
 - **Conectores:** `grok mcp list --json` (`[{name, scope, enabled, command, args, env}` o `{…, url, headers}]`, lee su config sin conectar). Agregar: `grok mcp add [-s user|project] [-e K=V]… <nombre> -- <comando> [args…]`, o `-t http [-H "N: v"]… <nombre> <url>`. Quitar: `grok mcp remove <nombre>`. Alcances "All my projects" (`user`, `~/.grok/config.toml`) y "This project" (`project`, `.grok/config.toml`).
@@ -67,4 +87,3 @@ Son pedidos propios, no `elicitation/create` (`Flavor::ask` / `Flavor::answer`):
 
 - **Cuenta en Newen:** iniciar y cerrar sesión es `grok login` / `grok logout` en la terminal.
 - **Fork:** no tiene `session/fork` de ACP (solo una extensión propia); un fork de Newen abre una sesión que la reanuda.
-- **Logo:** su repositorio no trae uno; el agente se muestra con el ícono genérico.

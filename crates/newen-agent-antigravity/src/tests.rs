@@ -299,3 +299,26 @@ fn its_connectors_are_listed_added_and_removed() {
         ]
     );
 }
+
+/// Settings' options reach `agy acp` as its flags, only when moved from their defaults.
+#[test]
+fn its_options_reach_its_launch() {
+    let antigravity = Antigravity::new();
+    assert_eq!(antigravity.launch(&SessionSpec::default()).args, ["acp"]);
+    let mut spec = SessionSpec::default();
+    spec.options.insert("sandbox".into(), "true".into());
+    spec.options.insert("telemetry".into(), "false".into());
+    assert_eq!(
+        antigravity.launch(&spec).args,
+        ["acp", "--sandbox", "--disable-telemetry"]
+    );
+    let keys: Vec<String> = (antigravity.options().into_iter()).map(|o| o.key).collect();
+    assert_eq!(keys, ["sandbox", "telemetry"]);
+}
+
+/// Its logo names it where Newen lists agents.
+#[test]
+fn it_has_its_logo() {
+    let logo = Antigravity::new().icon().expect("a logo");
+    assert!(logo.starts_with("<svg fill=\"currentColor\""));
+}

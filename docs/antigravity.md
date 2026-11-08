@@ -50,6 +50,14 @@ Su input tiene las claves en mayúscula, y lo que no nombra por tipo es "Run `<t
 
 `session/new` toma servidores MCP stdio (`SessionExtras::host`; no declara HTTP ni SSE): los tres de Newen. El modelo los ve como `mcp_<servidor>_<tool>` (captura `host`: `list_sessions`, sin tarjeta).
 
+## Opciones (Settings)
+
+Para las sesiones nuevas, como interruptores de `agy acp` que van solo cuando dejan su valor por defecto: **Sandbox** (`--sandbox`, terminal restringida; por defecto no) y **Usage data** (`--disable-telemetry` al apagarla; por defecto sí). Verificado con el 1.5.3: arranca y abre sesión con las dos.
+
+## Logo
+
+La forma de su marca de svgl.app (`antigravity.svg`, la silueta de su máscara, sin el degradé) en `currentColor` (`assets/antigravity.svg`): solo donde Newen nombra a sus agentes (AGENTS.md).
+
 ## Customize
 
 - **Conectores:** `agy mcp list` (tabla `NAME TYPE STATUS COMMAND/URL`, sin JSON). Agregar: `agy mcp add [-e K=V]… [-H "N: v"]… [-t http] <nombre> -- <comando o url> [args…]` (sus opciones van antes del nombre). Quitar: `agy mcp remove <nombre>`. Un solo alcance, "All my projects" (`~/.gemini/config/mcp_config.json`).
@@ -60,4 +68,3 @@ Su input tiene las claves en mayúscula, y lo que no nombra por tipo es "Run `<t
 - **Cuenta en Newen:** se inicia con `agy` o `agy acp --login` en la terminal.
 - **Fork:** no tiene `session/fork`; un fork de Newen abre una sesión que la reanuda.
 - **Lista de tareas:** la lleva en un archivo propio (`todo.md` en su carpeta `brain`), que se ve como ediciones de ese archivo.
-- **Logo:** su repositorio no trae uno; el agente se muestra con el ícono genérico.

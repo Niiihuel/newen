@@ -354,3 +354,57 @@ fn an_mcp_tool_is_read_by_its_server() {
     );
     assert_eq!(mcp("other__do", &servers), ("other".into(), "do".into()));
 }
+
+/// Settings' options reach `grok agent stdio`: a switch moved from its default sets its
+/// variable, the sandbox its profile, web search off its flag before `agent`; left alone,
+/// nothing, so Grok's own settings decide.
+#[test]
+fn its_options_reach_its_launch() {
+    let grok = Grok::new();
+    let plain = grok.launch(&SessionSpec::default());
+    assert_eq!(plain.args, ["agent", "stdio"]);
+    assert!(plain.env.is_empty());
+    let mut spec = SessionSpec::default();
+    for (key, value) in [
+        ("sandbox", "workspace"),
+        ("web", "false"),
+        ("subagents", "false"),
+        ("memory", "true"),
+        ("gitignore", "true"),
+        ("telemetry", "true"),
+    ] {
+        spec.options.insert(key.into(), value.into());
+    }
+    let plan = grok.launch(&spec);
+    assert_eq!(plan.args, ["--disable-web-search", "agent", "stdio"]);
+    let set = |name: &str| {
+        (plan.env.iter())
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(set("GROK_SANDBOX"), Some("workspace"));
+    assert_eq!(set("GROK_SUBAGENTS"), Some("0"));
+    assert_eq!(set("GROK_MEMORY"), Some("1"));
+    assert_eq!(set("GROK_RESPECT_GITIGNORE"), Some("1"));
+    assert_eq!(set("GROK_TELEMETRY_ENABLED"), None, "at its default");
+    let keys: Vec<String> = grok.options().into_iter().map(|o| o.key).collect();
+    assert_eq!(
+        keys,
+        [
+            "sandbox",
+            "web",
+            "subagents",
+            "memory",
+            "workflows",
+            "gitignore",
+            "telemetry"
+        ]
+    );
+}
+
+/// Its logo names it where Newen lists agents.
+#[test]
+fn it_has_its_logo() {
+    let logo = Grok::new().icon().expect("a logo");
+    assert!(logo.starts_with("<svg fill=\"currentColor\""));
+}
