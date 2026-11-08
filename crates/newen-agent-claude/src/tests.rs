@@ -509,6 +509,7 @@ fn the_pages_options_reach_the_cli_as_its_own_settings() {
             "auto_memory",
             "hooks",
             "project_servers",
+            "artifacts",
             "telemetry"
         ]
     );
@@ -567,6 +568,19 @@ fn the_pages_options_reach_the_cli_as_its_own_settings() {
     assert!(
         !(claude.launch(&SessionSpec::default()).env.iter()).any(|(k, _)| k == "DISABLE_TELEMETRY")
     );
+    // Its Artifact tools, which it withholds outside a terminal unless told: on unless off.
+    let artifacts = |spec: &SessionSpec| {
+        let env = claude.launch(spec).env;
+        (env.iter())
+            .find(|(k, _)| k == "CLAUDE_CODE_ARTIFACT")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(artifacts(&SessionSpec::default()).as_deref(), Some("1"));
+    let off = SessionSpec {
+        options: [("artifacts".to_owned(), "false".to_owned())].into(),
+        ..SessionSpec::default()
+    };
+    assert_eq!(artifacts(&off).as_deref(), Some("0"));
 }
 
 #[test]

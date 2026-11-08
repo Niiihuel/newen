@@ -430,6 +430,10 @@ impl AgentAdapter for Claude {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        // Artifacts on (their default, as in a terminal) or off.
+        let artifacts = spec.options.get(ARTIFACTS).map_or("true", String::as_str);
+        let artifacts = if artifacts == "false" { "0" } else { "1" };
+        env.push(("CLAUDE_CODE_ARTIFACT".into(), artifacts.into()));
         // Usage data off: its telemetry and its error reports.
         if spec.options.get(TELEMETRY).is_some_and(|v| v == "false") {
             env.extend(
@@ -739,13 +743,22 @@ impl AgentAdapter for Claude {
         .chain(SETTING_SWITCHES.map(|(key, label, description, default, ..)| {
             option(key, label, description, &[], if default { "true" } else { "false" })
         }))
-        .chain([option(
-            TELEMETRY,
-            "Usage data",
-            "Send usage data and error reports to Anthropic. Applies to new sessions.",
-            &[],
-            "true",
-        )])
+        .chain([
+            option(
+                ARTIFACTS,
+                "Artifacts",
+                "Let Claude publish pages, documents and dashboards as private artifacts on claude.ai, to open and share by their link. Needs a Claude subscription. Applies to new sessions.",
+                &[],
+                "true",
+            ),
+            option(
+                TELEMETRY,
+                "Usage data",
+                "Send usage data and error reports to Anthropic. Applies to new sessions.",
+                &[],
+                "true",
+            ),
+        ])
         .collect()
     }
 
@@ -1730,6 +1743,9 @@ const AUTO_MEMORY: &str = "auto_memory";
 const HOOKS: &str = "hooks";
 const PROJECT_SERVERS: &str = "project_servers";
 const TELEMETRY: &str = "telemetry";
+/// Its Artifact tools, which the CLI withholds from a session it does not run in a terminal
+/// unless `CLAUDE_CODE_ARTIFACT` says so (2.1.319, `sdk_default_off`).
+const ARTIFACTS: &str = "artifacts";
 
 /// Its switches that are Claude Code settings (2.1.319's schema), as (key, label, description,
 /// default, the setting and its value away from the default): set only when moved, so the

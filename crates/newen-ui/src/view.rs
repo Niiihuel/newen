@@ -6359,6 +6359,40 @@ fn step_label(step: &Step, done: bool) -> (String, String) {
         "CloseAgent" => ("Closed an agent", "Closing an agent", String::new()),
         "Skill" => ("Ran skill", "Running skill", said("skill")),
         "ExitPlanMode" => ("Proposed plan", "Proposing plan", String::new()),
+        // What it does with an artifact, by its action (publish when it names none).
+        "Artifact" => {
+            let named = said("title");
+            let file = (input["file_path"].as_str().map(std::path::Path::new))
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned());
+            let what = if named.is_empty() {
+                file.unwrap_or_default()
+            } else {
+                named
+            };
+            match input_action(input) {
+                "quickstart" => (
+                    "Read how to make it",
+                    "Reading how to make it",
+                    String::new(),
+                ),
+                "read" => ("Read artifact", "Reading artifact", said("url")),
+                "list" => ("Listed artifacts", "Listing artifacts", String::new()),
+                "open" => ("Opened artifact", "Opening artifact", said("url")),
+                "delete" => ("Deleted artifact", "Deleting artifact", said("url")),
+                "pin" | "unpin" => ("Pinned artifact", "Pinning artifact", said("url")),
+                _ if input["asset"] == true => {
+                    ("Uploaded to artifact", "Uploading to artifact", what)
+                }
+                _ => ("Published artifact", "Publishing artifact", what),
+            }
+        }
+        "ArtifactComments" => ("Read comments", "Reading comments", said("url")),
+        "ArtifactData" => (
+            "Updated artifact data",
+            "Updating artifact data",
+            said("url"),
+        ),
         // The rest in Desktop's words. What follows the
         // verb is Newen's where Desktop shows none (inferred): the server, the resource, the
         // command stopped.
@@ -6538,8 +6572,15 @@ pub fn group_summary(steps: &[Step]) -> String {
     // The only one says what it acted on too: "Opened example.com".
     let mut lone_browsing = None;
     let (mut commands, mut searches, mut agents, mut others) = (0, 0, 0, 0);
+    // Artifacts published, and its other artifact steps (reading how to make one, listing),
+    // which a publish already says.
+    let (mut published, mut artifact_others) = (0, 0);
     for step in steps {
         match step.name {
+            "Artifact" if input_action(step.input) == "publish" && step.input["asset"] != true => {
+                published += 1
+            }
+            "Artifact" => artifact_others += 1,
             name if name.starts_with("mcp__browser__") => {
                 let (verb, object) = step_label(step, true);
                 lone_browsing = lone_browsing.is_none().then(|| {
@@ -6566,6 +6607,9 @@ pub fn group_summary(steps: &[Step]) -> String {
             }
             _ => others += 1,
         }
+    }
+    if published == 0 {
+        others += artifact_others;
     }
     // A lone tool of no kind above says what it did: "Stopped task npm run dev".
     if let ([step], 1) = (steps, others) {
@@ -6600,6 +6644,7 @@ pub fn group_summary(steps: &[Step]) -> String {
         1 => Some(format!("{verb} {one} {thing}")),
         n => Some(format!("{verb} {n} {thing}s")),
     };
+    clauses.extend(count(published, "published", "an", "artifact"));
     clauses.extend(count(commands, "ran", "a", "command"));
     clauses.extend(count(agents, "ran", "an", "agent"));
     clauses.extend(count(others, "used", "a", "tool"));
@@ -6911,10 +6956,24 @@ fn step_group(
             .hover_region();
         Element::column(vec![Element::spacer().size(None, Some(8.0)), card])
     });
-    Element::column(vec![
-        head,
-        limn::Collapse::new(body_id, card).expand().render(),
-    ])
+    // The artifacts its steps published or opened: their links, under it folded or not, each
+    // once.
+    let mut links: Vec<String> = vec![];
+    let mut column_rows = vec![head];
+    for step in steps.iter().filter(|s| s.name == "Artifact") {
+        let Some(url) = step.result.and_then(|r| artifact_url(&r.output)) else {
+            continue;
+        };
+        if links.contains(&url) {
+            continue;
+        }
+        let (_, title) = step_label(step, true);
+        column_rows.push(Element::spacer().size(None, Some(6.0)));
+        column_rows.push(artifact_link(step.call, &url, &title, palette));
+        links.push(url);
+    }
+    column_rows.push(limn::Collapse::new(body_id, card).expand().render());
+    Element::column(column_rows)
 }
 
 /// Whether a collapsible is open: Verbose holds every one open, else the person's toggle.
@@ -7089,6 +7148,60 @@ fn step_row(
     Element::column(vec![
         row,
         limn::Collapse::new(body_id, body).expand().render(),
+    ])
+}
+
+/// What an Artifact call does: its `action`, a publish when it names none.
+fn input_action(input: &Value) -> &str {
+    input["action"].as_str().unwrap_or("publish")
+}
+
+/// The first claude.ai artifact address in a tool's words, up to the first space, quote or
+/// bracket after it.
+fn artifact_url(output: &str) -> Option<String> {
+    let start = output.find("https://claude.ai/")?;
+    let rest = &output[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | ']' | '>' | '`'))
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(['.', ',', ';']);
+    url.contains("artifact").then(|| url.to_owned())
+}
+
+/// An artifact's link under its step: its name and where it lives, opened as any link is (the
+/// built-in browser or the person's, as Settings say).
+fn artifact_link(call: &str, url: &str, title: &str, palette: ComponentPalette) -> Element {
+    let ink = look::palette().text;
+    let name = if title.is_empty() { "Artifact" } else { title };
+    let content = Element::row(vec![
+        Element::icon(icons::of(icons::GLOBE))
+            .foreground(look::muted())
+            .size(Some(14.0), Some(14.0))
+            .centered_y(),
+        Element::truncated_text(name.to_owned())
+            .font_family(FontFamily::SansMedium)
+            .font_size(SMALL)
+            .foreground(ink)
+            .centered_y(),
+        Element::text("claude.ai")
+            .font_size(SMALL)
+            .foreground(look::muted())
+            .centered_y(),
+    ])
+    .gap(8.0);
+    let card = Element::clickable(format!("{LINK}{call}:0:{url}"), content)
+        .accessibility_label(format!("Open {name}"))
+        .padding(8.0)
+        .background(look::command_box())
+        .radius(10.0);
+    let hover = ComponentPalette {
+        hover: look::tool_hover(),
+        selected: look::tool_hover(),
+        ..palette
+    };
+    Element::row(vec![
+        hover.interactive_surface(card).radius(10.0),
+        Element::spacer().flex(1.0),
     ])
 }
 

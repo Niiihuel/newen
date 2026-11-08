@@ -6452,6 +6452,62 @@ fn mention_files_are_kept_only_for_the_query_asked() {
     assert_eq!(mention_ids(&store, &ui), ["mention:file:src/main.rs"]);
 }
 
+/// Claude's Artifact steps say what they did with it, and a published one leaves its link
+/// under their run, folded or not, which opens as any link does.
+#[test]
+fn a_published_artifact_shows_its_link_under_its_step() {
+    let (mut store, mut ui) = store_with_session();
+    let call = |id: &str, input: serde_json::Value| AgentEvent::ToolUse {
+        call: id.into(),
+        name: "Artifact".into(),
+        input,
+        parent: None,
+    };
+    let result = |id: &str, output: &str| AgentEvent::ToolResult {
+        call: id.into(),
+        output: output.into(),
+        is_error: false,
+        files: vec![],
+        command: None,
+        web: None,
+        images: vec![],
+        inline: vec![],
+    };
+    agent(
+        &mut store,
+        call(
+            "a1",
+            serde_json::json!({ "action": "quickstart", "intent": "other" }),
+        ),
+    );
+    agent(&mut store, result("a1", "page-design guidance"));
+    agent(
+        &mut store,
+        call(
+            "a2",
+            serde_json::json!({ "file_path": "/work/charales/index.html", "title": "Charales" }),
+        ),
+    );
+    agent(
+        &mut store,
+        result(
+            "a2",
+            "Published https://claude.ai/code/artifact/0f3e-41 (private). Watching it.",
+        ),
+    );
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let link = (frame.regions.iter())
+        .find(|r| view::link_url(&r.id) == Some("https://claude.ai/code/artifact/0f3e-41"));
+    assert!(link.is_some(), "the artifact's link, the run folded");
+    assert!(drawn_words(&store, &ui, "Charales"));
+    assert!(drawn_words(&store, &ui, "Published an artifact"));
+    // Open, each step says what it did.
+    ui.expanded.push("steps:a1".into());
+    assert!(drawn_words(&store, &ui, "Read how to make it"));
+    assert!(drawn_words(&store, &ui, "Published artifact"));
+}
+
 /// A new session has no id yet: its "@" lists the files of the folder it starts in.
 #[test]
 fn mention_in_a_new_session_lists_its_folders_files() {
