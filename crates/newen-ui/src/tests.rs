@@ -12002,6 +12002,39 @@ fn release_notes(version: &str, try_it: Option<&str>) -> newen_model::ReleaseNot
     }
 }
 
+/// Many versions' notes scroll in the dialog's own body: one scroll area, not one inside another.
+#[test]
+fn the_notes_scroll_once() {
+    let (store, mut ui) = store_with_session();
+    let releases = (0..12)
+        .map(|n| release_notes(&format!("0.{n}.0"), None))
+        .collect();
+    whats_new_event(
+        &mut ui,
+        newen_model::WhatsNew {
+            releases,
+            ready: None,
+            announce: false,
+            unopened: false,
+        },
+    );
+    ui.notes_open = true;
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let scrolls: Vec<&str> = (frame.regions.iter())
+        .filter(|r| r.kind == limn::HitKind::Scroll)
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(
+        scrolls
+            .iter()
+            .filter(|id| id.contains("notes") || id.contains("whats_new"))
+            .count(),
+        1,
+        "{scrolls:?}"
+    );
+}
+
 fn whats_new_event(ui: &mut Ui, whats_new: newen_model::WhatsNew) -> Vec<Intent> {
     ui.applied(&Event::WhatsNew(whats_new))
 }

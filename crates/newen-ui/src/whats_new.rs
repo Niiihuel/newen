@@ -445,12 +445,13 @@ fn notes_dialog(ui: &Ui, base: Element, window: Size, palette: ComponentPalette)
     if sections.is_empty() {
         sections.push(muted("No release notes yet."));
     }
-    // As tall as the notes, up to Settings' height (its title row and outline aside).
-    let most = (window.height - 72.0).clamp(320.0, 772.0) - 45.0 - 2.0 - 32.0;
-    let body =
-        Element::scroll("whats_new:notes", Element::column(sections).gap(16.0)).max_height(most);
+    // Settings' height; the notes scroll in the modal's own body, never in a scroll of their own
+    // inside it (two scrollbars side by side).
+    let height = (window.height - 72.0).clamp(320.0, 772.0);
+    let body = Element::column(sections).gap(16.0);
     Modal::new(base, true, "What's new", "", NOTES, palette)
         .width(width)
+        .height(height)
         .outline(look::settings_outline())
         .body(body)
         .scrim(look::scrim())

@@ -13868,7 +13868,8 @@ fn mcp_dialog(
                 .sizing(sizing)
                 .rows(rows)
                 .render();
-            body.push(Element::scroll("mcp:scroll", table).max_height(window.height * 0.6));
+            // The modal's body scrolls it: a scroll of its own inside would be a second one.
+            body.push(table);
         }
     }
     let footer = Element::row(vec![
