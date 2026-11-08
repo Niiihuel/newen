@@ -1,0 +1,9 @@
+# The notes of 0.2.6 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Grok Build and Antigravity CLI join as agents: sessions, tools, permissions, questions, plans and connectors, with Newen's own tools too.",
+    "Grok's Always approve and Antigravity's Skip permissions never ask, once Settings allow them, as Bypass permissions does.",
+]
+fixed = [
+    "Discover over Connectors no longer turns into an empty light box when an agent has no connectors.",
+]
