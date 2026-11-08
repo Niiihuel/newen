@@ -1,0 +1,6 @@
+# The notes of 0.2.8 (docs/UPDATES.md, "Escribir las notas de una release").
+
+improved = [
+    "Grok and Antigravity show their own logos wherever Newen lists agents.",
+    "Settings has Grok's sandbox, web search, subagents, memory and more, and Antigravity's sandbox and usage data.",
+]
