@@ -1,0 +1,8 @@
+# The notes of 0.2.5 (docs/UPDATES.md, "Escribir las notas de una release").
+
+fixed = [
+    "Bypass permissions and Full access no longer ask: not for a helper of another agent it starts, a plan begun from them, or a site the browser opens.",
+    "A message sent again after a rewind gets its answer, instead of the session looking finished before it replies.",
+    "File changes stay with the message that made them after a rewind, so rewinding again restores the right files.",
+    "Pictures in a thread open beside the session open in the image viewer too.",
+]
