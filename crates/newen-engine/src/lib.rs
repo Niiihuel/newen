@@ -46,8 +46,9 @@ pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
 /// Site permissions the browser waits on: by card, the site and where the answer goes.
 /// Questions Newen itself asks on a permission card: by card, what for (a site, whose
 /// "Always" joins Settings, or a dev server) and where the answer goes.
-/// Each session's agent and permission mode, as last told.
-type Modes = Arc<Mutex<HashMap<SessionId, (String, String)>>>;
+/// Each session's agent and permission mode, as last told, and whether the person is never
+/// asked in it ([`still_unasked`]).
+type Modes = Arc<Mutex<HashMap<SessionId, (String, String, bool)>>>;
 /// Each card's session too, so the cards a session's turn left open stop waiting.
 type SiteWaits = Arc<
     Mutex<
@@ -547,6 +548,7 @@ impl Router {
                         ..
                     } => {
                         if let Some(entry) = modes.lock().unwrap().get_mut(session) {
+                            entry.2 = still_unasked(&entry.0, mode, entry.2);
                             entry.1 = mode.clone();
                         }
                     }
@@ -570,11 +572,16 @@ impl Router {
                 let (answer, heard) = tokio::sync::oneshot::channel();
                 // A session in bypass or auto mode starts a dev server without asking, this
                 // once, as Desktop waives it.
-                let mode = modes.lock().unwrap().get(&session).cloned();
-                let (agent, mode) = mode.unzip();
-                // A command in the shared terminal too, as the agent's own shell would run it.
-                if waives_server_consent(agent.as_deref(), mode.as_deref())
-                    && matches!(input["kind"].as_str(), Some("server" | "command"))
+                let entry = modes.lock().unwrap().get(&session).cloned();
+                let unasked = entry.as_ref().is_some_and(|(_, _, unasked)| *unasked);
+                let (agent, mode) = entry.map(|(agent, mode, _)| (agent, mode)).unzip();
+                // A command in the shared terminal too, as the agent's own shell would run it;
+                // and a session that is never asked opens any site as well. A card of
+                // connectors is a choice, not an approval: it always shows.
+                let kind = input["kind"].as_str();
+                if (waives_server_consent(agent.as_deref(), mode.as_deref())
+                    && matches!(kind, Some("server" | "command")))
+                    || (unasked && matches!(kind, Some("server" | "command" | "site")))
                 {
                     let _ = answer.send(newen_browser::Grant::Once);
                     return heard;
@@ -1359,8 +1366,10 @@ impl Router {
                 (
                     actor.adapter.id().to_owned(),
                     actor.spec.mode.clone().unwrap_or_default(),
+                    restored.unasked,
                 ),
             );
+            actor.modes = self.modes.clone();
             // Undoing a rewind from before the restart goes back to the conversation's last id.
             if restored.rewound.is_some() {
                 actor.unrewind = Some((actor.spec.resume.clone(), false, None));
@@ -1477,13 +1486,11 @@ impl Router {
         let program = self.program(&new.agent);
         let chosen = self.settings.agent(&new.agent);
         let mut actor = Actor::new(id, new, adapter, program, tx.clone(), self.sink.clone());
-        self.modes.lock().unwrap().insert(
-            id,
-            (
-                actor.adapter.id().to_owned(),
-                actor.spec.mode.clone().unwrap_or_default(),
-            ),
-        );
+        let mode = actor.spec.mode.clone().unwrap_or_default();
+        let unasked = skips_every_approval(actor.adapter.id(), &mode);
+        let entry = (actor.adapter.id().to_owned(), mode, unasked);
+        self.modes.lock().unwrap().insert(id, entry);
+        actor.modes = self.modes.clone();
         actor.spec.allow_unsafe = chosen.allow_unsafe;
         actor.spec.options = chosen.options.clone();
         let own = self.bridge_env(id);
@@ -1580,7 +1587,15 @@ impl Router {
         if proposal.fork {
             return Err("A fork continues this conversation, which only the same agent can read; use context \"fresh\" with a background.".into());
         }
-        Ok(defaults_of(&self.settings, agent, own.cwd.clone()))
+        let mut new = defaults_of(&self.settings, agent, own.cwd.clone());
+        // A session that skips every approval starts its helpers the same way, where Settings
+        // lets the other agent: they would ask what the person chose not to be asked.
+        let skips =
+            (own.mode.as_deref()).is_some_and(|mode| skips_every_approval(&own.agent, mode));
+        if skips && self.settings.agent(agent).allow_unsafe {
+            new.mode = unsafe_mode(agent).or(new.mode);
+        }
+        Ok(new)
     }
 
     /// Keep `settings` and act on them; the UI hears what is in force either way.
@@ -3274,6 +3289,8 @@ struct Restored {
     unfinished: bool,
     /// What it was to be told of waits that ended, and had not heard when Newen last ran.
     unheard: Vec<newen_model::Report>,
+    /// Never asked in the mode it was last in ([`still_unasked`] along its modes).
+    unasked: bool,
 }
 
 impl Restored {
@@ -3296,7 +3313,7 @@ impl Restored {
         let (mut pull_request, mut archived) = (None, false);
         let mut queue = vec![];
         let (mut first, mut waits, mut progress) = (None, vec![], Progress::default());
-        let (mut unfinished, mut unheard) = (false, vec![]);
+        let (mut unfinished, mut unheard, mut unasked) = (false, vec![], false);
         for event in events {
             if let Event::Agent { event, .. } = event {
                 if let Some(done) = progress.heard(event) {
@@ -3365,7 +3382,10 @@ impl Restored {
                             mode: Some(mode), ..
                         },
                     ..
-                } => new.mode = Some(mode.clone()),
+                } => {
+                    unasked = still_unasked(&new.agent, mode, unasked);
+                    new.mode = Some(mode.clone());
+                }
                 Event::Changes {
                     request, snapshot, ..
                 } => drop(before.insert(request.clone(), snapshot.clone())),
@@ -3396,6 +3416,7 @@ impl Restored {
             progress,
             unfinished,
             unheard,
+            unasked,
         })
     }
 }
@@ -3600,6 +3621,8 @@ struct Actor {
     launched_unsafe: bool,
     /// Launch it again once the turn ends: it refused a mode Settings allow now.
     relaunch: bool,
+    /// Every session's mode as the router keeps it: whether this one is never asked.
+    modes: Modes,
 }
 
 impl Actor {
@@ -3662,6 +3685,7 @@ impl Actor {
             attached: false,
             launched_unsafe: false,
             relaunch: false,
+            modes: Modes::default(),
         }
     }
 
@@ -3980,6 +4004,10 @@ impl Actor {
     async fn mode_refused(&mut self, mode: String, error: String) {
         let unsafe_mode = skips_every_approval(self.adapter.id(), &mode);
         if unsafe_mode && self.spec.allow_unsafe && !self.launched_unsafe {
+            // Never asked from now on, though the process that takes the mode starts later.
+            if let Some(entry) = self.modes.lock().unwrap().get_mut(&self.id) {
+                entry.2 = true;
+            }
             self.spec.mode = Some(mode);
             match self.busy {
                 true => self.relaunch = true,
@@ -4293,6 +4321,31 @@ impl Actor {
         let decoded = self.adapter.decode(line);
         self.write_lines(decoded.replies).await;
         for event in decoded.events {
+            // In a mode that skips every approval no card ever shows: a CLI that asks anyway
+            // (a helper begun before the mode changed, a check of its own) is answered for the
+            // person. A question or a plan is theirs to answer, never this.
+            if let AgentEvent::PermissionRequest {
+                id,
+                tool,
+                interactive: false,
+                ..
+            } = &event
+            {
+                let unasked = self
+                    .modes
+                    .lock()
+                    .unwrap()
+                    .get(&self.id)
+                    .is_some_and(|m| m.2);
+                if unasked && answered_for_person(&self.spec, tool) {
+                    let allow = AgentCommand::Decide {
+                        id: id.clone(),
+                        decision: newen_agent::Decision::Allow,
+                    };
+                    self.write(allow).await;
+                    continue;
+                }
+            }
             // Newen's own tools are the router's to run; the call itself shows as its step.
             if let AgentEvent::HostTool { id, name, input } = event {
                 self.tell(Internal::HostTool {
@@ -5305,6 +5358,35 @@ fn defaults_of(settings: &newen_model::Settings, agent: &str, cwd: PathBuf) -> N
     }
 }
 
+/// Whether a permission the agent asks for in a session that is never asked is allowed
+/// without a card: while Settings let the agent skip approvals, unless the person chose to be
+/// asked for that tool. A plan stays the person's to accept.
+fn answered_for_person(spec: &SessionSpec, tool: &str) -> bool {
+    // shortcut: a rule is matched by its tool's name at the end of the agent's own name for it,
+    // so a like-named tool of another server shows its card too (the safe side).
+    let asked = (spec.tool_rules.iter())
+        .any(|r| r.policy == newen_agent::ToolPolicy::Ask && tool.ends_with(&r.tool));
+    spec.allow_unsafe && tool != "ExitPlanMode" && !asked
+}
+
+/// Whether a session that was never asked (`was`) still is in the agent's `mode`: one that
+/// skips every approval, or a plan gone into from one, which a plan accepted leaves for it.
+fn still_unasked(agent: &str, mode: &str, was: bool) -> bool {
+    let plan = adapter(agent).is_some_and(|a| {
+        (a.modes().iter()).any(|m| m.id == mode && matches!(m.tone, newen_agent::ModeTone::Plan))
+    });
+    skips_every_approval(agent, mode) || (was && plan)
+}
+
+/// The agent's mode that skips every approval, when it has one.
+fn unsafe_mode(agent: &str) -> Option<String> {
+    let modes = adapter(agent)?.modes();
+    let mode = modes
+        .iter()
+        .find(|m| matches!(m.tone, newen_agent::ModeTone::Unsafe))?;
+    Some(mode.id.clone())
+}
+
 /// Whether `mode` is one of the agent's modes that skip every approval (its adapter's words).
 fn skips_every_approval(agent: &str, mode: &str) -> bool {
     adapter(agent).is_some_and(|a| {
@@ -5322,6 +5404,42 @@ fn waives_server_consent(agent: Option<&str>, mode: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bypass permissions (Claude) and Full access (Codex) answer every permission the CLI
+    /// still asks for, while Settings allows them, and so does a plan gone into from one; other
+    /// modes, a plan gone into from them, a plan to accept and a tool the person wants
+    /// to be asked for keep their card. A helper of another agent starts in that agent's own
+    /// such mode.
+    #[test]
+    fn a_mode_that_skips_approvals_is_never_asked() {
+        assert!(still_unasked("claude", "bypassPermissions", false));
+        assert!(still_unasked("codex", "full-access", false));
+        // A plan from bypass is never asked; one from Manual asks.
+        assert!(still_unasked("claude", "plan", true));
+        assert!(!still_unasked("claude", "plan", false));
+        assert!(!still_unasked("claude", "acceptEdits", true));
+        for (agent, mode) in [("claude", "default"), ("claude", "auto"), ("codex", "auto")] {
+            assert!(!still_unasked(agent, mode, true), "{agent} {mode}");
+        }
+        let mut spec = SessionSpec {
+            allow_unsafe: true,
+            ..Default::default()
+        };
+        assert!(answered_for_person(&spec, "Bash"));
+        assert!(!answered_for_person(&spec, "ExitPlanMode"));
+        spec.tool_rules.push(newen_agent::ToolRule {
+            server: "linear".into(),
+            tool: "create_issue".into(),
+            policy: newen_agent::ToolPolicy::Ask,
+        });
+        assert!(!answered_for_person(&spec, "mcp__linear__create_issue"));
+        assert!(answered_for_person(&spec, "mcp__linear__list_issues"));
+        spec.allow_unsafe = false;
+        assert!(!answered_for_person(&spec, "Bash"));
+        assert_eq!(unsafe_mode("codex").as_deref(), Some("full-access"));
+        assert_eq!(unsafe_mode("claude").as_deref(), Some("bypassPermissions"));
+        assert_eq!(unsafe_mode("opencode"), None);
+    }
 
     /// Newen keeps its sessions in `newen/newen.db` and its settings in `newen/`; on a computer
     /// whose quill data was not moved yet, in quill's `quill/quill.db` and `quill/`, so nothing
@@ -6058,11 +6176,20 @@ mod tests {
             ready(None),
         ];
         let mode = |events: &[Event]| Restored::from(events).unwrap().new.mode;
+        let unasked = |events: &[Event]| Restored::from(events).unwrap().unasked;
         assert_eq!(mode(&events).as_deref(), Some("bypassPermissions"));
+        assert!(unasked(&events));
+        // A plan gone into from bypass is still never asked after a restart.
+        events.push(agent(AgentEvent::ModeChanged {
+            mode: "plan".into(),
+        }));
+        assert_eq!(mode(&events).as_deref(), Some("plan"));
+        assert!(unasked(&events));
         events.push(agent(AgentEvent::ModeChanged {
             mode: "acceptEdits".into(),
         }));
         assert_eq!(mode(&events).as_deref(), Some("acceptEdits"));
+        assert!(!unasked(&events));
     }
 
     #[test]
