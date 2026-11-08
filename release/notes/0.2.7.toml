@@ -1,0 +1,9 @@
+# The notes of 0.2.7 (docs/UPDATES.md, "Escribir las notas de una release").
+
+improved = [
+    "Settings › Updates shows a bar while a version downloads, with how much has come of how much, and says where updating stands in its title.",
+    "Settings › Storage shows each kind's share of what Newen keeps under its size.",
+]
+fixed = [
+    "What's new and a session's MCP servers scroll with one scrollbar, not two side by side.",
+]
