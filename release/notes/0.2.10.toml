@@ -1,0 +1,8 @@
+# The notes of 0.2.10 (docs/UPDATES.md, "Escribir las notas de una release").
+
+new = [
+    "Claude Code can publish artifacts in Newen, as in its terminal: each one shows its claude.ai link under its steps, to open it.",
+]
+improved = [
+    "Artifact steps say what they do: publishing, reading, listing or opening an artifact. Settings can turn artifacts off.",
+]
