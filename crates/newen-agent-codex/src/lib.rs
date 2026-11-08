@@ -42,6 +42,66 @@ const MODE_ID: &str = "newen-mode";
 /// Per-thread config (not `~/.codex/config.toml`): `update_plan` is off by default
 /// (plan.jsonl, two attempts without it) and `request_user_input` only exists in Plan mode
 /// unless this feature is on (ask.jsonl:9).
+/// One of the person's choices: its config key, label, description, and values with their words.
+type Choice = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// The person's choices that are Codex config keys (0.166's): the first value, empty, leaves
+/// Codex's own setting.
+const CHOICES: [Choice; 4] = [
+    (
+        "web_search",
+        "Web search",
+        "Whether Codex searches the web, live or from its cache. Applies to new sessions.",
+        &[
+            ("", "As Codex is set"),
+            ("live", "Live"),
+            ("cached", "Cached"),
+            ("disabled", "Off"),
+        ],
+    ),
+    (
+        "model_reasoning_summary",
+        "Reasoning summaries",
+        "How much of its reasoning Codex sums up as it works. Applies to new sessions.",
+        &[
+            ("", "As Codex is set"),
+            ("auto", "Auto"),
+            ("concise", "Concise"),
+            ("detailed", "Detailed"),
+            ("none", "None"),
+        ],
+    ),
+    (
+        "model_verbosity",
+        "Answer length",
+        "How long Codex's answers are, on models that take it. Applies to new sessions.",
+        &[
+            ("", "As Codex is set"),
+            ("low", "Short"),
+            ("medium", "Medium"),
+            ("high", "Long"),
+        ],
+    ),
+    (
+        "personality",
+        "Personality",
+        "How Codex talks. Applies to new sessions.",
+        &[
+            ("", "As Codex is set"),
+            ("pragmatic", "Pragmatic"),
+            ("friendly", "Friendly"),
+            ("none", "None"),
+        ],
+    ),
+];
+/// The network for Auto's sandbox, which works in this folder without it.
+const NETWORK: &str = "network";
+
 fn thread_config(spec: &SessionSpec) -> Value {
     let (servers, env) = (&spec.servers, &spec.env);
     let mut config = json!({
@@ -59,6 +119,15 @@ fn thread_config(spec: &SessionSpec) -> Value {
         config["mcp_servers"] = extensions::mcp_servers_config(servers);
     }
     extensions::tool_rules_config(&mut config, &spec.tool_rules);
+    // The person's choices: each its config key, only when one was made.
+    for (key, ..) in CHOICES {
+        if let Some(value) = spec.options.get(key).filter(|v| !v.is_empty()) {
+            config[key] = json!(value);
+        }
+    }
+    if spec.options.get(NETWORK).is_some_and(|v| v == "true") {
+        config["sandbox_workspace_write"] = json!({ "network_access": true });
+    }
     config
 }
 
@@ -1292,7 +1361,7 @@ impl AgentAdapter for Codex {
     }
 
     fn options(&self) -> Vec<AgentOption> {
-        vec![AgentOption {
+        let mut options = vec![AgentOption {
             key: REMOTE.into(),
             label: "Remote Control".into(),
             description: "Run every Codex session in one Codex process that the ChatGPT app on \
@@ -1300,7 +1369,29 @@ impl AgentAdapter for Codex {
                 .into(),
             choices: vec![],
             default: "false".into(),
-        }]
+        }];
+        options.push(AgentOption {
+            key: NETWORK.into(),
+            label: "Network in Auto".into(),
+            description: "Let commands reach the network in Auto mode, whose sandbox otherwise \
+                keeps them off it. Applies to new sessions."
+                .into(),
+            choices: vec![],
+            default: "false".into(),
+        });
+        options.extend(CHOICES.map(|(key, label, description, choices)| {
+            AgentOption {
+                key: key.into(),
+                label: label.into(),
+                description: description.into(),
+                choices: choices
+                    .iter()
+                    .map(|(v, l)| ((*v).into(), (*l).into()))
+                    .collect(),
+                default: String::new(),
+            }
+        }));
+        options
     }
 
     fn mux(&self, spec: &SessionSpec) -> Option<Box<dyn Mux>> {

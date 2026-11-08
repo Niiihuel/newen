@@ -426,13 +426,20 @@ impl AgentAdapter for Claude {
             ("CLAUDE_CODE_ENABLE_TASKS", "true"),
             ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "true"),
         ];
+        let mut env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        // Usage data off: its telemetry and its error reports.
+        if spec.options.get(TELEMETRY).is_some_and(|v| v == "false") {
+            env.extend(
+                ["DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"].map(|k| (k.into(), "1".into())),
+            );
+        }
         LaunchPlan {
             program: "claude".into(),
             args,
-            env: env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
+            env,
             env_remove: vec!["NODE_OPTIONS".into(), "CLAUDE_CODE_ENTRYPOINT".into()],
             cwd: spec.cwd.clone(),
         }
@@ -728,6 +735,18 @@ impl AgentAdapter for Claude {
                 "true",
             ),
         ]
+        .into_iter()
+        .chain(SETTING_SWITCHES.map(|(key, label, description, default, ..)| {
+            option(key, label, description, &[], if default { "true" } else { "false" })
+        }))
+        .chain([option(
+            TELEMETRY,
+            "Usage data",
+            "Send usage data and error reports to Anthropic. Applies to new sessions.",
+            &[],
+            "true",
+        )])
+        .collect()
     }
 
     fn extension_words(&self) -> (newen_agent::Choices, newen_agent::Choices) {
@@ -1704,9 +1723,71 @@ const OUTPUT_STYLE: &str = "output_style";
 const SANDBOX: &str = "sandbox";
 const STRICT_SANDBOX: &str = "strict_sandbox";
 const PROMPT_SUGGESTIONS: &str = "prompt_suggestions";
+const ATTRIBUTION: &str = "attribution";
+const THINKING: &str = "thinking";
+const AUTO_COMPACT: &str = "auto_compact";
+const AUTO_MEMORY: &str = "auto_memory";
+const HOOKS: &str = "hooks";
+const PROJECT_SERVERS: &str = "project_servers";
+const TELEMETRY: &str = "telemetry";
 
-/// The session's options as Claude Code settings: `outputStyle`, and `sandbox.enabled` with
-/// `allowUnsandboxedCommands` off when strict. `None` when none is set.
+/// Its switches that are Claude Code settings (2.1.319's schema), as (key, label, description,
+/// default, the setting and its value away from the default): set only when moved, so the
+/// person's own settings decide otherwise.
+const SETTING_SWITCHES: [(&str, &str, &str, bool, &str, &str); 6] = [
+    (
+        ATTRIBUTION,
+        "Credit Claude in commits and pull requests",
+        "Add Claude's co-author line to commits and its note to pull requests. Applies to new sessions.",
+        true,
+        "attribution",
+        r#"{"commit":"","pr":""}"#,
+    ),
+    (
+        THINKING,
+        "Extended thinking",
+        "Let Claude think before it answers, on models that can. Applies to new sessions.",
+        true,
+        "alwaysThinkingEnabled",
+        "false",
+    ),
+    (
+        AUTO_COMPACT,
+        "Compact when the context fills",
+        "Summarize the conversation when it nears the context's end, so the session goes on. Applies to new sessions.",
+        true,
+        "autoCompactEnabled",
+        "false",
+    ),
+    (
+        AUTO_MEMORY,
+        "Auto memory",
+        "Let Claude keep and read notes about each project across sessions. Applies to new sessions.",
+        true,
+        "autoMemoryEnabled",
+        "false",
+    ),
+    (
+        HOOKS,
+        "Hooks",
+        "Run the hooks of your settings and plugins. Applies to new sessions.",
+        true,
+        "disableAllHooks",
+        "true",
+    ),
+    (
+        PROJECT_SERVERS,
+        "Project MCP servers without asking",
+        "Start the servers a project's .mcp.json lists without approving each. Applies to new sessions.",
+        false,
+        "enableAllProjectMcpServers",
+        "true",
+    ),
+];
+
+/// The session's options as Claude Code settings: `outputStyle`, `sandbox.enabled` with
+/// `allowUnsandboxedCommands` off when strict, and [`SETTING_SWITCHES`] moved from their
+/// defaults. `None` when none is set.
 fn option_settings(spec: &SessionSpec) -> Option<Value> {
     let on = |key: &str| spec.options.get(key).is_some_and(|v| v == "true");
     let mut settings = serde_json::Map::new();
@@ -1722,6 +1803,13 @@ fn option_settings(spec: &SessionSpec) -> Option<Value> {
             sandbox["allowUnsandboxedCommands"] = json!(false);
         }
         settings.insert("sandbox".into(), sandbox);
+    }
+    for (key, _, _, default, setting, away) in SETTING_SWITCHES {
+        let chosen = spec.options.get(key).map_or(default, |v| v == "true");
+        if chosen != default {
+            let value = serde_json::from_str(away).expect("a JSON value");
+            settings.insert(setting.into(), value);
+        }
     }
     (!settings.is_empty()).then_some(Value::Object(settings))
 }

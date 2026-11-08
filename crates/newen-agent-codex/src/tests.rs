@@ -1636,3 +1636,43 @@ fn a_shared_session_is_reached_from_the_phone() {
         if e.contains("ChatGPT"))
     );
 }
+
+/// Settings' choices reach a thread's config as Codex's own keys (each value one of Codex
+/// 0.166's), only when one was made; the network for Auto's sandbox as its own table.
+#[test]
+fn the_pages_options_reach_the_threads_config() {
+    let keys: Vec<String> = Codex::new().options().into_iter().map(|o| o.key).collect();
+    assert_eq!(
+        keys,
+        [
+            "remote",
+            "network",
+            "web_search",
+            "model_reasoning_summary",
+            "model_verbosity",
+            "personality"
+        ]
+    );
+    let plain = thread_config(&SessionSpec::default());
+    for key in ["web_search", "personality", "sandbox_workspace_write"] {
+        assert!(plain.get(key).is_none(), "{key}");
+    }
+    let spec = SessionSpec {
+        options: [
+            ("web_search", "disabled"),
+            ("model_reasoning_summary", "concise"),
+            ("model_verbosity", "low"),
+            ("personality", ""),
+            ("network", "true"),
+        ]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .into(),
+        ..SessionSpec::default()
+    };
+    let config = thread_config(&spec);
+    assert_eq!(config["web_search"], "disabled");
+    assert_eq!(config["model_reasoning_summary"], "concise");
+    assert_eq!(config["model_verbosity"], "low");
+    assert!(config.get("personality").is_none(), "left to Codex");
+    assert_eq!(config["sandbox_workspace_write"]["network_access"], true);
+}

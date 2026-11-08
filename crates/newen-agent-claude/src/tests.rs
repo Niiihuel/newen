@@ -502,7 +502,14 @@ fn the_pages_options_reach_the_cli_as_its_own_settings() {
             "output_style",
             "sandbox",
             "strict_sandbox",
-            "prompt_suggestions"
+            "prompt_suggestions",
+            "attribution",
+            "thinking",
+            "auto_compact",
+            "auto_memory",
+            "hooks",
+            "project_servers",
+            "telemetry"
         ]
     );
     let settings = |pairs: &[(&str, &str)]| {
@@ -527,6 +534,38 @@ fn the_pages_options_reach_the_cli_as_its_own_settings() {
     assert_eq!(
         settings(&[("strict_sandbox", "true")]).as_deref(),
         Some(r#"{"sandbox":{"allowUnsandboxedCommands":false,"enabled":true}}"#)
+    );
+    // A switch at its default says nothing; moved, it is its setting.
+    assert_eq!(settings(&[("thinking", "true"), ("hooks", "true")]), None);
+    let moved: Value = serde_json::from_str(
+        &settings(&[
+            ("attribution", "false"),
+            ("thinking", "false"),
+            ("auto_compact", "false"),
+            ("auto_memory", "false"),
+            ("hooks", "false"),
+            ("project_servers", "true"),
+        ])
+        .expect("settings"),
+    )
+    .unwrap();
+    assert_eq!(
+        moved,
+        json!({ "attribution": { "commit": "", "pr": "" }, "alwaysThinkingEnabled": false,
+            "autoCompactEnabled": false, "autoMemoryEnabled": false, "disableAllHooks": true,
+            "enableAllProjectMcpServers": true })
+    );
+    // Usage data off: its variables.
+    let quiet = SessionSpec {
+        options: [("telemetry".to_owned(), "false".to_owned())].into(),
+        ..SessionSpec::default()
+    };
+    let env = claude.launch(&quiet).env;
+    for name in ["DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"] {
+        assert!(env.contains(&(name.into(), "1".into())), "{name}");
+    }
+    assert!(
+        !(claude.launch(&SessionSpec::default()).env.iter()).any(|(k, _)| k == "DISABLE_TELEMETRY")
     );
 }
 
