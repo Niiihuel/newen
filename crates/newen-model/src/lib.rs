@@ -888,6 +888,13 @@ pub enum Intent {
         query: String,
         contents: bool,
     },
+    /// The "@" list of a new session, which has a folder but no session yet: that folder's paths
+    /// that match `query`, its top level for an empty one. Answered by `Event::FolderFilesFound`,
+    /// which is not kept.
+    FindFolderFiles {
+        folder: std::path::PathBuf,
+        query: String,
+    },
     /// A file operation in the session's folder, from the Files pane: answered by
     /// `Event::FileOpDone`.
     FileOp {
@@ -1636,6 +1643,12 @@ pub enum Event {
         entries: Vec<newen_files::Entry>,
         stamp: newen_files::Stamp,
     },
+    /// What `Intent::FindFolderFiles` found in `folder` for `query`.
+    FolderFilesFound {
+        folder: std::path::PathBuf,
+        query: String,
+        paths: Vec<std::path::PathBuf>,
+    },
     /// What the filter asked for `query` found: the best paths from the folder, or with
     /// `contents` the lines that hold it.
     FilesFound {
@@ -1897,7 +1910,8 @@ impl Event {
             | Event::Github(_)
             | Event::GithubCode { .. }
             | Event::GithubFailed { .. }
-            | Event::GithubContributions(_) => 0,
+            | Event::GithubContributions(_)
+            | Event::FolderFilesFound { .. } => 0,
         }
     }
 }

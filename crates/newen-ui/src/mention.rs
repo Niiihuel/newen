@@ -9,7 +9,7 @@ use newen_components::look;
 use newen_components::{icons, tree};
 use newen_model::{Event, Intent, SessionId};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Most characters a query may have; a longer one keeps the list shut.
 const MAX_QUERY: usize = 50;
@@ -115,11 +115,20 @@ fn file_row(path: &Path, query: &str, dir: bool) -> Row {
 /// The files for `query`, from the session on screen. The engine's answer is kept only for the
 /// query it was asked for. With an empty query the folder's top level is listed (folders, then
 /// files), from the Files pane's tree when that holds the folder's listing; the disk is not read
-/// here. With no pane, the engine's top level. A new session has no id to search
-/// by, so its composer lists no files.
+/// here. With no pane, the engine's top level. A new session's are those of the folder it
+/// starts in.
 fn file_rows(ui: &Ui, query: &str) -> Vec<Row> {
+    let row = |path: &PathBuf| {
+        let dir = path.as_os_str().to_string_lossy().ends_with('/');
+        file_row(path, query, dir)
+    };
     let Some(session) = ui.selected else {
-        return vec![];
+        return match &ui.mention_folder_found {
+            Some((folder, asked, paths)) if *folder == ui.cwd && asked == query => {
+                paths.iter().take(FILES).map(row).collect()
+            }
+            _ => vec![],
+        };
     };
     // Without the Files pane's listing, the engine's top level (folders end in `/`).
     let found = || match &ui.mention_found {
@@ -174,13 +183,23 @@ pub(crate) fn open(store: &Store, ui: &Ui) -> Option<(usize, Vec<Row>)> {
 /// The find the query asks of the engine, when it changed from `before` (the query the prompt
 /// had).
 pub(crate) fn asked(ui: &Ui, before: Option<&str>) -> Vec<Intent> {
-    let (Some(session), Some((_, query))) = (ui.selected, mention_query(&ui.prompt)) else {
+    let Some((_, query)) = mention_query(&ui.prompt) else {
         return vec![];
     };
     // An empty query is asked once too: the engine answers with the folder's top level.
     if before == Some(query) {
         return vec![];
     }
+    let Some(session) = ui.selected else {
+        // A new session, in the folder it starts in.
+        return match ui.cwd.as_os_str().is_empty() {
+            true => vec![],
+            false => vec![Intent::FindFolderFiles {
+                folder: ui.cwd.clone(),
+                query: query.to_owned(),
+            }],
+        };
+    };
     vec![Intent::FindFiles {
         session,
         query: query.to_owned(),
@@ -191,6 +210,18 @@ pub(crate) fn asked(ui: &Ui, before: Option<&str>) -> Vec<Intent> {
 /// The engine's answer for the file search of the query on screen. The Files pane reads the same
 /// event for its own filter; each keeps only its own query.
 pub(crate) fn heard(ui: &mut Ui, event: &Event) {
+    if let Event::FolderFilesFound {
+        folder,
+        query,
+        paths,
+    } = event
+    {
+        let current = mention_query(&ui.prompt).map(|(_, query)| query);
+        if ui.selected.is_none() && *folder == ui.cwd && current == Some(query.as_str()) {
+            ui.mention_folder_found = Some((folder.clone(), query.clone(), paths.clone()));
+        }
+        return;
+    }
     let Event::FilesFound {
         session,
         query,

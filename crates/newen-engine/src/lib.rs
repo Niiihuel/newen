@@ -2030,6 +2030,31 @@ impl Router {
                 }
                 return;
             }
+            // A new session's folder, which no session holds yet: told to the UI alone.
+            Intent::FindFolderFiles { folder, query } => {
+                let ui = self.ui.clone();
+                tokio::spawn(async move {
+                    let (wanted, root) = (query.clone(), folder.clone());
+                    let found = tokio::task::spawn_blocking(move || {
+                        use newen_files::find;
+                        if wanted.is_empty() {
+                            return find::top(&root);
+                        }
+                        let files = find::files(&root);
+                        let best = find::best(&wanted, &files, find::LIMIT);
+                        best.into_iter().cloned().collect()
+                    })
+                    .await;
+                    if let Ok(paths) = found {
+                        ui(Event::FolderFilesFound {
+                            folder,
+                            query,
+                            paths,
+                        });
+                    }
+                });
+                return;
+            }
             Intent::FileOp { session, op } => {
                 if let Some(cwd) = self.folders.get(&session).cloned() {
                     let sink = self.sink.clone();

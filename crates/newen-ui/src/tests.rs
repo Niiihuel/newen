@@ -6452,6 +6452,61 @@ fn mention_files_are_kept_only_for_the_query_asked() {
     assert_eq!(mention_ids(&store, &ui), ["mention:file:src/main.rs"]);
 }
 
+/// A new session has no id yet: its "@" lists the files of the folder it starts in.
+#[test]
+fn mention_in_a_new_session_lists_its_folders_files() {
+    let (store, mut ui) = store_with_session();
+    ui.selected = None;
+    ui.cwd = "/work/web".into();
+    assert_eq!(
+        type_prompt(&store, &mut ui, "@ma"),
+        [Intent::FindFolderFiles {
+            folder: "/work/web".into(),
+            query: "ma".into(),
+        }]
+    );
+    let found = |folder: &str, query: &str| Event::FolderFilesFound {
+        folder: folder.into(),
+        query: query.into(),
+        paths: vec!["src/main.rs".into(), "docs/".into()],
+    };
+    // Another folder's answer, or an old query's, is let go.
+    ui.applied(&found("/work/api", "ma"));
+    assert!(mention_ids(&store, &ui).is_empty());
+    ui.applied(&found("/work/web", "ma"));
+    assert_eq!(
+        mention_ids(&store, &ui),
+        ["mention:file:src/main.rs", "mention:file:docs/"]
+    );
+}
+
+/// A new session's "/" offers its agent's commands as its last session had them, and the skills
+/// Customize lists for it that are on.
+#[test]
+fn slash_in_a_new_session_offers_its_agents_commands_and_skills() {
+    let (mut store, mut ui) = store_with_session();
+    with_commands(&mut store);
+    ui.selected = None;
+    ui.agent = store.session(1).unwrap().agent.clone();
+    let skill = |name: &str, state: &str| newen_model::Skill {
+        name: name.into(),
+        description: String::new(),
+        source: "user".into(),
+        state: state.into(),
+        locked: None,
+        key: serde_json::Value::Null,
+    };
+    let mut known = crate::Extensions::default();
+    known.list.skills = vec![skill("impeccable", "on"), skill("muted", "off")];
+    ui.extensions.insert(ui.agent.clone(), known);
+    let _ = type_prompt(&store, &mut ui, "/");
+    let ids = slash_ids(&store, &ui);
+    for wanted in ["slash:agent:compact", "slash:agent:impeccable"] {
+        assert!(ids.contains(&wanted.to_owned()), "{wanted}: {ids:?}");
+    }
+    assert!(!ids.contains(&"slash:agent:muted".to_owned()));
+}
+
 #[test]
 fn mention_enter_writes_a_file_and_a_session_by_its_title() {
     let (mut store, mut ui) = store_with_session();

@@ -5,7 +5,7 @@
 use crate::{view, Session, Store, Ui};
 use limn::{Component, Element, Key, SuggestionItem, SuggestionList, UiAction, UiEvent};
 use newen_components::look;
-use newen_model::Intent;
+use newen_model::{AgentSlashCommand, Intent};
 use std::ops::Range;
 
 /// Most characters a query may have; a longer one keeps the palette shut.
@@ -191,14 +191,35 @@ fn own_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<Own> {
     commands
 }
 
+/// The agent's commands: the session's, or for a new session those its agent's last session
+/// had, and the skills Customize lists for it that are on (its skills, its plugins' commands
+/// and its servers' prompts, as the agent names them).
+fn agent_commands(store: &Store, session: Option<&Session>, ui: &Ui) -> Vec<AgentSlashCommand> {
+    let mut commands = (view::agent_capabilities(store, session, ui))
+        .map(|c| c.commands.clone())
+        .unwrap_or_default();
+    if session.is_none() {
+        let skills = (ui.extensions.get(&ui.agent).into_iter()).flat_map(|k| &k.list.skills);
+        for skill in skills.filter(|k| k.state != "off") {
+            if !commands.iter().any(|c| c.name == skill.name) {
+                commands.push(AgentSlashCommand {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    argument_hint: String::new(),
+                    aliases: vec![],
+                });
+            }
+        }
+        commands.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    commands
+}
+
 /// The rows for `query`, in Desktop's order: Newen's commands, then the agent's, each kept in
 /// that order among equal ranks.
 fn rows(store: &Store, ui: &Ui, query: &str) -> Vec<Row> {
     let session = ui.selected.and_then(|id| store.session(id));
-    let agent = session
-        .and_then(|s| s.capabilities.as_ref())
-        .map(|c| c.commands.as_slice())
-        .unwrap_or_default();
+    let agent = agent_commands(store, session, ui);
     let own = own_commands(store, session, ui);
     let mut found: Vec<(u8, Row)> = Vec::new();
     for command in &own {
@@ -210,7 +231,7 @@ fn rows(store: &Store, ui: &Ui, query: &str) -> Vec<Row> {
             found.push((rank, (id, item)));
         }
     }
-    for command in agent {
+    for command in &agent {
         if let Some((rank, matched)) = rank(query, &command.name, command.aliases.as_slice()) {
             // A name Newen also has goes to the agent, and says so; Desktop's rows show no
             // argument hints.

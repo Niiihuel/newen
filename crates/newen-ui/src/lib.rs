@@ -669,6 +669,7 @@ impl Store {
             | Event::Listed { .. }
             | Event::FileOpDone { .. }
             | Event::FilesFound { .. }
+            | Event::FolderFilesFound { .. }
             | Event::Settings { .. }
             | Event::Logo { .. }
             | Event::Github(_)
@@ -1459,6 +1460,8 @@ pub struct Ui {
     pub mentioned_sessions: Vec<(SessionId, String)>,
     /// The files the engine found for the "@" query it was asked: its session, query and paths.
     pub mention_found: Option<(SessionId, String, Vec<PathBuf>)>,
+    /// The same for a new session: the folder it starts in, the query and the paths.
+    pub mention_folder_found: Option<(PathBuf, String, Vec<PathBuf>)>,
     /// The Completed group shows every session, not its first few.
     pub show_more: bool,
     /// The side chat its pane shows, one asked for that the engine is making, and what its
@@ -2256,6 +2259,7 @@ impl Ui {
             mention_dismissed: None,
             mentioned_sessions: vec![],
             mention_found: None,
+            mention_folder_found: None,
             show_more: false,
             side_chat: None,
             side_waiting: None,
