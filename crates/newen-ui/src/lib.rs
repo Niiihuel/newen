@@ -3235,10 +3235,14 @@ pub(crate) fn server_logo_name(ui: &Ui, name: &str, label: &str) -> String {
 }
 
 pub fn image_paths(store: &Store, ui: &Ui) -> Vec<PathBuf> {
-    let session = ui.selected.and_then(|id| store.session(id));
-    // Its helpers' too, which their pane shows.
-    let items =
-        (session.into_iter()).flat_map(|s| s.items.iter().chain(s.helpers.values().flatten()));
+    // Its helpers' too, which their pane shows, and the session open beside it (a thread it
+    // started, a side chat).
+    let sessions = [
+        ui.selected,
+        ui.side_chat.filter(|_| ui.pane_open(Pane::Side)),
+    ];
+    let sessions = (sessions.into_iter().flatten()).filter_map(|id| store.session(id));
+    let items = sessions.flat_map(|s| s.items.iter().chain(s.helpers.values().flatten()));
     let shown = items.flat_map(|item| match item {
         Item::User { images, .. } => images.clone(),
         // The pictures of a step: a generated image, an image the agent read, and the ones its

@@ -9098,6 +9098,33 @@ fn a_generated_image_opens_in_the_viewer_and_a_read_one_too() {
     assert_eq!(image_paths(&store, &ui).len(), 2);
 }
 
+/// A session open beside the one on screen (a thread it started) shows its pictures too: they
+/// are read like the selected session's.
+#[test]
+fn the_session_beside_has_its_pictures_read() {
+    let (mut store, mut ui) = store_with_session();
+    store.apply(Event::SessionCreated {
+        session: 2,
+        agent: "codex".into(),
+        cwd: "/work".into(),
+    });
+    store.apply(Event::Agent {
+        session: 2,
+        request: None,
+        event: AgentEvent::ToolUse {
+            call: "r1".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "/work/aurora.png" }),
+            parent: None,
+        },
+    });
+    let path = PathBuf::from("/work/aurora.png");
+    assert!(!image_paths(&store, &ui).contains(&path));
+    ui.side_chat = Some(2);
+    ui.open_pane(Pane::Side);
+    assert!(image_paths(&store, &ui).contains(&path));
+}
+
 /// A tool's result that gave back `images`, as the engine kept them.
 fn pictured(store: &mut Store, call: &str, images: &[&str], is_error: bool) {
     agent(
