@@ -4,7 +4,7 @@
 //! version). The engine checks, downloads and announces a ready version by the system when
 //! the window is away; this shows what it reports.
 
-use crate::view::ago;
+use crate::view::{ago, human_bytes};
 use crate::{icons, Store, Ui};
 use limn::{Component, ComponentPalette, Element};
 use newen_components::look::{self, BODY};
@@ -13,6 +13,8 @@ use newen_components::settings::{setting, setting_switch, Setting};
 use newen_model::{Event, Intent, SessionStatus, UpdateState};
 
 pub const UPDATE_CHECK: &str = "update:check";
+/// The download's bar under the Updates row.
+pub const UPDATE_PROGRESS: &str = "update:progress";
 pub const UPDATE_DOWNLOAD: &str = "update:download";
 /// The strip's own Download, when the person downloads by hand.
 pub const UPDATE_STRIP_DOWNLOAD: &str = "update:strip:download";
@@ -305,21 +307,57 @@ fn state_line(state: &UpdateState) -> String {
     }
 }
 
-/// The state line with when the last check ended, or why it failed while a version stays in
-/// view: what "Check for updates" answers.
-pub(crate) fn description(ui: &Ui) -> String {
-    let line = state_line(&ui.update);
-    match (&ui.update_checked, &ui.update) {
-        // Its own line says so already.
-        (_, UpdateState::UpToDate { .. } | UpdateState::Failed { .. } | UpdateState::Checking) => {
-            line
-        }
-        (Some((_, Some(error))), UpdateState::Downloading { .. } | UpdateState::Ready { .. }) => {
-            format!("{line} \u{b7} Last check failed: {error}")
-        }
-        (Some((at, _)), _) => format!("{line} \u{b7} Checked {}", ago(*at)),
-        (None, _) => line,
+/// The Updates row's title: where updating stands.
+pub(crate) fn headline(state: &UpdateState) -> String {
+    match state {
+        UpdateState::Idle => "Updates".into(),
+        UpdateState::Checking => "Checking for updates\u{2026}".into(),
+        UpdateState::UpToDate { .. } => "Newen is up to date".into(),
+        UpdateState::Available { version, .. } => format!("Newen {version} is available"),
+        UpdateState::Downloading { version, .. } => format!("Downloading Newen {version}"),
+        UpdateState::Ready { version, .. } => format!("Newen {version} is ready to install"),
+        UpdateState::Installed { version, .. } => format!("Installing Newen {version}\u{2026}"),
+        UpdateState::Failed { .. } => "The update did not finish".into(),
+        UpdateState::FromSource => "Built from source".into(),
+        UpdateState::NotInstalled => "Not installed".into(),
     }
+}
+
+/// Under the title: how far a download is, when the last check ended, or why it failed while a
+/// version stays in view; what "Check for updates" answers.
+pub(crate) fn description(ui: &Ui) -> String {
+    let checked = match &ui.update_checked {
+        Some((_, Some(error))) => Some(format!("Last check failed: {error}")),
+        Some((at, None)) => Some(format!("Checked {}", ago(*at))),
+        None => None,
+    };
+    let line = match &ui.update {
+        UpdateState::Idle => "Newen has not checked for updates yet.".into(),
+        UpdateState::Checking => String::new(),
+        UpdateState::UpToDate { checked_at } => return format!("Checked {}", ago(*checked_at)),
+        UpdateState::Downloading { done, total, .. } => {
+            let percent = if *total == 0 { 0 } else { done * 100 / total };
+            let size = format!("{} of {}", human_bytes(*done), human_bytes(*total));
+            // Only a failed check is news while it downloads.
+            let failed = checked.filter(|c| c.starts_with("Last check failed"));
+            return [Some(format!("{percent}% \u{b7} {size}")), failed]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ");
+        }
+        UpdateState::Ready { .. } => "Restart Newen to finish updating.".into(),
+        UpdateState::Installed { .. } => "Newen opens again in the new version.".into(),
+        UpdateState::Failed { reason } => return reason.clone(),
+        UpdateState::FromSource => "Update it with git pull.".into(),
+        UpdateState::NotInstalled => "Run newen --install to keep it up to date.".into(),
+        UpdateState::Available { .. } => String::new(),
+    };
+    [Some(line).filter(|l| !l.is_empty()), checked]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
 }
 
 /// Settings' Updates group: the state and its buttons, the release notes when there are any,
@@ -365,9 +403,14 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
         )),
         _ => {}
     }
+    // Not while one is on its way in or going in.
     if !matches!(
         ui.update,
-        UpdateState::Checking | UpdateState::FromSource | UpdateState::NotInstalled
+        UpdateState::Checking
+            | UpdateState::Downloading { .. }
+            | UpdateState::Installed { .. }
+            | UpdateState::FromSource
+            | UpdateState::NotInstalled
     ) {
         buttons.push(keyed_button(
             UPDATE_CHECK,
@@ -378,12 +421,23 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
             palette,
         ));
     }
-    // The version row is the "Newen" group's, above.
-    let mut out = vec![setting(
-        "Updates",
+    // The version row is the "Newen" group's, above. A download's bar spans the page under it.
+    let mut row = setting(
+        &headline(&ui.update),
         &description(ui),
         Element::row(buttons).gap(8.0),
-    )];
+    );
+    if let UpdateState::Downloading { done, total, .. } = &ui.update {
+        let fraction = *done as f32 / (*total).max(1) as f32;
+        let bar = limn::Progress::new(fraction, palette)
+            .id(UPDATE_PROGRESS)
+            .height(6.0)
+            .render()
+            .accessibility_label(headline(&ui.update));
+        // As wide as the row's hairline: the page insets a block 10 on its left.
+        row = row.below(Element::row(vec![bar.flex(1.0), hgap(10.0)]).flex(1.0));
+    }
+    let mut out = vec![row];
     if let UpdateState::Available { notes, .. } = &ui.update {
         if !notes.trim().is_empty() {
             out.push(setting(

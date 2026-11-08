@@ -7588,27 +7588,24 @@ fn the_updates_line_says_when_it_last_checked_or_why_that_failed() {
         at: now,
         error: None,
     });
-    assert_eq!(
-        updates::description(&ui),
-        "Newen is up to date \u{b7} Checked just now"
-    );
+    assert_eq!(updates::headline(&ui.update), "Newen is up to date");
+    assert_eq!(updates::description(&ui), "Checked just now");
     ui.applied(&Event::Update(newen_model::UpdateState::Downloading {
         version: "0.1.9".into(),
-        done: 42,
-        total: 100,
+        done: 42 * 1024 * 1024,
+        total: 100 * 1024 * 1024,
         mandatory: false,
     }));
-    assert_eq!(
-        updates::description(&ui),
-        "Downloading 0.1.9 \u{b7} 42% \u{b7} Checked just now"
-    );
+    // While it downloads, how far it is; a check that went well is no news.
+    assert_eq!(updates::headline(&ui.update), "Downloading Newen 0.1.9");
+    assert_eq!(updates::description(&ui), "42% \u{b7} 42.0 MB of 100.0 MB");
     ui.applied(&Event::UpdateChecked {
         at: now,
         error: Some("Could not reach the update server.".into()),
     });
     assert_eq!(
         updates::description(&ui),
-        "Downloading 0.1.9 \u{b7} 42% \u{b7} Last check failed: Could not reach the update server."
+        "42% \u{b7} 42.0 MB of 100.0 MB \u{b7} Last check failed: Could not reach the update server."
     );
     ui.applied(&Event::Update(newen_model::UpdateState::Failed {
         reason: "Could not reach the update server.".into(),
@@ -8012,6 +8009,28 @@ fn every_step_points_at_a_control_the_window_lays_out() {
         let frame = UiTree::new(view(&store, &ui, window)).layout(window);
         assert_eq!(frame.missing_coach_target(), None, "step {step}");
     }
+}
+
+/// A download shows a bar under the Updates row, and no "Check for updates" while it lasts.
+#[test]
+fn a_download_shows_its_bar_under_the_updates_row() {
+    let (store, mut ui) = store_with_session();
+    ui.applied(&Event::Update(newen_model::UpdateState::Downloading {
+        version: "9.9.9".into(),
+        done: 53,
+        total: 100,
+        mandatory: false,
+    }));
+    ui.settings_page = Some("system".into());
+    assert!(drawn_words(&store, &ui, "Downloading Newen 9.9.9"));
+    assert!(!drawn_words(&store, &ui, "Check for updates"));
+    let window = limn::Size::new(1408.0, 844.0);
+    let frame = UiTree::new(view(&store, &ui, window)).layout(window);
+    let bar = (frame.access.iter()).find(|node| node.id == updates::UPDATE_PROGRESS);
+    let bar = bar.expect("the download's bar");
+    assert!(bar.rect.width > 400.0, "across the page: {:?}", bar.rect);
+    assert_eq!(bar.role, limn::Role::ProgressIndicator);
+    assert_eq!(bar.name, "Downloading Newen 9.9.9");
 }
 
 #[test]

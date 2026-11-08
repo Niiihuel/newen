@@ -246,10 +246,27 @@ fn row(ui: &Ui, part: Part, title: &str, about: String, bytes: u64, free: Option
     let palette = look::palette();
     // The size in a column of its own at the start, and Details at the end, at the page's right
     // edge as Refresh and Open folder are: every kind's line up, what can go just before Details.
-    let size = Element::row(vec![
-        Element::spacer().flex(1.0),
-        muted(view::human_bytes(bytes)).centered_y(),
+    // Under it, a meter of its share of what Newen keeps, in the same column: they line up.
+    let total = ui.storage.as_ref().map_or(0, |report| report.total);
+    let meter = limn::ComponentPalette {
+        text: look::muted(),
+        selected: look::divider(),
+        ..palette
+    };
+    let size = Element::column(vec![
+        Element::row(vec![
+            Element::spacer().flex(1.0),
+            muted(view::human_bytes(bytes)),
+        ]),
+        limn::Progress::new(bytes as f32 / total.max(1) as f32, meter)
+            .id(format!("storage:share:{}", part.key()))
+            .flat()
+            .width(SIZE)
+            .height(3.0)
+            .render()
+            .accessibility_label(format!("{title}: share of what Newen keeps")),
     ])
+    .gap(4.0)
     .size(Some(SIZE), None);
     let mut controls = vec![size.centered_y(), Element::spacer().flex(1.0)];
     if ui.storage_view.working == Some(part) {
