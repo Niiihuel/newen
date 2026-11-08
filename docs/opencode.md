@@ -63,6 +63,12 @@ Los modos de OpenCode son sus agentes primarios, en la opción de config `mode` 
 | Free models | sí | `OPENCODE_DISABLE_FREE_MODELS=1` |
 | Claude Code skills (`~/.claude/skills`, `.claude/skills`) | sí | `OPENCODE_DISABLE_CLAUDE_CODE=1` |
 | Project settings (`opencode.json`, `.opencode/`, sus servidores MCP) | sí | `OPENCODE_DISABLE_PROJECT_CONFIG=1` |
+| Update the model list | sí | `OPENCODE_DISABLE_MODELS_FETCH=1` |
+| Web search | sí | `"websearch": false` en `OPENCODE_CONFIG_CONTENT` |
+| Compact when the context fills | sí | `"compaction": {"auto": false}` |
+| OpenCode's snapshots | sí | `"snapshots": false` |
+
+Leídas en el código de 2.2.5 (`9bbb8ce`: `packages/schema/src/config.ts`, `packages/cli/src/server-process.ts`) y probadas con el CLI: arranca y abre sesión con todas puestas. Las variables que su documentación aún nombra y su código no lee (`OPENCODE_DISABLE_AUTOCOMPACT`, `OPENCODE_ENABLE_EXA`, `OPENCODE_DISABLE_LSP_DOWNLOAD`…) no se usan.
 
 **Cuenta:** no se declara. OpenCode funciona sin cuenta (modelos gratuitos), y una pantalla de "Sign in" taparía la ventana; agregar una clave pide terminal (`opencode auth login`). Una sesión cuyo proveedor rechaza las credenciales responde `-32000` y Newen muestra `AuthRequired`.
 

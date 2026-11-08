@@ -94,7 +94,7 @@ const ASK: &str = "ask";
 const ASK_AGENT: &str = r#"{"mode":"primary","description":"Asks before every edit and shell command","permissions":[{"action":"edit","resource":"*","effect":"ask"},{"action":"shell","resource":"*","effect":"ask"}]}"#;
 
 /// The person's options (Settings), each turned off by one of OpenCode's own variables.
-const OPTIONS: [(&str, &str, &str, &str); 3] = [
+const OPTIONS: [(&str, &str, &str, &str); 4] = [
     (
         "free_models",
         "Free models",
@@ -112,6 +112,38 @@ const OPTIONS: [(&str, &str, &str, &str); 3] = [
         "Project settings",
         "Load a project's opencode.json and .opencode folder, its MCP servers included.",
         "OPENCODE_DISABLE_PROJECT_CONFIG",
+    ),
+    (
+        "models_fetch",
+        "Update the model list",
+        "Fetch the latest list of models and providers as a session starts.",
+        "OPENCODE_DISABLE_MODELS_FETCH",
+    ),
+];
+
+/// The person's options that are OpenCode settings (2.2.5's schema), on by default and each its
+/// key in the session's config when turned off: (key, label, description, setting, value off).
+const SETTINGS: [(&str, &str, &str, &str, &str); 3] = [
+    (
+        "web_search",
+        "Web search",
+        "Let OpenCode search the web.",
+        "websearch",
+        "false",
+    ),
+    (
+        "auto_compact",
+        "Compact when the context fills",
+        "Summarize the conversation when it nears the context's end, so the session goes on.",
+        "compaction",
+        r#"{"auto":false}"#,
+    ),
+    (
+        "snapshots",
+        "OpenCode's snapshots",
+        "Let OpenCode keep snapshots of the folder to undo its own changes. Newen keeps its own either way.",
+        "snapshots",
+        "false",
     ),
 ];
 
@@ -340,6 +372,11 @@ impl AgentAdapter for OpenCode {
         if !spec.skill_roots.is_empty() {
             config["skills"] = json!(spec.skill_roots);
         }
+        for (key, _, _, setting, off) in SETTINGS {
+            if spec.options.get(key).is_some_and(|v| v == "false") {
+                config[setting] = serde_json::from_str(off).expect("a JSON value");
+            }
+        }
         let mut env = vec![("OPENCODE_CONFIG_CONTENT".to_owned(), config.to_string())];
         for (key, _, _, variable) in OPTIONS {
             if spec.options.get(key).is_some_and(|v| v == "false") {
@@ -356,14 +393,19 @@ impl AgentAdapter for OpenCode {
     }
 
     fn options(&self) -> Vec<AgentOption> {
+        let switch = |key: &str, label: &str, description: &str| AgentOption {
+            key: key.into(),
+            label: label.into(),
+            description: format!("{description} Applies to new sessions."),
+            choices: vec![],
+            default: "true".into(),
+        };
         (OPTIONS.iter())
-            .map(|(key, label, description, _)| AgentOption {
-                key: (*key).into(),
-                label: (*label).into(),
-                description: (*description).into(),
-                choices: vec![],
-                default: "true".into(),
-            })
+            .map(|(key, label, description, _)| switch(key, label, description))
+            .chain(
+                (SETTINGS.iter())
+                    .map(|(key, label, description, ..)| switch(key, label, description)),
+            )
             .collect()
     }
 

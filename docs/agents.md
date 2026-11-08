@@ -88,6 +88,19 @@ Al restaurar, el motor también rehace qué sesiones no terminaron su tarea (un 
 
 Lo que no se pudo verificar: que un modelo real elija llamar la herramienta (las pruebas usan capturas reproducidas y modelos guionados). La forma de `dynamicTools`/`item/tool/call` en Codex está verificada de punta a punta (2026-11-03, ver [codex.md](codex.md) «Herramientas de Newen»).
 
+## Opciones de cada agente (Settings, `options`)
+
+Cada adaptador declara las suyas (`AgentOption`: un interruptor, o una lista de valores cuyo primero, vacío, deja la configuración del CLI); valen para las sesiones nuevas y van por el mecanismo del CLI. Un interruptor solo se manda cuando deja su valor por defecto, así decide la configuración de la persona si no. Todas verificadas con la versión probada de cada CLI:
+
+| Agente | Opciones | Cómo llegan |
+|---|---|---|
+| Claude Code 2.1.319 | Output style, Local sandbox, Strict sandbox, Prompt suggestions, Credit Claude in commits and pull requests, Extended thinking, Compact when the context fills, Auto memory, Hooks, Project MCP servers without asking, Usage data | `--settings` (`outputStyle`, `sandbox`, `attribution`, `alwaysThinkingEnabled`, `autoCompactEnabled`, `autoMemoryEnabled`, `disableAllHooks`, `enableAllProjectMcpServers`), `initialize.promptSuggestions`, y `DISABLE_TELEMETRY`/`DISABLE_ERROR_REPORTING` |
+| Codex 0.166 | Remote Control, Network in Auto, Web search, Reasoning summaries, Answer length, Personality | el proceso compartido ([remote-control.md](remote-control.md)) y la `config` del hilo (`sandbox_workspace_write.network_access`, `web_search`, `model_reasoning_summary`, `model_verbosity`, `personality`), cuyos valores Codex valida |
+| OpenCode 2.2.5 | Free models, Claude Code skills, Project settings, Update the model list, Web search, Compact when the context fills, OpenCode's snapshots | sus variables `OPENCODE_DISABLE_*` y `OPENCODE_CONFIG_CONTENT` ([opencode.md](opencode.md)) |
+| Hermes | Project rules, Run hooks without asking | sus variables de lanzamiento ([hermes.md](hermes.md)) |
+| Grok 1.0.77 | Sandbox, Web search and fetch, Subagents, Memory, Background workflows, Skip ignored files, Usage data | `GROK_*` y `--disable-web-search` ([grok.md](grok.md)) |
+| Antigravity 1.5.3 | Sandbox, Usage data | `agy acp --sandbox`, `--disable-telemetry` ([antigravity.md](antigravity.md)) |
+
 ## Modos de permiso (`modes`, `default_mode`)
 
 El adaptador da las palabras de sus modos, que la UI no conoce: `modes() → Vec<ModeWords{id, label, about, tone, listed}>` (con los inseguros incluidos) y `default_mode()`. `tone` es uno de `Ask | Edits | Plan | Auto | Read | Unsafe` y decide ícono y tinta; viaja a la UI en `AgentInfo`. Claude: Manual, Accept edits, Plan, Auto, Bypass permissions (las palabras de Desktop). Codex: Read only, Auto, Plan (su modo Plan, de solo lectura), Full access.

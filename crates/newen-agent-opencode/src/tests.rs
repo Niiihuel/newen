@@ -356,8 +356,33 @@ fn its_session_gets_newens_skills_and_ask_mode_and_the_persons_options_in_its_ow
         .iter()
         .any(|(k, _)| k == "OPENCODE_DISABLE_CLAUDE_CODE"));
     let ids: Vec<String> = adapter.options().into_iter().map(|o| o.key).collect();
-    assert_eq!(ids, ["free_models", "claude_skills", "project_config"]);
+    assert_eq!(
+        ids,
+        [
+            "free_models",
+            "claude_skills",
+            "project_config",
+            "models_fetch",
+            "web_search",
+            "auto_compact",
+            "snapshots"
+        ]
+    );
     assert!(adapter.session_extras().skills);
+    // At their defaults its settings say nothing; turned off, each is its key in the config.
+    assert!(config.get("websearch").is_none() && config.get("compaction").is_none());
+    for key in ["web_search", "auto_compact", "snapshots", "models_fetch"] {
+        spec.options.insert(key.into(), "false".into());
+    }
+    let plan = adapter.launch(&spec);
+    let config = (plan.env.iter()).find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT");
+    let config: Value = serde_json::from_str(&config.unwrap().1).unwrap();
+    assert_eq!(config["websearch"], false);
+    assert_eq!(config["compaction"], json!({ "auto": false }));
+    assert_eq!(config["snapshots"], false);
+    assert!(plan
+        .env
+        .contains(&("OPENCODE_DISABLE_MODELS_FETCH".into(), "1".into())));
 }
 
 #[test]
