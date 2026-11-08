@@ -21,7 +21,7 @@ const POST_TOOL_HOOK: &str = "newen_post_tool";
 const MODES: [&str; 3] = ["default", "acceptEdits", "plan"];
 
 /// Message types that carry nothing Newen shows yet; not `Unknown`, not events.
-const QUIET: [&str; 2] = ["command_lifecycle", "auth_status"];
+const QUIET: [&str; 1] = ["auth_status"];
 
 #[derive(Default)]
 pub struct Claude {
@@ -72,6 +72,8 @@ pub struct Claude {
     remote: bool,
     /// Newen's own prompts, until the CLI echoes them back (`--replay-user-messages`).
     prompts: std::collections::HashSet<String>,
+    /// Messages in the CLI's queue that have not started yet (`command_lifecycle`).
+    waiting: std::collections::HashSet<String>,
     /// `initialize` asks for a suggested next prompt after each turn, as the session's options
     /// said at launch.
     suggest: std::cell::Cell<bool>,
@@ -876,6 +878,7 @@ impl AgentAdapter for Claude {
             AgentCommand::Start => {
                 // A new process loads its servers from the config, the ones added before too.
                 self.added.clear();
+                self.waiting.clear();
                 let mut request = json!({
                     "subtype": "initialize",
                     "hooks": { "PostToolUse": [{ "hookCallbackIds": [POST_TOOL_HOOK] }] },
@@ -1390,13 +1393,21 @@ impl AgentAdapter for Claude {
                 self.turn_tokens = 0;
                 self.live_tokens = 0;
                 self.task_tokens.clear();
-                let interrupted = std::mem::take(&mut self.interrupted)
-                    && msg["subtype"] == "error_during_execution";
+                let stopping = std::mem::take(&mut self.interrupted);
+                let interrupted = stopping && msg["subtype"] == "error_during_execution";
                 let errors = msg["errors"]
                     .as_array()
                     .map(|e| e.iter().map(text).collect::<Vec<_>>().join("\n"));
                 if std::mem::take(&mut self.auth_failed) {
                     decoded.events.push(AgentEvent::AuthRequired);
+                }
+                // A turn the CLI took by itself (a background command's end, or the ones a
+                // resumed session lost with its old process, told with no step) ends no
+                // message of Newen's though one waits in its queue: that one starts after it
+                // (2.1.319, fixtures/2.1.319/orphaned.jsonl).
+                let own = msg["origin"]["kind"] == "task-notification";
+                if own && !self.waiting.is_empty() && !stopping {
+                    return decoded;
                 }
                 decoded.events.push(AgentEvent::TurnFinished {
                     ok: msg["is_error"] != true,
@@ -1440,6 +1451,14 @@ impl AgentAdapter for Claude {
                 let text = text(&msg["suggestion"]).trim().to_owned();
                 if !text.is_empty() {
                     decoded.events.push(AgentEvent::PromptSuggestion { text });
+                }
+            }
+            ("command_lifecycle", _) => {
+                let command = text(&msg["command_uuid"]);
+                if msg["state"] == "queued" {
+                    self.waiting.insert(command);
+                } else {
+                    self.waiting.remove(&command);
                 }
             }
             (kind, _) if QUIET.contains(&kind) => {}

@@ -859,6 +859,27 @@ fn an_interrupted_turn_finishes_interrupted() {
     ));
 }
 
+/// A resumed session whose old process left a background command: the CLI tells it gone and
+/// ends a turn of its own (no step) before the waiting message starts. That turn ends no
+/// message; the message's own does. With nothing waiting, a turn of its own still ends (a
+/// helper agent's end, which the session reports).
+#[test]
+fn a_turn_the_cli_takes_by_itself_does_not_end_a_waiting_message() {
+    let finished = |events: &[AgentEvent]| {
+        (events.iter())
+            .filter(|e| matches!(e, AgentEvent::TurnFinished { .. }))
+            .count()
+    };
+    let (_, events, _) = replay_at("2.1.319", "orphaned");
+    assert_eq!(finished(&events), 1);
+    let reply =
+        (events.iter()).position(|e| matches!(e, AgentEvent::Text { text, .. } if text == "hi"));
+    let end = (events.iter()).position(|e| matches!(e, AgentEvent::TurnFinished { .. }));
+    assert!(reply < end, "{events:?}");
+    let (_, events, _) = replay("agent");
+    assert_eq!(finished(&events), 2);
+}
+
 #[test]
 fn rewind_dry_run_reports_the_files() {
     let (_, events, _) = replay("rewind");

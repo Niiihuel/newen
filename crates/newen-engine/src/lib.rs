@@ -3969,6 +3969,8 @@ impl Actor {
             shared.detach(self.id);
         }
         self.generation += 1;
+        // Turns it never finished are not attributed, as when it exits by itself.
+        self.sent.clear();
         self.remote_gone();
     }
 
