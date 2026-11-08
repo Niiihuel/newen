@@ -100,7 +100,14 @@ fn relay(internal: &UnboundedSender<Internal>, relayed: &Relayed) -> bridge::Hos
 }
 
 /// The agents Newen has adapters for, as Settings lists them.
-const AGENTS: [&str; 4] = ["claude", "codex", "opencode", "hermes"];
+const AGENTS: [&str; 6] = [
+    "claude",
+    "codex",
+    "opencode",
+    "hermes",
+    "grok",
+    "antigravity",
+];
 
 /// The adapter for an agent id; `None` for agents Newen does not have yet.
 fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
@@ -109,6 +116,8 @@ fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
         "codex" => Some(Box::new(newen_agent_codex::Codex::new())),
         "opencode" => Some(Box::new(newen_agent_opencode::OpenCode::new())),
         "hermes" => Some(Box::new(newen_agent_hermes::Hermes::new())),
+        "grok" => Some(Box::new(newen_agent_grok::Grok::new())),
+        "antigravity" => Some(Box::new(newen_agent_antigravity::Antigravity::new())),
         _ => None,
     }
 }
@@ -4110,13 +4119,23 @@ impl Actor {
                         // Also when no process runs yet (a session read back): the next starts
                         // in it, and it is the session's mode now, kept for a restart.
                         AgentCommand::SetMode(mode) => {
-                            self.spec.mode = Some(mode.clone());
-                            if self.process.is_none() && !self.attached {
+                            let was = self.spec.mode.replace(mode.clone());
+                            // A mode the agent takes only at launch, going into it or out of
+                            // it: the next launch, after the turn under way, is in the new one.
+                            let relaunch = self.adapter.launch_mode(mode)
+                                || was.is_some_and(|was| self.adapter.launch_mode(&was));
+                            if (self.process.is_none() && !self.attached) || relaunch {
                                 (self.sink)(Event::Agent {
                                     session: self.id,
                                     request: None,
                                     event: AgentEvent::ModeChanged { mode: mode.clone() },
                                 });
+                                if self.process.is_some() || self.attached {
+                                    match self.busy {
+                                        true => self.relaunch = true,
+                                        false => self.relaunch().await,
+                                    }
+                                }
                                 continue;
                             }
                         }

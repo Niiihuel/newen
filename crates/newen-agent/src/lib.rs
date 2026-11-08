@@ -1093,6 +1093,11 @@ pub trait AgentAdapter: Send {
     fn mode_waives_prompts(&self, _mode: &str) -> bool {
         false
     }
+    /// Whether the agent takes `mode` only from its command line: a session going into it, or
+    /// out of it, starts the agent again on the same conversation.
+    fn launch_mode(&self, _mode: &str) -> bool {
+        false
+    }
     /// The words and tone of every permission mode the agent has, unsafe ones too.
     fn modes(&self) -> Vec<ModeWords> {
         vec![]

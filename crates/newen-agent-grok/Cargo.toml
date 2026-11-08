@@ -1,0 +1,14 @@
+[package]
+name = "newen-agent-grok"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Newen's adapter for xAI's Grok Build CLI: `grok agent stdio`, the Agent Client Protocol."
+publish = false
+
+[dependencies]
+newen-agent = { path = "../newen-agent" }
+# The Agent Client Protocol, which `grok agent stdio` speaks.
+newen-agent-acp = { path = "../newen-agent-acp" }
+serde_json.workspace = true

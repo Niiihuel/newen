@@ -3,10 +3,10 @@
 //! `captures/<scenario>-<epoch>/session.jsonl`: one `{t_ms, dir, msg}` per line, `dir` being
 //! `out` (Newen → CLI), `in` (CLI → Newen) or `stderr`.
 //!
-//! Usage: newen-capture [--agent codex|opencode|hermes] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
+//! Usage: newen-capture [--agent codex|opencode|hermes|grok|antigravity] <scenario> [--model <m>] [--settings <sources>] [--resume <session-id>] [--fork]
 //! Scenarios: simple, edit-bash, deny, always, ask, plan, steer, interrupt, resume, rewind,
 //! todos, agent, think, workflow, suggest, remote (by hand, with a phone: `touch <capture>/stop` ends
-//! it). With `--agent codex`, see codex.rs; with `--agent opencode` or `hermes`, acp.rs.
+//! it). With `--agent codex`, see codex.rs; with `--agent opencode`, `hermes`, `grok` or `antigravity`, acp.rs.
 
 mod acp;
 mod codex;

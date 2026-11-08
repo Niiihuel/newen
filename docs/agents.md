@@ -1,6 +1,6 @@
 # Adaptadores de agente (`newen-agent`)
 
-Newen maneja cualquier agente de código por CLI mediante un adaptador (spec.md D11). Este documento fija el contrato común y cómo se proyecta cada CLI sobre él. Cada columna está verificada con capturas del CLI real: Claude Code (engine.md §11.4), Codex `0.163.0` (`app-server` v2, [codex.md](codex.md)), y OpenCode `2.2.5` y Hermes Agent, que hablan el Agent Client Protocol con un núcleo común ([acp.md](acp.md), [opencode.md](opencode.md), [hermes.md](hermes.md)). Un CLI nuevo se verifica con su propia fase de captura antes de implementarlo.
+Newen maneja cualquier agente de código por CLI mediante un adaptador (spec.md D11). Este documento fija el contrato común y cómo se proyecta cada CLI sobre él. Cada columna está verificada con capturas del CLI real: Claude Code (engine.md §11.4), Codex `0.163.0` (`app-server` v2, [codex.md](codex.md)), y OpenCode `2.2.5`, Hermes Agent, Grok Build `1.0.77` y Antigravity CLI `1.5.3`, que hablan el Agent Client Protocol con un núcleo común ([acp.md](acp.md), [opencode.md](opencode.md), [hermes.md](hermes.md), [grok.md](grok.md), [antigravity.md](antigravity.md)). Un CLI nuevo se verifica con su propia fase de captura antes de implementarlo.
 
 ## Contrato
 

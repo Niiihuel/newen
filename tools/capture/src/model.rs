@@ -166,12 +166,22 @@ fn named(body: &Value, suffix: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A call of `name`: by itself when the agent offers it, else through its tool-call bridge.
+/// Whether the agent offers the model a tool of this name.
+fn offers(body: &Value, name: &str) -> bool {
+    (body["tools"].as_array().into_iter().flatten()).any(|t| t["function"]["name"] == name)
+}
+
+/// A call of `name`: by itself when the agent offers it, else through its tool-call bridge
+/// (Grok's `use_tool`, or a `tool_call` of `calls`).
 fn call_of(body: &Value, name: &str, args: Value) -> Reply {
-    let offered =
-        (body["tools"].as_array().into_iter().flatten()).any(|t| t["function"]["name"] == name);
-    if offered {
+    if offers(body, name) {
         return Reply::Tool(name.into(), args);
+    }
+    if offers(body, "use_tool") {
+        return Reply::Tool(
+            "use_tool".into(),
+            json!({ "tool_name": name, "tool_input": args }),
+        );
     }
     Reply::Tool(
         "tool_call".into(),
@@ -204,6 +214,12 @@ fn script(scenario: &str, body: &Value) -> Reply {
             "write_file",
             json!({ "path": "denied.txt", "content": "hi\n" }),
         ),
+        // Grok's plan mode: the plan is offered for approval, then carried out.
+        ("plan", 0) if offers(body, "exit_plan_mode") => tool("exit_plan_mode", json!({})),
+        ("plan", 1) if offers(body, "search_replace") => tool(
+            "search_replace",
+            json!({ "file_path": "planned.txt", "old_string": "", "new_string": "hi\n" }),
+        ),
         ("plan", 0) => tool(
             "write_file",
             json!({ "path": "planned.txt", "content": "hi\n" }),
@@ -228,6 +244,9 @@ fn script(scenario: &str, body: &Value) -> Reply {
         ),
         ("host", 0) => match named(body, "__list_sessions") {
             Some(name) => call_of(body, &name, json!({})),
+            None if offers(body, "search_tool") => {
+                tool("search_tool", json!({ "query": "list sessions" }))
+            }
             None => tool(
                 "tool_search",
                 json!({ "queries": ["sessions list sessions"] }),

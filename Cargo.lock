@@ -2979,6 +2979,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "newen-agent-antigravity"
+version = "0.2.5"
+dependencies = [
+ "newen-agent",
+ "newen-agent-acp",
+ "serde_json",
+]
+
+[[package]]
 name = "newen-agent-claude"
 version = "0.2.5"
 dependencies = [
@@ -2993,6 +3002,15 @@ version = "0.2.5"
 dependencies = [
  "base64 0.22.1",
  "newen-agent",
+ "serde_json",
+]
+
+[[package]]
+name = "newen-agent-grok"
+version = "0.2.5"
+dependencies = [
+ "newen-agent",
+ "newen-agent-acp",
  "serde_json",
 ]
 
@@ -3036,6 +3054,8 @@ name = "newen-capture"
 version = "0.2.5"
 dependencies = [
  "newen-agent",
+ "newen-agent-antigravity",
+ "newen-agent-grok",
  "newen-agent-hermes",
  "newen-agent-opencode",
  "serde_json",
@@ -3064,8 +3084,10 @@ dependencies = [
  "keyring",
  "libc",
  "newen-agent",
+ "newen-agent-antigravity",
  "newen-agent-claude",
  "newen-agent-codex",
+ "newen-agent-grok",
  "newen-agent-hermes",
  "newen-agent-opencode",
  "newen-browser",

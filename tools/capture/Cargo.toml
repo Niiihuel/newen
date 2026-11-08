@@ -15,3 +15,7 @@ uuid = { version = "1", features = ["v4"] }
 newen-agent = { path = "../../crates/newen-agent" }
 newen-agent-opencode = { path = "../../crates/newen-agent-opencode" }
 newen-agent-hermes = { path = "../../crates/newen-agent-hermes" }
+# Grok Build over ACP, the same way.
+newen-agent-grok = { path = "../../crates/newen-agent-grok" }
+# Google's Antigravity CLI over ACP, the same way.
+newen-agent-antigravity = { path = "../../crates/newen-agent-antigravity" }

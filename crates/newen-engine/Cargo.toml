@@ -15,6 +15,10 @@ newen-agent-codex = { path = "../newen-agent-codex" }
 # The agents that speak the Agent Client Protocol (newen-agent-acp): OpenCode and Hermes.
 newen-agent-opencode = { path = "../newen-agent-opencode" }
 newen-agent-hermes = { path = "../newen-agent-hermes" }
+# xAI's Grok Build, over ACP (docs/grok.md).
+newen-agent-grok = { path = "../newen-agent-grok" }
+# Google's Antigravity CLI, over ACP (docs/antigravity.md).
+newen-agent-antigravity = { path = "../newen-agent-antigravity" }
 newen-store = { path = "../newen-store" }
 newen-git = { path = "../newen-git" }
 # The built-in browser, a Chromium driven over DevTools (docs/browser.md).

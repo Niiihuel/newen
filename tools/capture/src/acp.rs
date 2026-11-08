@@ -1,4 +1,4 @@
-//! The ACP driver of newen-capture: `newen-capture --agent opencode|hermes <scenario> [--model <m>]`
+//! The ACP driver of newen-capture: `newen-capture --agent opencode|hermes|grok|antigravity <scenario> [--model <m>]`
 //! drives the agent's real CLI through Newen's own adapter, as the engine would, and records
 //! every line (docs/acp.md "Capturas"). Same format as the other drivers, `{t_ms, dir, msg}` a
 //! line in `captures/<agent>-<scenario>-<epoch>/session.jsonl`, plus `spec` (the session the
@@ -8,7 +8,7 @@
 //!
 //! Newen's own servers are stood in for by this program (`--mcp-stub <server>`), which answers
 //! every call with a fixed line. Scenarios: simple, edit-bash, deny, always, todos, ask,
-//! interrupt, resume, fork, plan, ask-mode, risky, host. `--fake-model <port>` answers as the model from a
+//! interrupt, resume, fork, plan, ask-mode, risky, unsafe, host. `--fake-model <port>` answers as the model from a
 //! script per scenario (model.rs), for an agent pointed at that port.
 
 use newen_agent::{
@@ -51,13 +51,14 @@ fn scenario(agent: &str, name: &str) -> Option<Scenario> {
     use Step::*;
     // What makes each agent ask: OpenCode asks only to read a `.env` file by default; Hermes
     // asks before every edit in its default mode.
-    let (ask, files): (&str, &[(&str, &str)]) = if agent == "opencode" {
-        (
+    // Antigravity asks before commands only.
+    let (ask, files): (&str, &[(&str, &str)]) = match agent {
+        "opencode" => (
             "Read the file .env with your read tool and tell me the value of NAME.",
             &[(".env", "NAME=capture\n")],
-        )
-    } else {
-        ("Create the file denied.txt containing the word hi.", &[])
+        ),
+        "antigravity" => ("Run exactly this shell command: echo hi > denied.txt", &[]),
+        _ => ("Create the file denied.txt containing the word hi.", &[]),
     };
     let (policy, steps) = match name {
         "simple" => (Policy::Allow, vec![Prompt("Reply with exactly the word: ok")]),
@@ -107,7 +108,10 @@ fn scenario(agent: &str, name: &str) -> Option<Scenario> {
         "plan" => (
             Policy::Allow,
             vec![
-                Mode(if agent == "opencode" { "plan" } else { "accept_edits" }),
+                Mode(match agent {
+                    "opencode" | "grok" | "antigravity" => "plan",
+                    _ => "accept_edits",
+                }),
                 Prompt("Create the file planned.txt containing the word hi, then reply with what you did."),
             ],
         ),
@@ -115,6 +119,16 @@ fn scenario(agent: &str, name: &str) -> Option<Scenario> {
         "ask-mode" => (
             Policy::Deny,
             vec![Mode("ask"), Prompt("Create the file asked.txt containing the word hi.")],
+        ),
+        // The mode that never asks: an edit that asks in the default mode does not (and would
+        // be denied if it did).
+        "unsafe" => (
+            Policy::Deny,
+            vec![Mode(UNSAFE.iter().find(|(a, _)| *a == agent).map_or("", |(_, m)| m)),
+                Prompt(match agent {
+                    "antigravity" => "Run exactly this shell command: echo hi > free.txt",
+                    _ => "Create the file free.txt containing the word hi.",
+                })],
         ),
         // A command Hermes's approvals call risky.
         "risky" => (Policy::Deny, vec![Prompt("Run exactly this shell command: rm -rf build")]),
@@ -133,8 +147,16 @@ fn scenario(agent: &str, name: &str) -> Option<Scenario> {
     })
 }
 
+/// Each agent's mode that never asks.
+const UNSAFE: [(&str, &str); 2] = [
+    ("grok", "always-approve"),
+    ("antigravity", "skip-permissions"),
+];
+
 fn adapter(agent: &str) -> Option<Box<dyn AgentAdapter>> {
     match agent {
+        "grok" => Some(Box::new(newen_agent_grok::Grok::new())),
+        "antigravity" => Some(Box::new(newen_agent_antigravity::Antigravity::new())),
         "opencode" => Some(Box::new(newen_agent_opencode::OpenCode::new())),
         "hermes" => Some(Box::new(newen_agent_hermes::Hermes::new())),
         _ => None,
@@ -345,7 +367,7 @@ pub fn run(agent: &str, name: &str, model: Option<&str>) -> Result<(), String> {
         std::fs::write(repo.join(file), words).map_err(|e| e.to_string())?;
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let spec = SessionSpec {
+    let mut spec = SessionSpec {
         cwd: repo.clone(),
         model: model.map(str::to_owned),
         servers: ["sessions", "browser"]
@@ -394,6 +416,23 @@ pub fn run(agent: &str, name: &str, model: Option<&str>) -> Result<(), String> {
                     }
                     matches!(e, AgentEvent::TurnFinished { .. })
                 })?;
+            }
+            // A mode the agent takes only at launch starts it again in it, as the engine does.
+            Step::Mode(mode) if run.adapter.launch_mode(mode) => {
+                let session = run.session.clone();
+                run.close();
+                spec = SessionSpec {
+                    resume: session,
+                    mode: Some(mode.into()),
+                    ..spec.clone()
+                };
+                run = launch(
+                    agent,
+                    &spec,
+                    file.try_clone().unwrap(),
+                    start,
+                    scenario.policy,
+                )?;
             }
             Step::Mode(mode) => {
                 run.send(AgentCommand::SetMode(mode.into()));

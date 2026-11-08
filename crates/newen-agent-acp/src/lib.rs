@@ -42,6 +42,47 @@ pub trait Flavor: Sync {
     fn resends_words(&self) -> bool {
         false
     }
+    /// The agent's version, from what `initialize` answered: ACP's `agentInfo.version`.
+    fn version(&self, initialized: &Value) -> String {
+        text(&initialized["agentInfo"]["version"])
+    }
+
+    /// The modes the agent takes though it lists none, by Newen's ids for them; a session starts
+    /// in the first.
+    fn unlisted_modes(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The words a finished call gave, from its `rawOutput`, when its content has none.
+    fn output(&self, _raw: &Value) -> Option<String> {
+        None
+    }
+
+    /// Its modes that skip every approval, which the mode menu offers only once Settings allow
+    /// them (`AgentCapabilities::unsafe_modes`).
+    fn unsafe_modes(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// What moves the session to one of its unlisted modes: the `session/set_mode` id that mode
+    /// is, and notifications of the agent's own sent before it (method, and params that get the
+    /// `sessionId`).
+    fn mode_switch(&self, mode: &str) -> (String, Vec<(&'static str, Value)>) {
+        (mode.to_owned(), vec![])
+    }
+
+    /// A request of the agent's own that waits on the person, a question or a plan to accept:
+    /// the tool whose card it is (`AskUserQuestion`, `ExitPlanMode`) and that tool's input.
+    /// `None` for one Newen does not answer.
+    fn ask(&self, _method: &str, _params: &Value) -> Option<(String, Value)> {
+        None
+    }
+
+    /// What answers such a request: the person's `decision`, or `None` when the turn stopped.
+    fn answer(&self, _method: &str, _params: &Value, _decision: Option<&Decision>) -> Value {
+        json!({})
+    }
+
     /// The provider a model of the session's list comes through and the model's own name, when
     /// its name says both; `None` keeps the name whole.
     fn provider(&self, name: &str) -> Option<(String, String)> {
@@ -205,6 +246,8 @@ enum Ask {
     Permission(Value, Vec<(String, String)>),
     /// `elicitation/create` (a form of questions): its id and its fields.
     Form(Value, Vec<Field>),
+    /// A request of the agent's own ([`Flavor::ask`]): its id, method and params.
+    Own(Value, String, Value),
 }
 
 /// One question of a form: its key, how the card asks it, and its choices as (label, value).
@@ -406,6 +449,11 @@ impl Acp {
                 self.mode_option = Some(text(&option["id"]));
                 self.mode = text(&option["currentValue"]);
                 self.modes = Self::choices(&option).into_iter().map(|(v, _)| v).collect();
+            } else if let Some(first) = self.flavor.unlisted_modes().first() {
+                self.modes = (self.flavor.unlisted_modes().iter())
+                    .map(|m| (*m).to_owned())
+                    .collect();
+                self.mode = (*first).to_owned();
             }
         }
         before != self.mode && !before.is_empty()
@@ -450,7 +498,13 @@ impl Acp {
             capabilities: AgentCapabilities {
                 models,
                 commands: self.commands.clone(),
-                modes: self.modes.clone(),
+                modes: (self.modes.iter())
+                    .filter(|m| !self.flavor.unsafe_modes().contains(&m.as_str()))
+                    .cloned()
+                    .collect(),
+                unsafe_modes: (self.flavor.unsafe_modes().iter())
+                    .map(|m| (*m).to_owned())
+                    .collect(),
                 interrupt: true,
                 resume: self.resumes || self.loads,
                 fork: self.forks,
@@ -461,9 +515,13 @@ impl Acp {
         }
     }
 
-    /// The request that sets a mode, model or effort, `None` when the agent offers no such
-    /// thing or is there already.
-    fn set(&mut self, command: &AgentCommand) -> Option<String> {
+    /// The lines that set a mode, model or effort, none when the agent offers no such thing or
+    /// is there already.
+    fn set(&mut self, command: &AgentCommand) -> Vec<String> {
+        self.set_lines(command).unwrap_or_default()
+    }
+
+    fn set_lines(&mut self, command: &AgentCommand) -> Option<Vec<String>> {
         let session = self.session.clone()?;
         let (category, value) = match command {
             AgentCommand::SetMode(mode) => ("mode", mode),
@@ -483,20 +541,32 @@ impl Acp {
             if category != "mode" || self.mode_option.is_some() {
                 let params =
                     json!({ "sessionId": session, "configId": option["id"], "value": value });
-                return Some(self.request("session/set_config_option", params, Pending::Set(mode)));
+                let line = self.request("session/set_config_option", params, Pending::Set(mode));
+                return Some(vec![line]);
             }
         }
         match category {
-            "mode" => Some(self.request(
-                "session/set_mode",
-                json!({ "sessionId": session, "modeId": value }),
-                Pending::Set(mode),
-            )),
-            "model" if !self.models.is_empty() && self.model != *value => Some(self.request(
+            "mode" => {
+                // A mode the agent does not list: its own notifications first, then its set_mode.
+                let (id, notes) = match self.flavor.unlisted_modes().contains(&value.as_str()) {
+                    true => self.flavor.mode_switch(value),
+                    false => (value.clone(), vec![]),
+                };
+                let mut lines: Vec<String> = (notes.into_iter())
+                    .map(|(method, mut params)| {
+                        params["sessionId"] = json!(session);
+                        json!({ "jsonrpc": "2.0", "method": method, "params": params }).to_string()
+                    })
+                    .collect();
+                let params = json!({ "sessionId": session, "modeId": id });
+                lines.push(self.request("session/set_mode", params, Pending::Set(mode)));
+                Some(lines)
+            }
+            "model" if !self.models.is_empty() && self.model != *value => Some(vec![self.request(
                 "session/set_model",
                 json!({ "sessionId": session, "modelId": value }),
                 Pending::Set(None),
-            )),
+            )]),
             _ => None,
         }
     }
@@ -534,7 +604,7 @@ impl Acp {
                 if let Some(error) = error {
                     return self.failed(error, msg, out);
                 }
-                self.version = text(&result["agentInfo"]["version"]);
+                self.version = self.flavor.version(result);
                 let caps = &result["agentCapabilities"];
                 self.loads = caps["loadSession"] == true;
                 self.resumes = !caps["sessionCapabilities"]["resume"].is_null();
@@ -617,9 +687,14 @@ impl Acp {
         }
         let cost = self.cost.map(|now| now - self.cost_before.unwrap_or(0.0));
         self.cost_before = self.cost;
+        // ACP's `usage`, or the same counts some agents give in the response's `_meta`.
+        let counts = match result["usage"].is_object() {
+            true => &result["usage"],
+            false => &result["_meta"],
+        };
         let usage = Usage {
-            input_tokens: number(&result["usage"]["inputTokens"]),
-            output_tokens: number(&result["usage"]["outputTokens"]),
+            input_tokens: number(&counts["inputTokens"]),
+            output_tokens: number(&counts["outputTokens"]),
             cost_usd: cost,
             context_tokens: self.used,
             context_window: self.size,
@@ -771,10 +846,19 @@ impl Acp {
                 }
             }
             "current_mode_update" => {
-                self.mode = text(&update["currentModeId"]);
-                out.events.push(AgentEvent::ModeChanged {
-                    mode: self.mode.clone(),
-                });
+                let said = text(&update["currentModeId"]);
+                // Unlisted modes: the agent says the `session/set_mode` id, which several of
+                // Newen's modes may share; the one the session is in stays.
+                let unlisted = self.flavor.unlisted_modes();
+                let same = |mode: &str| self.flavor.mode_switch(mode).0 == said;
+                if unlisted.is_empty() || !same(&self.mode) {
+                    self.mode = (unlisted.iter())
+                        .find(|mode| same(mode))
+                        .map_or(said, |mode| (*mode).to_owned());
+                    out.events.push(AgentEvent::ModeChanged {
+                        mode: self.mode.clone(),
+                    });
+                }
             }
             "config_option_update" => {
                 let moved = self.take_options(update);
@@ -855,8 +939,11 @@ impl Acp {
             }
         }
         let raw = &update["rawOutput"];
-        if output.is_empty() {
-            output.extend(raw.as_str().or(raw["error"].as_str()).map(str::to_owned));
+        if output.iter().all(|words| words.trim().is_empty()) {
+            output = (raw.as_str().or(raw["error"].as_str()).map(str::to_owned))
+                .or_else(|| self.flavor.output(raw))
+                .into_iter()
+                .collect();
         }
         let output = output.join("\n");
         let command = (name == "Bash").then(|| CommandRun {
@@ -983,6 +1070,23 @@ impl Acp {
             }
             // A form Newen cannot show (a page to open, say): the agent goes on without it.
             "elicitation/create" => out.replies.push(reply(id, json!({ "action": "decline" }))),
+            // A question or a plan of the agent's own, as its flavor reads it.
+            _ if self.flavor.ask(method, p).is_some() => {
+                let (tool, input) = self.flavor.ask(method, p).unwrap_or_default();
+                self.asks.insert(
+                    key.clone(),
+                    Ask::Own(id.clone(), method.to_owned(), p.clone()),
+                );
+                out.events.push(AgentEvent::PermissionRequest {
+                    id: key,
+                    call: p["toolCallId"].as_str().map(str::to_owned),
+                    tool,
+                    input,
+                    title: None,
+                    interactive: true,
+                    suggestions: vec![],
+                });
+            }
             // Files and terminals stay the agent's own: Newen offers none of the client's.
             _ => {
                 out.events.push(AgentEvent::Unknown(msg.clone()));
@@ -1017,6 +1121,12 @@ impl Acp {
                 vec![reply(
                     &rpc,
                     json!({ "action": "accept", "content": form_answer(&fields, &answers) }),
+                )]
+            }
+            Some(Ask::Own(rpc, method, params)) => {
+                vec![reply(
+                    &rpc,
+                    self.flavor.answer(&method, &params, Some(&decision)),
                 )]
             }
             None => vec![],
@@ -1073,6 +1183,9 @@ impl Acp {
                             reply(&rpc, json!({ "outcome": { "outcome": "cancelled" } }))
                         }
                         Ask::Form(rpc, _) => reply(&rpc, json!({ "action": "cancel" })),
+                        Ask::Own(rpc, method, params) => {
+                            reply(&rpc, self.flavor.answer(&method, &params, None))
+                        }
                     });
                     self.withdrawn.push(id);
                 }
@@ -1087,7 +1200,7 @@ impl Acp {
                     self.held.push(command);
                     return vec![];
                 }
-                self.set(&command).into_iter().collect()
+                self.set(&command)
             }
             // Newen's own tools are answered over their own server (`SessionExtras::host`); no
             // context breakdown, MCP state, rewind or remote in ACP.
@@ -1153,8 +1266,9 @@ fn form_fields(p: &Value) -> Vec<Field> {
     let message = text(&p["message"]);
     properties
         .iter()
+        // `<key>_custom` or `<key>_other`: the field for words of the person's own.
         .filter(|(key, _)| {
-            !key.strip_suffix("_custom")
+            !(key.strip_suffix("_custom").or(key.strip_suffix("_other")))
                 .is_some_and(|base| properties.contains_key(base))
         })
         .map(|(key, field)| {
@@ -1178,13 +1292,16 @@ fn form_fields(p: &Value) -> Vec<Field> {
                 .find_map(|v| v.as_str())
                 .map(str::to_owned)
                 .unwrap_or_else(|| message.clone());
-            let custom = format!("{key}_custom");
+            let custom = ["_custom", "_other"]
+                .map(|end| format!("{key}{end}"))
+                .into_iter()
+                .find(|field| properties.contains_key(field));
             Field {
                 key: key.clone(),
                 question,
                 choices,
                 multi,
-                custom: properties.contains_key(&custom).then_some(custom),
+                custom,
             }
         })
         .collect()
