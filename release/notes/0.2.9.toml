@@ -1,0 +1,7 @@
+# The notes of 0.2.9 (docs/UPDATES.md, "Escribir las notas de una release").
+
+improved = [
+    "In a new session, @ lists the files of its folder and / offers the agent's commands and skills, as in a session under way.",
+    "Settings has more of Claude Code's options: commit credit, extended thinking, auto-compact, auto memory, hooks and usage data.",
+    "Settings has Codex's web search, reasoning summaries, answer length, personality and network in Auto, and more of OpenCode's.",
+]
