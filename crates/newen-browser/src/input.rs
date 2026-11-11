@@ -73,7 +73,7 @@ pub fn commands(
                         "modifiers": modifiers(*keys) }),
             )]
         }
-        BrowserInput::Wheel { x, y, dx, dy } => {
+        BrowserInput::Wheel { x, y, dx, dy, .. } => {
             vec![mouse(
                 "mouseWheel",
                 *x,

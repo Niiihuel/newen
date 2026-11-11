@@ -2939,6 +2939,7 @@ dependencies = [
  "eframe",
  "gbm",
  "image",
+ "libc",
  "limn",
  "limn-egui",
  "limn-video",
@@ -3042,9 +3043,12 @@ dependencies = [
  "libc",
  "newen-model",
  "objc2 0.6.5",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
  "serde_json",
  "tokio",
  "wgpu",
+ "windows",
  "zune-core",
  "zune-jpeg",
 ]
@@ -3609,6 +3613,7 @@ dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
 ]
 
 [[package]]

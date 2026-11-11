@@ -30,6 +30,39 @@ mod direct {
 mod editors;
 mod images;
 mod page;
+// The page's pointer heard apart from the window's frames is Wayland's (pointer.rs): elsewhere
+// this stand-in never exists and the window gives the page its pointer itself.
+#[cfg(target_os = "linux")]
+mod pointer;
+#[cfg(not(target_os = "linux"))]
+mod pointer {
+    use eframe::egui;
+
+    pub struct Pointer;
+
+    impl Pointer {
+        pub fn hears(&self) -> bool {
+            false
+        }
+        pub fn lay(
+            &self,
+            _: Option<(String, egui::Rect)>,
+            _: Vec<egui::Rect>,
+            _: newen_model::Modifiers,
+            _: Option<(egui::Pos2, bool)>,
+        ) {
+        }
+    }
+
+    impl crate::page::Apart for Pointer {
+        fn gave(&self, _: egui::PointerButton, _: bool) -> bool {
+            false
+        }
+        fn moves(&self) -> bool {
+            false
+        }
+    }
+}
 mod video;
 
 use eframe::egui;
@@ -116,6 +149,8 @@ struct App {
     textures: HashMap<String, (egui::TextureId, eframe::wgpu::Texture)>,
     /// The page's share of the window's input.
     page: page::Page,
+    /// The page's pointer heard as the compositor tells it, not a frame later (pointer.rs).
+    pointer: Option<pointer::Pointer>,
     /// The tab on screen and its size, as last told to the engine.
     browser_shown: Option<(SessionId, newen_model::BrowserView)>,
     /// What the address bar was last set to.
@@ -284,7 +319,10 @@ impl App {
         };
         let focused = self.tree.focused_id() == Some(view);
         let events = ctx.input(|i| i.events.clone());
-        self.page.route(&events, over, page, focused)
+        let apart = (self.pointer.as_ref())
+            .filter(|pointer| pointer.hears())
+            .map(|pointer| pointer as &dyn page::Apart);
+        self.page.route(&events, over, page, focused, apart)
     }
 
     /// Carry out what the page asked; the browser's buttons are clicked as the person would.
@@ -430,6 +468,33 @@ impl App {
                 egui::vec2(rect.width, rect.height),
             )
         });
+        if let Some(pointer) = &self.pointer {
+            // What of Newen's is above the page: each region laid out after it that takes a
+            // press, as `press_region` finds the last one under the pointer.
+            let above = (frame.regions.iter())
+                .skip_while(|r| r.id != view)
+                .filter(|r| r.id != view && r.kind != limn::HitKind::Hover)
+                .map(|r| {
+                    let (at, size) = (
+                        egui::vec2(r.rect.x, r.rect.y),
+                        egui::vec2(r.rect.width, r.rect.height),
+                    );
+                    egui::Rect::from_min_size(origin + at, size)
+                })
+                .filter(|above| page.is_some_and(|page| page.intersects(*above)))
+                .collect();
+            let shown = (self.browser_shown.zip(page)).map(|((session, view), rect)| {
+                (newen_ui::view::browser_surface(session, view.tab), rect)
+            });
+            // What limn itself makes of the place under the pointer, to hold those against.
+            let (keys, at) = ctx.input(|i| (page::keys(i.modifiers), i.pointer.latest_pos()));
+            let limn = at.map(|pos| {
+                let at = limn::Point::new(pos.x - origin.x, pos.y - origin.y);
+                let on_page = frame.press_region(at).is_some_and(|r| r.id == view);
+                (pos, on_page && shown.is_some())
+            });
+            pointer.lay(shown, above, keys, limn);
+        }
         if let Some(direct) = &self.direct {
             let (window, fullscreen) = ctx.input(|i| {
                 (
@@ -2083,6 +2148,9 @@ fn main() -> eframe::Result {
             let direct = native
                 .as_ref()
                 .and_then(|native| start_direct(creation, native));
+            let pointer = native
+                .as_ref()
+                .and_then(|native| start_pointer(creation, native));
             // A stand-in agent keeps no settings: the welcome would show at every start.
             let skip_welcome = std::env::var_os("NEWEN_PROGRAMS").is_some()
                 && std::env::var_os("NEWEN_WELCOME").is_none();
@@ -2201,6 +2269,7 @@ fn main() -> eframe::Result {
                 direct,
                 native: native.clone(),
                 page: page::Page::default(),
+                pointer,
                 browser_shown: None,
                 address: None,
                 fonts_attached: false,
@@ -2239,8 +2308,12 @@ fn wgpu_setup(native: bool) -> eframe::egui_wgpu::WgpuSetup {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = Arc::new(move |adapter| {
             let mut descriptor = base(adapter);
-            descriptor.required_features |=
-                adapter.features() & eframe::wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+            // What a Vulkan device needs to take in Chromium's GPU paints: dmabufs on Linux,
+            // Direct3D's shared textures on Windows. Metal and DirectX 12 need nothing.
+            use eframe::wgpu::Features;
+            let paints =
+                Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF | Features::VULKAN_EXTERNAL_MEMORY_WIN32;
+            descriptor.required_features |= adapter.features() & paints;
             descriptor
         });
     }
@@ -2279,6 +2352,42 @@ fn start_direct(
         }
         Err(error) => {
             eprintln!("newen: the page is drawn by the window: {error}");
+            None
+        }
+    }
+}
+
+/// The page's pointer heard on a thread of its own, where the window is Wayland's; `None`
+/// leaves it to the window's frames, as `NEWEN_POINTER=window` asks.
+#[cfg(not(target_os = "linux"))]
+fn start_pointer(
+    _: &eframe::CreationContext,
+    _: &newen_engine::Native,
+) -> Option<pointer::Pointer> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn start_pointer(
+    creation: &eframe::CreationContext,
+    native: &newen_engine::Native,
+) -> Option<pointer::Pointer> {
+    use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    if newen_files::env("POINTER").is_some_and(|how| how == "window") {
+        return None;
+    }
+    let (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) = (
+        creation.display_handle().ok()?.as_raw(),
+        creation.window_handle().ok()?.as_raw(),
+    ) else {
+        return None;
+    };
+    let native = native.clone();
+    let give: pointer::Give = Arc::new(move |surface, input| native.pointer_on(surface, input));
+    match pointer::Pointer::start(display.display.as_ptr(), window.surface.as_ptr(), give) {
+        Ok(pointer) => Some(pointer),
+        Err(error) => {
+            eprintln!("newen: the page's pointer is read with the window's frames: {error}");
             None
         }
     }

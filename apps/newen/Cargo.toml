@@ -57,3 +57,6 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 # The buffers the page is presented in, allocated where the compositor can read them.
 gbm = { version = "0.18", default-features = false }
+# poll(2) on the Wayland connection, with a timeout, for the thread that hears the page's
+# pointer (pointer.rs; already in the tree).
+libc = "0.2"

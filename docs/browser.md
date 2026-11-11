@@ -245,7 +245,7 @@ El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG 
   - `Target.createBrowserContext` crea un `RequestContext` en memoria por sesión.
   - `Target.createTarget` crea un browser; su `targetId` es el real de la página (`Target.getTargetInfo`), porque `lib.rs` lo compara con el id del frame principal.
   - Títulos, direcciones, popups, cierres y descargas se sintetizan como los eventos `Target.*` y `Browser.download*` de Chromium.
-  - `tools.rs` y `lib.rs` tratan igual una pestaña nativa y una headless: el mouse, el teclado, el cursor y el foco emulado son los mismos. Cambian dos cosas: de dónde salen los frames y cómo se fija el tamaño, que es el de la vista (`GetViewRect`) y no `Emulation.setDeviceMetricsOverride`. Con los dos a la vez, Chromium a veces se queda pintando al tamaño viejo; el override queda solo para emular un teléfono.
+  - `tools.rs` y `lib.rs` tratan igual una pestaña nativa y una headless: las herramientas del agente, el teclado, el texto y el foco emulado son los mismos. Cambian tres cosas: de dónde salen los frames; cómo se fija el tamaño, que es el de la vista (`GetViewRect`) y no `Emulation.setDeviceMetricsOverride` (con los dos a la vez, Chromium a veces se queda pintando al tamaño viejo; el override queda solo para emular un teléfono); y el puntero de la persona, el cursor y el menú contextual, que van por CEF (§8.1).
 - **Los frames:** `OnPaint` entrega BGRA a la escala de la ventana (`GetScreenInfo` con `Frames::scale`) y del tamaño que tiene la pestaña en CSS px (`GetViewRect`). Solo se publica la pestaña en pantalla, en su superficie, como el screencast.
   - Un `<select>` abierto llega como un paint aparte (`PET_POPUP`) y se dibuja encima del de la página, en su lugar.
   - Un paint que todavía tiene el tamaño de antes de un resize no se muestra: si se mostrara, quedaría en pantalla hasta que la página volviera a cambiar. Chromium a veces sigue con el tamaño viejo (pasa con un `<select>` abierto) hasta que vuelve a pintar, así que 100 ms después se le pide un repaint (`Invalidate`). Pedirlo junto con el `WasResized` se traga el frame nuevo.
@@ -273,6 +273,44 @@ El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG 
 - **Cuándo:** si Settings › Browser › "Native view" está prendido, en cualquier sesión (`NEWEN_BROWSER=native|headless` decide igual). Si no, el Chromium headless de siempre. Newen corre en Wayland nativo en ambos casos.
 - **Probado:** `cargo run -p newen-browser --example native [dir]` (en `shell.nix`; frames por GPU en un device propio, que se leen de vuelta para comprobarlos, y `NEWEN_NO_GPU=1` para el camino por CPU): el frame al tamaño y la escala del pane, el texto pintado, el teclado, la lista de un `<select>` sobre la página y un tamaño que pide el agente. Las mismas pruebas que `tests/chromium.rs` hace con la headless; es un ejemplo porque CEF necesita un programa propio.
 
+### 8.1 Puntero, cursor, menú y ritmo de frames (2026-11-10)
+
+Medido con `cargo run -p newen-browser --example native` en esta máquina (Radeon 780M, niri, pantalla de 120 Hz, frames por GPU): 100 pasos de rueda, cada uno en un momento distinto del frame de Chromium. Antes los pasos salían siempre en la misma fase de su reloj y la medición daba menos de lo que una persona siente.
+
+- **El puntero va directo a CEF** (`Native::pointer`): mover, salir, presionar, soltar y la rueda son `SendMouseMoveEvent`, `SendMouseClickEvent` y `SendMouseWheelEvent`, sin mensaje de DevTools. Las herramientas del agente siguen por CDP.
+  - **Latencia:** igual que por CDP en la mediana (8 a 10 ms de la rueda al frame en los dos caminos, corridas alternadas). El salto por DevTools no era lo que tardaba.
+  - **Lo que sí cambia:** la rueda dice si su recorrido es exacto (`BrowserInput::Wheel::precise`, un touchpad) o una muesca. Con el exacto la página está 300 px más abajo a los 50 ms de un paso de 300 px; con la muesca va por 150 a 200 px, porque Chromium la anima, como en una ventana suya. Por CDP toda rueda era exacta. Al salir el puntero de la página, lo que estaba bajo él deja de estar en hover. El click derecho pide el menú, que por CDP no salía.
+  - **El teclado y el texto siguen por CDP.** CEF calcula `event.code` y `event.key` desde un código de tecla de la plataforma que Newen no tiene; por CDP van con sus nombres.
+- **El cursor lo dice Chromium** (`OnCursorChange`), como evento `Newen.cursorChanged` en el stream. La consulta por JS cada 120 ms queda solo para la headless.
+- **Menú contextual** (`CefContextMenuHandler`): CEF arma las filas según lo clickeado (un campo: Undo, Redo, Cut, Copy, Delete, Select all; la página: Back, Forward, View page source) y Newen las dibuja con el menú de limn sobre la página (`BrowserUpdate::Menu`, `BrowserOp::Menu`).
+  - Las filas de Chromium llevan los textos de Newen, en inglés, no los del idioma del sistema.
+  - Un enlace suma dos filas de Newen: "Open link in new tab" y "Copy link address".
+  - Copy y Cut escriben el portapapeles por la ventana (`BrowserUpdate::Copied`), como Ctrl+C.
+  - Sin Print (pide un diálogo de una ventana que la página no tiene) ni Paste: Chromium leería un portapapeles propio, no el del escritorio. Ctrl+V sigue andando.
+  - Probado en el ejemplo: el menú de un campo, "Select all" hecho en la página, la dirección de un enlace copiada, un menú cerrado sin elegir y el enlace abierto en otra pestaña. Sin probar en la ventana: que un click fuera del menú lo cierre.
+- **BeginFrame externo, descartado en CEF 147** (`external_begin_frame_enabled` + `SendExternalBeginFrame`): con un tick cada 8,3 ms la mediana sube de ~9 a ~13 ms y el p90 de ~13 a ~21 ms. Sumando un tick al llegar la entrada la mediana baja a ~7,6 ms, pero el p90 sube a 19 ms (32 ms con ticks a 60 Hz) y un scroll continuo pinta 73 a 90 frames por segundo en lugar de ~100. CEF sella cada tick con un intervalo fijo y admite uno solo en curso *(inferido de lo medido; hay reportes así en su tracker que no se confirmaron)*.
+- **Más frames por segundo de Chromium**: con `windowless_frame_rate` en 240 la mediana baja de ~9 a ~7,7 ms y el p90 de ~12,8 a ~10,7 ms; con 480, a ~7,5 y ~9,6 ms. No se adoptó: una página animada pintaría a esa tasa todo el tiempo.
+- **Lo que queda de la latencia** (120 Hz): la espera al próximo frame de Chromium (~4 ms de media), su pintado y la copia (~5 a 6 ms), y dos esperas que el ejemplo no mide: la entrada esperaba al frame de egui, hasta un refresco (§8.2 la quita en Wayland), y el frame espera al vblank del compositor.
+
+**Sigue pendiente: la tasa de la pantalla.** `windowless_frame_rate` está fijo en 120: en una pantalla de 144 o 240 Hz la página se vería a menos frames que el resto. `SetWindowlessFrameRate` lo cambia en marcha; falta que la ventana diga la tasa de su pantalla.
+
+### 8.2 El puntero fuera del frame de la ventana (2026-11-11, Wayland)
+
+La ventana lee su entrada una vez por frame, y un frame espera a la pantalla: mientras se scrollea, cada evento del puntero esperaba hasta un refresco (8,3 ms a 120 Hz) antes de que la página lo supiera. Ahora un hilo propio (`apps/newen/src/pointer.rs`) oye el puntero del compositor y se lo da a Chromium apenas llega (`Native::pointer_on`), sin pasar por el frame de egui ni por el motor.
+
+- **Cómo oye:** un segundo `wl_pointer` en la conexión de la ventana, con su propia cola de eventos. El compositor le manda a cada `wl_pointer` del programa lo mismo que al de winit. El hilo lee la conexión como la lee el de la ventana (preparar, esperar, leer), así que ninguno le saca eventos al otro.
+- **Qué es de la página:** lo mismo que decide la ventana. En cada frame la ventana le publica el rectángulo de la página y los de lo que Newen tiene encima (las regiones que limn puso después y que toman un click). Un punto es de la página si está en su rectángulo y en ninguno de esos.
+  - Un arrastre que empezó en la página sigue siendo suyo fuera de ella, y al salir el puntero de la página se le avisa (`Leave`), que antes solo pasaba al salir de la ventana.
+  - La rueda llega con su recorrido exacto (touchpad) o con sus muescas (120avos, 100 px cada una), como la traducía la ventana.
+- **Sin entregas dobles:** la ventana sigue recibiendo los mismos eventos un frame después.
+  - Los movimientos y la rueda de la página no los reenvía mientras el hilo oye; la rueda igual se le saca a limn.
+  - De cada botón que se aprieta o se suelta le pregunta al hilo si se lo dio a la página (`Apart::gave`), en orden: si se lo dio, la ventana no lo manda de nuevo; si no (un toque en pantalla táctil, que el hilo no oye, u otra pestaña en pantalla), lo manda ella. Si el hilo todavía no lo oyó, la ventana espera hasta 5 ms.
+- **Red de seguridad:** en cada frame la ventana compara lo que publica con lo que limn dice del punto bajo el puntero. Si no coinciden, ese frame el hilo no le da nada a la página y la ventana le da sus movimientos y su rueda como antes.
+- **Apagarlo:** `NEWEN_POINTER=window` deja todo como antes. Sin Wayland, sin vista nativa o si el hilo termina (se cortó la conexión), también.
+- **Probado:** las reglas de qué es de la página, el emparejado de botones y la red de seguridad, en pruebas; y contra el compositor de esta máquina (niri), que el hilo toma el seat, convive con otro lector de la misma conexión sin trabarlo (200 idas y vueltas) y termina al soltarlo.
+- **Sin probar:** con una persona en la ventana. No hay acá con qué generar eventos de puntero sin mover el del escritorio. Qué mirar: scroll y arrastre sobre la página, click y doble click, click derecho y su menú, que los menús de Newen sobre la página reciban sus clicks y la página no, y cambiar de pestaña con el puntero quieto.
+- **Windows y macOS:** el equivalente sería un gancho de mensajes de Win32 y un monitor de eventos de AppKit; no está hecho. Ahí la ventana le da a la página su puntero una vez por frame, como antes.
+
 **Antes, con ventanas X11 hijas** (hasta `6279fa9`): cada pestaña era una ventana X11 hija de la de Newen, y en Wayland eso obligaba a XWayland.
 - Nada de Newen podía dibujarse encima de la página: había que ocultarla y mostrar su último frame (`Frame::drawn_over`, rama de limn `feat/drawn-over`), como hace Desktop.
 - El teclado necesitaba reenviar teclas con `XSendEvent`.
@@ -281,4 +319,41 @@ El screencast (capturas JPEG por CDP) se nota con demora: cada frame es un JPEG 
 
 **Embeber CEF en la ventana Wayland, descartado** (2026-10-26): se probó con el SDK del fork de CEF 154 (`wayland.2` y `pacing.1`) y el PR #4233. La vista embebida (estilo Alloy) funciona con varios ajustes: winit parcheado (los `wl_output` de Chromium y el `xdg_surface` para los popups), `gtk-xft-dpi` en 96 dentro del proceso, `--disable-features=WaylandFractionalScaleV1` y `SetFocus` al enfocar la página. Pero el SDK aborta por un DCHECK cuando el teclado desaparece, y nada de Newen puede dibujarse sobre la página. La presentación directa da la misma ruta al compositor con el CEF oficial.
 
-**Falta:** el menú contextual de la página (sin ventana, CEF no lo muestra); Windows y macOS, que con este modo no necesitan ventanas propias; probarlo con un agente real en un escritorio; y que CEF arranque solo cuando se use el navegador (hoy arranca con Newen en modo nativo).
+**Falta:** los frames por GPU en Windows y macOS (§9); probarlo con un agente real en un escritorio; y que CEF arranque solo cuando se use el navegador (hoy arranca con Newen en modo nativo).
+
+## 9. Otros sistemas y otros compositores
+
+Revisado el 2026-11-10. Lo marcado *(sin probar)* sale de documentación y del código del crate `cef`, no de una corrida.
+
+**Un solo motor en los tres sistemas: CEF sin ventana.** Es lo que Newen ya hace: `native.rs` corre en Linux, Windows y macOS, y fuera de Linux los frames van por CPU. Las alternativas por sistema no convienen:
+- **WebView2 (Windows) y WKWebView (macOS):** dos motores más. WebView2 habla CDP, WKWebView no; el agente tendría un navegador distinto en cada sistema.
+- **CEF con ventana propia** (un HWND o un NSView hijo): Chromium compone solo y es lo más fluido, pero nada de Newen puede dibujarse encima de la página (menús, tooltips, diálogos). Es lo que se dejó atrás con las ventanas X11 hijas.
+- **Newen como compositor Wayland del Chrome del sistema:** solo existe en Linux.
+
+| Sistema | Frames hoy | Siguiente paso | Presentación |
+|---|---|---|---|
+| Linux, Wayland | GPU: dmabuf copiado a una textura de la ventana | — | subsuperficie bajo la ventana (§8); si falta algo, la ventana dibuja la textura |
+| Linux, X11 | GPU, igual | — | la ventana dibuja la textura: no hay subsuperficies |
+| Windows | CPU (`OnPaint`); GPU con `NEWEN_GPU_FRAMES=1` *(sin correr)* | probarlo en una máquina | la ventana dibuja la textura |
+| macOS | CPU (`OnPaint`); GPU con `NEWEN_GPU_FRAMES=1` *(sin correr)* | probarlo en una máquina | la ventana dibuja la textura |
+
+- **Windows y macOS por GPU** (2026-11-11, `Gpu::import`): `OnAcceleratedPaint` da un handle NT de D3D11 en Windows y un IOSurface en macOS, con el mismo contrato que el dmabuf: vale solo dentro del callback y se copia a la textura de la pestaña.
+  - **Windows:** el handle se abre como recurso del device de DirectX 12 de la ventana (`OpenSharedHandle`); si el device es de Vulkan, se toma con `texture_from_d3d11_shared_handle`, que pide `VULKAN_EXTERNAL_MEMORY_WIN32` (la ventana ya lo pide al crear su device).
+  - **macOS:** Metal hace una textura del IOSurface (`newTextureWithDescriptor:iosurface:plane:`), sin copiar; el modo de almacenamiento queda como lo pone Metal.
+  - **Apagado de fábrica:** nunca corrió en una máquina de esos sistemas, y con los frames por GPU prendidos una importación que falla deja la página en blanco (Chromium ya no pinta por CPU). Se prueba con `NEWEN_GPU_FRAMES=1`; si la importación falla, Newen lo dice una vez en stderr. Cuando ande en los dos, se prende sin la variable.
+  - **Verificado:** que compila para `x86_64-pc-windows-msvc` y `aarch64-apple-darwin` contra wgpu 30 (`scripts/check-others.sh`). El crate `cef` trae su propia importación (`osr_texture_import`), pero para wgpu 28; esta es la misma idea escrita para wgpu 30.
+  - **Qué mirar al probarlo:** que la página se vea (no en blanco ni revuelta), los colores (BGRA), un `<select>` abierto, el resize del pane y, en un laptop con dos GPUs, que Chromium y la ventana usen la misma.
+- **El puntero fuera del frame (§8.2) no tiene equivalente todavía.** En Windows los mensajes del mouse llegan al hilo de la ventana, y en macOS los eventos y CEF mismo corren en el hilo principal: mientras ese hilo espera a la pantalla no hay otro que los oiga. Haría falta que el hilo de la ventana no se bloquee al presentar, que es un cambio de eframe, no de Newen.
+- **Presentación directa fuera de Wayland:** el equivalente de la subsuperficie sería un visual de DirectComposition en Windows y una capa con el IOSurface de contenido en macOS. No se encontró a nadie que lo haga con wgpu; dibujar la textura en el frame de la ventana es el camino seguro, a costa de un frame.
+- **Lo que no depende del sistema:** el puntero, el cursor y el menú de §8.1 son llamadas de CEF y valen en los tres. El sandbox sigue apagado fuera de Linux (Windows pide su ejecutable de arranque y macOS un helper firmado).
+
+**Wayland: la subsuperficie bajo la ventana con un hueco.** Es una técnica conocida: GTK la usa para video desde 4.14 (graphics offload) y Firefox tiene un camino igual. Pero solo se probó en Hyprland 0.55. Lo que se sabe de otros compositores:
+- **Mutter (GNOME):** una ventana a pantalla completa con partes transparentes se ve negra ahí; Newen ya dibuja la textura en ese caso.
+- **KWin (KDE):** hay reportes de subsuperficies que se corren de lugar.
+- **Escala fraccionaria:** el protocolo no dice cómo se redondea la posición de una subsuperficie; puede quedar corrida un píxel respecto del hueco.
+- **niri, Sway, COSMIC:** sin datos. Esta máquina corre niri y el ejemplo anda, pero el ejemplo no usa la subsuperficie.
+- **Buffers:** hoy son lineales. El compositor publica qué modificadores prefiere para cada GPU (`zwp_linux_dmabuf_v1` versión 4); pedirlos en ese orden y dejar lineal como último recurso evita rechazos, sobre todo con NVIDIA.
+
+Por eso la presentación directa debería prenderse solo donde se probó, y dibujar la textura en el frame de la ventana en el resto: cuesta un frame y no depende del compositor. Antes de ampliarla hay que probar GNOME a pantalla completa, KDE y una escala fraccionaria.
+
+**X11:** no hay subsuperficies; la ventana dibuja la textura. GNOME 49 ya no trae sesión X11 y KDE planea quitarla en Plasma 6.8.

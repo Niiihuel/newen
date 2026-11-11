@@ -32,6 +32,25 @@ wgpu = { version = "30", default-features = false, features = ["std", "vulkan"] 
 # in the tree through winit and cef).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# A native tab's GPU paints there are IOSurfaces, made textures of the window's Metal device
+# (native.rs): wgpu's Metal backend and the two crates it reaches Metal through, as it names
+# them (all already in the tree through wgpu).
+wgpu = { version = "30", default-features = false, features = ["metal"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "objc2-io-surface"] }
+objc2-io-surface = { version = "0.3.2", default-features = false }
+
+# Windows: a native tab's GPU paints are Direct3D 11 textures shared by a handle, opened on
+# the window's Direct3D 12 device or taken into its Vulkan one (native.rs): wgpu's DirectX
+# backend and the crate it names Direct3D's types by (both already in the tree through wgpu).
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Direct3D12"] }
+
+[features]
+# A type check for another system without its CEF or its C++ toolchain: cef-dll-sys builds
+# nothing, so the result links no program.
+# `cargo check --workspace --features newen-browser/dox --target x86_64-pc-windows-msvc`.
+dox = ["cef/dox"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

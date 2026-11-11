@@ -1244,6 +1244,9 @@ pub struct Ui {
     pub open_menu: Option<&'static str>,
     /// A link right-clicked in the conversation: its address and where the menu opens.
     pub link_menu: Option<(String, limn::Point)>,
+    /// The right-click menu of a browser's page, while it is up: its session, its tab, where
+    /// in the page it was asked for, and its rows (`BrowserUpdate::Menu`).
+    pub page_menu: Option<PageMenu>,
     /// The editors found on the computer, for Open in.
     pub editors: Vec<Editor>,
     pub expanded: Vec<String>,
@@ -1944,6 +1947,15 @@ pub fn shortcut(store: &Store, ui: &Ui, key: limn::Key, ctrl: bool, shift: bool)
     ))
 }
 
+/// A page's right-click menu, as its browser gave it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageMenu {
+    pub session: SessionId,
+    pub tab: u32,
+    pub at: limn::Point,
+    pub items: Vec<newen_model::BrowserMenuItem>,
+}
+
 /// A session's browser as the engine last told it (docs/browser.md).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionBrowser {
@@ -1976,6 +1988,7 @@ impl SessionBrowser {
             | BrowserUpdate::Copied(_)
             | BrowserUpdate::Selected(_)
             | BrowserUpdate::Kept(_)
+            | BrowserUpdate::Menu { .. }
             | BrowserUpdate::ChooseFiles { .. } => {}
         }
     }
@@ -2171,6 +2184,7 @@ impl Ui {
             effort: None,
             open_menu: None,
             link_menu: None,
+            page_menu: None,
             editors: vec![],
             expanded: vec![],
             diff_texts: std::collections::HashMap::new(),
@@ -2933,6 +2947,20 @@ impl Ui {
             prompt.push_str(text);
             self.restore_prompt = Some(prompt);
             self.images.extend(images.iter().cloned());
+            return vec![];
+        }
+        // A page's right-click menu, drawn over it until a row is chosen or it is closed.
+        if let Event::Browser {
+            session,
+            update: newen_model::BrowserUpdate::Menu { tab, x, y, items },
+        } = event
+        {
+            self.page_menu = (!items.is_empty()).then(|| PageMenu {
+                session: *session,
+                tab: *tab,
+                at: limn::Point::new(*x, *y),
+                items: items.clone(),
+            });
             return vec![];
         }
         // A tab that appears in a session, as when the agent opens a page, shows the browser,
@@ -3822,6 +3850,13 @@ fn browser_clicked(store: &Store, ui: &mut Ui, id: &str) -> Option<Vec<Intent>> 
         .and_then(|t| t.parse().ok())
     {
         BrowserOp::CloseTab { tab }
+    } else if let Some(choice) = id.strip_prefix(view::PAGE_MENU_ROW) {
+        // A row by its id, or "dismiss": closed with nothing chosen. The page is told either way.
+        let menu = ui.page_menu.take()?;
+        BrowserOp::Menu {
+            tab: menu.tab,
+            choice: choice.parse().ok(),
+        }
     } else if id == view::BROWSER_VIEWPORT {
         ui.open_menu =
             (ui.open_menu != Some(view::BROWSER_VIEWPORT)).then_some(view::BROWSER_VIEWPORT);

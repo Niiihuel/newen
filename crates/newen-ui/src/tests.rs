@@ -5353,6 +5353,66 @@ fn the_viewport_button_shows_the_size_set_and_the_toolbar_fits_the_narrowest_pan
     assert_apart(&drawn_spans(&frame), "narrowest");
 }
 
+/// A page's right-click menu is the rows its browser gave, over the page where it was asked
+/// for; a row chosen, or the menu closed, goes back to the page.
+#[test]
+fn a_pages_menu_is_drawn_over_it_and_its_choice_goes_back_to_the_page() {
+    use newen_model::{BrowserMenuItem, BrowserOp, BrowserTab, BrowserUpdate};
+    let (mut store, mut ui) = store_with_session();
+    let hear = |store: &mut Store, ui: &mut Ui, update: BrowserUpdate| {
+        let event = Event::Browser { session: 1, update };
+        ui.applied(&event);
+        store.apply(event);
+        settle(store, ui);
+    };
+    let tabs = BrowserUpdate::Tabs {
+        tabs: vec![BrowserTab {
+            id: 3,
+            url: "http://localhost:3000/".into(),
+            title: "Acme".into(),
+            ..Default::default()
+        }],
+        active: Some(3),
+    };
+    hear(&mut store, &mut ui, tabs);
+    let row = |id: i32, label: &str, enabled: bool| BrowserMenuItem {
+        id,
+        label: label.into(),
+        enabled,
+    };
+    let menu = || BrowserUpdate::Menu {
+        tab: 3,
+        x: 40.0,
+        y: 60.0,
+        items: vec![
+            row(110, "Undo", false),
+            row(-1, "", false),
+            row(117, "Select all", true),
+        ],
+    };
+    assert!(!drawn_words(&store, &ui, "Select all"));
+    hear(&mut store, &mut ui, menu());
+    assert!(drawn_words(&store, &ui, "Undo") && drawn_words(&store, &ui, "Select all"));
+    let chosen = |choice| {
+        vec![Intent::Browser {
+            session: 1,
+            op: BrowserOp::Menu { tab: 3, choice },
+        }]
+    };
+    assert_eq!(
+        click(&store, &mut ui, "browser:page-menu:117"),
+        chosen(Some(117))
+    );
+    assert!(!drawn_words(&store, &ui, "Select all"));
+    // Closed without a choice: the page is told, so its next menu opens.
+    hear(&mut store, &mut ui, menu());
+    assert_eq!(
+        click(&store, &mut ui, "browser:page-menu:dismiss"),
+        chosen(None)
+    );
+    assert!(ui.page_menu.is_none());
+}
+
 #[test]
 fn browser_steps_read_in_desktops_words_and_fold_into_what_they_did() {
     let done = ToolResult {

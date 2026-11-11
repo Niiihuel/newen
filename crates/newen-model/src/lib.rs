@@ -1167,6 +1167,21 @@ pub enum BrowserOp {
         node: i64,
         paths: Vec<PathBuf>,
     },
+    /// The row chosen in the page's right-click menu (`BrowserUpdate::Menu`) by its id, or
+    /// none: the menu was closed.
+    Menu {
+        tab: u32,
+        choice: Option<i32>,
+    },
+}
+
+/// One row of a page's right-click menu: a command the page's browser runs, by its id, or
+/// a line between groups (no label).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BrowserMenuItem {
+    pub id: i32,
+    pub label: String,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1202,6 +1217,10 @@ pub enum BrowserInput {
         y: f32,
         dx: f32,
         dy: f32,
+        /// The travel is the device's own, pixel by pixel (a touchpad): the page follows it
+        /// as it comes. Off, it is a wheel's notch, which a browser eases into.
+        #[serde(default)]
+        precise: bool,
     },
     /// A key pressed and released: the DOM's `key` and `code`, the Windows key code Chrome
     /// edits by, and the text it types, if any.
@@ -1274,6 +1293,14 @@ pub enum BrowserUpdate {
     /// The page asks for files: the host shows the desktop's file dialog and answers with
     /// `BrowserOp::Files`.
     ChooseFiles { tab: u32, node: i64, multiple: bool },
+    /// The page's right-click menu, where it was asked for in the page (logical pixels from
+    /// its corner): the window draws it and answers with `BrowserOp::Menu`.
+    Menu {
+        tab: u32,
+        x: f32,
+        y: f32,
+        items: Vec<BrowserMenuItem>,
+    },
 }
 
 /// What the person does with a proposed task.

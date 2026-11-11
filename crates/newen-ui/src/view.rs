@@ -333,6 +333,10 @@ pub const BROWSER_RELOAD: &str = "browser:reload";
 pub const BROWSER_STOP: &str = "browser:stop";
 pub const BROWSER_SELECT: &str = "browser:select";
 pub const BROWSER_VIEWPORT: &str = "browser:viewport";
+/// The page's right-click menu, and the start of its rows' ids (then the row's id, or
+/// "dismiss").
+pub const PAGE_MENU: &str = "browser:page-menu";
+pub const PAGE_MENU_ROW: &str = "browser:page-menu:";
 /// Settings › Browser's "Choose…": the host asks for the Chromium to run.
 pub const BROWSER_PROGRAM_CHOOSE: &str = "settings:browser:program";
 /// Desktop's Viewport presets: Responsive is the pane's own size.
@@ -1743,18 +1747,55 @@ fn browser_pane(
             .size(Some(width), Some(below.max(0.0)))
     };
     let body = match tab {
-        Some(tab) if tab.url != "about:blank" || tab.loading => Element::focus_area(
-            BROWSER_VIEW,
-            Element::surface(browser_surface(session.id, tab.id), "Page"),
-        )
-        .accessibility_label("Browser page")
-        .size(Some(width), Some(below.max(0.0))),
+        Some(tab) if tab.url != "about:blank" || tab.loading => {
+            let page = Element::focus_area(
+                BROWSER_VIEW,
+                Element::surface(browser_surface(session.id, tab.id), "Page"),
+            )
+            .accessibility_label("Browser page")
+            .size(Some(width), Some(below.max(0.0)));
+            let shown = (ui.page_menu.as_ref())
+                .filter(|menu| (menu.session, menu.tab) == (session.id, tab.id));
+            match shown {
+                Some(shown) => page_menu(page, shown, width, below.max(0.0)),
+                None => page,
+            }
+        }
         Some(_) => blank(None),
         None => blank(browser.failed.as_ref()),
     };
     let mut column = vec![header, toolbar, body];
     column.extend(bar);
     Element::column(column).size(Some(width), Some(height))
+}
+
+/// A page's right-click menu over it, where it was asked for: the rows its browser gave, a
+/// row with no label being a line between groups.
+fn page_menu(page: Element, shown: &crate::PageMenu, width: f32, height: f32) -> Element {
+    let entries = (shown.items.iter())
+        .map(|item| match item.label.is_empty() {
+            true => limn::DropdownMenuEntry::Separator,
+            false => {
+                limn::DropdownMenuItem::new(format!("{PAGE_MENU_ROW}{}", item.id), &item.label)
+                    .enabled(item.enabled)
+                    .into()
+            }
+        })
+        .collect();
+    let anchor = Element::spacer().size(Some(1.0), Some(1.0));
+    let menu = menu(
+        anchor,
+        entries,
+        true,
+        PAGE_MENU,
+        240.0,
+        limn::PopoverPlacement::BottomStart,
+    );
+    let placed = Element::column(vec![
+        Element::spacer().size(None, Some(shown.at.y.max(0.0))),
+        Element::row(vec![hgap(shown.at.x.max(0.0)), menu]),
+    ]);
+    Element::stack(vec![page, placed]).size(Some(width), Some(height))
 }
 
 /// The height of the browser's notice strip, under its page.

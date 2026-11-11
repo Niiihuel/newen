@@ -26,13 +26,47 @@ pub enum Ask {
     Focus,
 }
 
+/// The pointer heard apart from the window's frames (pointer.rs), where the system has a way:
+/// it gives the page its moves and its wheel as they come, and says of each press and
+/// release whether it gave the page that one too, so none reaches it twice.
+pub trait Apart {
+    /// Whether it gave the page this press or release; asked once of each, in order.
+    fn gave(&self, button: egui::PointerButton, pressed: bool) -> bool;
+    /// Whether the page's moves and wheel are its own to give for now; off, they are the
+    /// window's, as without it.
+    fn moves(&self) -> bool;
+}
+
+/// Clicks in a row: the last press, to count double and triple clicks.
+#[derive(Default)]
+pub struct Clicks(Option<(Instant, egui::Pos2, egui::PointerButton, u8)>);
+
+impl Clicks {
+    /// How many this press makes: one more when it is soon after the last, near it, with the
+    /// same button.
+    pub fn count(&mut self, pos: egui::Pos2, button: egui::PointerButton) -> u8 {
+        let now = Instant::now();
+        let clicks = match self.0 {
+            Some((at, last, held, clicks))
+                if held == button
+                    && now.duration_since(at) < Duration::from_millis(500)
+                    && last.distance(pos) < 5.0 =>
+            {
+                clicks % 3 + 1
+            }
+            _ => 1,
+        };
+        self.0 = Some((now, pos, button, clicks));
+        clicks
+    }
+}
+
 #[derive(Default)]
 pub struct Page {
     /// The button held since a press on the page: its moves and release go to the page even
     /// off it.
     held: Option<egui::PointerButton>,
-    /// The last press, to count double and triple clicks.
-    last: Option<(Instant, egui::Pos2, egui::PointerButton, u8)>,
+    clicks: Clicks,
     /// Where the pointer was last seen in the window, kept across frames: a wheel often comes
     /// in a frame of its own, without a move (Hyprland's), and goes where the pointer is.
     pointer: Option<egui::Pos2>,
@@ -41,17 +75,31 @@ pub struct Page {
 impl Page {
     /// Read this frame's input. `area` is the page's rectangle in the window when it is on
     /// top of what is under the pointer (`None` elsewhere), `focused` whether it has the
-    /// keys. Returns what to do and the indices of the events taken from limn.
+    /// keys. With the pointer heard `apart`, the page has its moves and wheel already, and
+    /// the presses `apart` says it gave. Returns what to do and the indices of the events
+    /// taken from limn.
     pub fn route(
         &mut self,
         events: &[egui::Event],
         over: impl Fn(egui::Pos2) -> Option<egui::Rect>,
         page: Option<egui::Rect>,
         focused: bool,
+        apart: Option<&dyn Apart>,
     ) -> (Vec<Ask>, Vec<usize>) {
         let (mut asks, mut taken) = (vec![], vec![]);
         let at = |rect: egui::Rect, pos: egui::Pos2| (pos.x - rect.min.x, pos.y - rect.min.y);
+        let moves = apart.is_some_and(|apart| apart.moves());
         for (index, event) in events.iter().enumerate() {
+            // Asked of every press and release, the page's or not: each is told once.
+            let given = match (event, apart) {
+                (
+                    egui::Event::PointerButton {
+                        button, pressed, ..
+                    },
+                    Some(apart),
+                ) => apart.gave(*button, *pressed),
+                _ => false,
+            };
             match event {
                 egui::Event::PointerMoved(pos) | egui::Event::PointerButton { pos, .. } => {
                     self.pointer = Some(*pos)
@@ -60,6 +108,11 @@ impl Page {
                 _ => {}
             }
             match event {
+                egui::Event::PointerMoved(_) | egui::Event::PointerGone if moves => {
+                    if matches!(event, egui::Event::PointerGone) {
+                        self.held = None;
+                    }
+                }
                 egui::Event::PointerMoved(pos) => {
                     let rect = over(*pos).or(page.filter(|_| self.held.is_some()));
                     if let Some(rect) = rect {
@@ -77,21 +130,28 @@ impl Page {
                     modifiers,
                 } => {
                     let Some(rect) = over(*pos) else {
+                        // The page has it, though something else is here by now: not both.
+                        if given {
+                            self.held = Some(*button);
+                            taken.push(index);
+                        }
                         continue;
                     };
                     let Some(pressed) = pointer_button(*button) else {
                         continue;
                     };
-                    let clicks = self.count(*pos, *button);
                     self.held = Some(*button);
-                    let (x, y) = at(rect, *pos);
-                    asks.push(Ask::Input(BrowserInput::Down {
-                        x,
-                        y,
-                        button: pressed,
-                        clicks,
-                        keys: keys(*modifiers),
-                    }));
+                    if !given {
+                        let clicks = self.clicks.count(*pos, *button);
+                        let (x, y) = at(rect, *pos);
+                        asks.push(Ask::Input(BrowserInput::Down {
+                            x,
+                            y,
+                            button: pressed,
+                            clicks,
+                            keys: keys(*modifiers),
+                        }));
+                    }
                     // limn focuses the page on a primary press; it would open its own menu on
                     // a secondary one, which the page answers instead.
                     if *button != egui::PointerButton::Primary {
@@ -106,6 +166,9 @@ impl Page {
                     modifiers,
                 } if self.held == Some(*button) => {
                     self.held = None;
+                    if given {
+                        continue;
+                    }
                     let (Some(rect), Some(released)) =
                         (over(*pos).or(page), pointer_button(*button))
                     else {
@@ -143,9 +206,19 @@ impl Page {
                     } else {
                         (-delta.x * scale, -delta.y * scale)
                     };
-                    let (x, y) = at(rect, pos);
-                    asks.push(Ask::Input(BrowserInput::Wheel { x, y, dx, dy }));
                     taken.push(index);
+                    if moves {
+                        continue;
+                    }
+                    let (x, y) = at(rect, pos);
+                    let precise = *unit == egui::MouseWheelUnit::Point;
+                    asks.push(Ask::Input(BrowserInput::Wheel {
+                        x,
+                        y,
+                        dx,
+                        dy,
+                        precise,
+                    }));
                 }
                 _ if !focused => {}
                 egui::Event::Key {
@@ -198,26 +271,9 @@ impl Page {
         }
         (asks, taken)
     }
-
-    /// Clicks in a row: a press soon after the last, near it, with the same button.
-    fn count(&mut self, pos: egui::Pos2, button: egui::PointerButton) -> u8 {
-        let now = Instant::now();
-        let clicks = match self.last {
-            Some((at, last, held, clicks))
-                if held == button
-                    && now.duration_since(at) < Duration::from_millis(500)
-                    && last.distance(pos) < 5.0 =>
-            {
-                clicks % 3 + 1
-            }
-            _ => 1,
-        };
-        self.last = Some((now, pos, button, clicks));
-        clicks
-    }
 }
 
-fn pointer_button(button: egui::PointerButton) -> Option<PointerButton> {
+pub fn pointer_button(button: egui::PointerButton) -> Option<PointerButton> {
     match button {
         egui::PointerButton::Primary => Some(PointerButton::Left),
         egui::PointerButton::Secondary => Some(PointerButton::Right),
@@ -226,7 +282,7 @@ fn pointer_button(button: egui::PointerButton) -> Option<PointerButton> {
     }
 }
 
-fn keys(modifiers: egui::Modifiers) -> Modifiers {
+pub fn keys(modifiers: egui::Modifiers) -> Modifiers {
     Modifiers {
         shift: modifiers.shift,
         ctrl: modifiers.ctrl || modifiers.command,
@@ -337,9 +393,9 @@ mod tests {
                 source: egui::MouseWheelSource::Wheel,
             }]
         };
-        page.route(&[press(true), press(false)], over, Some(rect()), true);
+        page.route(&[press(true), press(false)], over, Some(rect()), true, None);
         // Over the page, a wheel alone scrolls it.
-        let (asks, taken) = page.route(&wheel(), over, Some(rect()), true);
+        let (asks, taken) = page.route(&wheel(), over, Some(rect()), true, None);
         assert_eq!((asks.len(), taken), (1, vec![0]));
         // Moved off it in one frame, the next frame's wheel is limn's.
         page.route(
@@ -347,9 +403,92 @@ mod tests {
             over,
             Some(rect()),
             true,
+            None,
         );
-        let (asks, taken) = page.route(&wheel(), over, Some(rect()), true);
+        let (asks, taken) = page.route(&wheel(), over, Some(rect()), true, None);
         assert!(asks.is_empty() && taken.is_empty(), "{asks:?}");
+    }
+
+    /// The pointer heard apart: it gave the page the presses listed, in order.
+    struct Gave(std::cell::RefCell<Vec<bool>>);
+
+    impl Apart for Gave {
+        fn gave(&self, _: egui::PointerButton, _: bool) -> bool {
+            self.0.borrow_mut().remove(0)
+        }
+        // Until it has no more presses to tell of.
+        fn moves(&self) -> bool {
+            !self.0.borrow().is_empty()
+        }
+    }
+
+    #[test]
+    fn with_the_pointer_heard_apart_the_window_gives_the_page_only_what_that_did_not() {
+        let mut page = Page::default();
+        let over = |pos: egui::Pos2| rect().contains(pos).then(rect);
+        let press = |button, pressed| egui::Event::PointerButton {
+            pos: egui::pos2(150.0, 70.0),
+            button,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let (left, right) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);
+        let events = vec![
+            egui::Event::PointerMoved(egui::pos2(150.0, 70.0)),
+            press(left, true),
+            press(left, false),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+                source: egui::MouseWheelSource::Wheel,
+            },
+            press(right, true),
+            press(right, false),
+            // One it was not given (a touch, which only the window hears): the window's to give.
+            press(left, true),
+            egui::Event::PointerGone,
+        ];
+        let gave = Gave(vec![true, true, true, true, false].into());
+        let (asks, taken) = page.route(&events, over, Some(rect()), false, Some(&gave));
+        // The moves, the wheel and the presses it gave are not given again. The wheel is still
+        // kept from limn, and a right press still takes the focus and is kept from limn's menu.
+        assert_eq!(
+            asks,
+            [
+                Ask::Focus,
+                Ask::Input(BrowserInput::Down {
+                    x: 50.0,
+                    y: 20.0,
+                    button: PointerButton::Left,
+                    clicks: 1,
+                    keys: Modifiers::default()
+                }),
+            ]
+        );
+        assert_eq!(taken, [3, 4]);
+        assert!(
+            gave.0.borrow().is_empty(),
+            "each press and release was asked about"
+        );
+        // Given a press the window finds something else under: the page has it, limn does not.
+        let gave = Gave(vec![true].into());
+        let nothing = |_: egui::Pos2| None;
+        let (asks, taken) = page.route(
+            &[press(left, true)],
+            nothing,
+            Some(rect()),
+            false,
+            Some(&gave),
+        );
+        assert!(asks.is_empty());
+        assert_eq!(taken, [0]);
+        // While it does not give the moves (it and the window do not agree on what is the
+        // page's), they are the window's to give, as without it.
+        let moved = [egui::Event::PointerMoved(egui::pos2(150.0, 70.0))];
+        let (asks, _) = page.route(&moved, over, Some(rect()), false, Some(&gave));
+        assert_eq!(asks, [Ask::Input(BrowserInput::Move { x: 50.0, y: 20.0 })]);
     }
 
     #[test]
@@ -377,7 +516,7 @@ mod tests {
             },
             egui::Event::Text("hi".into()),
         ];
-        let (asks, taken) = page.route(&events, over, Some(rect()), false);
+        let (asks, taken) = page.route(&events, over, Some(rect()), false, None);
         assert_eq!(
             asks[..4],
             [
@@ -406,7 +545,8 @@ mod tests {
                 x: 50.0,
                 y: 20.0,
                 dx: 0.0,
-                dy: 100.0
+                dy: 100.0,
+                precise: false
             })
         );
         assert_eq!(taken, [4]);
@@ -428,7 +568,7 @@ mod tests {
             },
             egui::Event::Copy,
         ];
-        let (asks, taken) = page.route(&keys, over, Some(rect()), true);
+        let (asks, taken) = page.route(&keys, over, Some(rect()), true, None);
         assert!(
             matches!(&asks[0], Ask::Input(BrowserInput::Key { key, text, .. }) if key == "Enter" && text == "\r")
         );

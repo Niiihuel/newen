@@ -14,7 +14,8 @@ const PAGE: &str = "<!doctype html><title>Acme</title><body style='margin:0;back
 <input id=email style='position:absolute;left:10px;top:10px;width:200px;height:30px'>\
 <select id=pick style='position:absolute;left:10px;top:60px;width:150px'>\
 <option>one<option>two<option>three</select>\
-<p style='position:absolute;top:100px;left:10px;font:20px sans-serif'>hello Newen</p></body>";
+<p style='position:absolute;top:100px;left:10px;font:20px sans-serif'>hello Newen</p>\
+<a href='/next' style='position:absolute;left:10px;top:200px;font:20px sans-serif'>next</a></body>";
 
 fn main() {
     if let Some(code) = newen_browser::native::subprocess() {
@@ -147,6 +148,108 @@ async fn check(
     tokio::time::sleep(Duration::from_millis(300)).await;
     let typed = browser.evaluate(7, tab, "email.value").await.unwrap();
     assert_eq!(typed.as_str(), Some("alex@acme.test"));
+    // A right click asks for the page's menu, which the window draws: a field's has its
+    // editing rows, and the one chosen is done in the page.
+    let right_click = |x: f32, y: f32| {
+        click(x, y).map(|input| match input {
+            BrowserInput::Down {
+                x, y, clicks, keys, ..
+            } => BrowserInput::Down {
+                x,
+                y,
+                button: PointerButton::Right,
+                clicks,
+                keys,
+            },
+            BrowserInput::Up { x, y, keys, .. } => BrowserInput::Up {
+                x,
+                y,
+                button: PointerButton::Right,
+                keys,
+            },
+            other => other,
+        })
+    };
+    let menu = |what: &'static str| {
+        let heard = heard.clone();
+        async move {
+            until(what, || {
+                let mut heard = heard.lock().unwrap();
+                let at = heard
+                    .iter()
+                    .position(|(_, u)| matches!(u, BrowserUpdate::Menu { .. }))?;
+                match heard.remove(at).1 {
+                    BrowserUpdate::Menu { items, x, y, .. } => Some((items, x, y)),
+                    _ => None,
+                }
+            })
+            .await
+        }
+    };
+    for input in right_click(50.0, 25.0) {
+        browser.apply(7, BrowserOp::Input { tab, input }).await;
+    }
+    let (items, x, y) = menu("the field's menu").await;
+    assert_eq!((x, y), (50.0, 25.0));
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    println!("a field's menu: {labels:?}");
+    let all = (items.iter().find(|i| i.label == "Select all" && i.enabled)).expect("Select all");
+    let choice = Some(all.id);
+    browser.apply(7, BrowserOp::Menu { tab, choice }).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let selected = browser
+        .evaluate(7, tab, "email.selectionEnd - email.selectionStart")
+        .await
+        .unwrap();
+    assert_eq!(
+        selected.as_u64(),
+        Some(14),
+        "the menu's row is done in the page"
+    );
+    // A link's menu has Newen's two rows first: its address is copied, or it opens in a tab.
+    for input in right_click(25.0, 212.0) {
+        browser.apply(7, BrowserOp::Input { tab, input }).await;
+    }
+    let (items, ..) = menu("the link's menu").await;
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    println!("a link's menu: {labels:?}");
+    assert_eq!(labels[..2], ["Open link in new tab", "Copy link address"]);
+    let choice = Some(items[1].id);
+    browser.apply(7, BrowserOp::Menu { tab, choice }).await;
+    let copied = until("the link's address", || {
+        heard.lock().unwrap().iter().find_map(|(_, u)| match u {
+            BrowserUpdate::Copied(text) => Some(text.clone()),
+            _ => None,
+        })
+    })
+    .await;
+    assert_eq!(copied, format!("http://localhost:{port}/next"));
+    // Closed without a choice, Chromium is told so and the next one opens.
+    for input in right_click(25.0, 212.0) {
+        browser.apply(7, BrowserOp::Input { tab, input }).await;
+    }
+    menu("the menu again").await;
+    browser
+        .apply(7, BrowserOp::Menu { tab, choice: None })
+        .await;
+    for input in right_click(25.0, 212.0) {
+        browser.apply(7, BrowserOp::Input { tab, input }).await;
+    }
+    let (items, ..) = menu("the menu after one was closed").await;
+    let choice = Some(items[0].id);
+    browser.apply(7, BrowserOp::Menu { tab, choice }).await;
+    until("the link's tab", || {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|(_, u)| match u {
+                BrowserUpdate::Tabs { tabs, .. } => (tabs.len() == 2).then_some(()),
+                _ => None,
+            })
+    })
+    .await;
     // A <select>'s list is painted apart and drawn over the page, below the field.
     for input in click(50.0, 70.0) {
         browser.apply(7, BrowserOp::Input { tab, input }).await;
@@ -183,13 +286,18 @@ async fn check(
         .evaluate(7, tab, "document.body.style.height='20000px'")
         .await
         .unwrap();
+    // The taller page reaches Chromium's compositor with its next frame: a wheel before
+    // that finds nothing to scroll.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let wheel = |dy: f32, precise: bool| BrowserInput::Wheel {
+        x: 100.0,
+        y: 100.0,
+        dx: 0.0,
+        dy,
+        precise,
+    };
     for _ in 0..10 {
-        let input = BrowserInput::Wheel {
-            x: 100.0,
-            y: 100.0,
-            dx: 0.0,
-            dy: 100.0,
-        };
+        let input = wheel(100.0, false);
         browser.apply(7, BrowserOp::Input { tab, input }).await;
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -198,6 +306,23 @@ async fn check(
         y.as_f64().is_some_and(|y| y > 0.0),
         "the wheel scrolls: {y}"
     );
+    // A touchpad's travel is where the page is at its next frames; a notch is eased into.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let mut moved = [0.0; 2];
+    for (precise, moved) in [true, false].into_iter().zip(&mut moved) {
+        let scroll_y = || async { browser.evaluate(7, tab, "scrollY").await.unwrap().as_f64() };
+        let before = scroll_y().await.unwrap();
+        let input = wheel(300.0, precise);
+        browser.apply(7, BrowserOp::Input { tab, input }).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        *moved = scroll_y().await.unwrap() - before;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+    }
+    println!(
+        "50 ms after a 300 px wheel: exact travel {} px, a notch {} px",
+        moved[0], moved[1]
+    );
+    assert_eq!(moved[0], 300.0, "a touchpad's travel is not eased");
     latency(&browser, &frames, tab, &surface).await;
     browser.shutdown().await;
 }
@@ -330,31 +455,21 @@ async fn latency(browser: &Browser, frames: &Frames, tab: u32, surface: &str) {
     tokio::time::sleep(Duration::from_millis(500)).await;
     frames.take();
     let mut took = Vec::new();
-    for _ in 0..30 {
+    for step in 0..100u64 {
         let input = BrowserInput::Wheel {
             x: 100.0,
             y: 100.0,
             dx: 0.0,
             dy: 30.0,
+            precise: true,
         };
+        // At any moment of Chromium's frame, not always the same one: the wait for its next
+        // frame is part of what a person feels.
+        tokio::time::sleep(Duration::from_micros(step * 7919 % 16667)).await;
         let sent = Instant::now();
-        eprintln!(
-            "T sent {}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_micros()
-        );
         browser.apply(7, BrowserOp::Input { tab, input }).await;
         while sent.elapsed() < Duration::from_secs(2) {
             if frames.take().iter().any(|(id, _)| id == surface) {
-                eprintln!(
-                    "T got {}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_micros()
-                );
                 took.push(sent.elapsed());
                 break;
             }
@@ -372,6 +487,7 @@ async fn latency(browser: &Browser, frames: &Frames, tab: u32, surface: &str) {
             y: 100.0,
             dx: 0.0,
             dy: 10.0,
+            precise: true,
         };
         browser.apply(7, BrowserOp::Input { tab, input }).await;
         tokio::time::sleep(Duration::from_millis(8)).await;
@@ -381,7 +497,7 @@ async fn latency(browser: &Browser, frames: &Frames, tab: u32, surface: &str) {
     took.sort();
     let at = |q: usize| took.get(took.len() * q / 100).copied().unwrap_or_default();
     println!(
-        "wheel to frame, {} of 30: median {:?}, p90 {:?}, max {:?}",
+        "wheel to frame, {} of 100: median {:?}, p90 {:?}, max {:?}",
         took.len(),
         at(50),
         at(90),

@@ -10,16 +10,28 @@
 
 use crate::frames::{Frames, Pixels};
 use cef::*;
+use newen_model::{BrowserInput, Modifiers, PointerButton};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// DevTools ids Newen's own calls use, far above the engine's, which count from 1.
 const OWN_IDS: i64 = 1 << 30;
+/// The event a native tab's cursor change is told as on the stream, which Chromium's own
+/// DevTools has none for: `{targetId, cursor}`, the cursor by its CSS name.
+pub(crate) const CURSOR: &str = "Newen.cursorChanged";
+/// A native tab's right-click menu, which the window draws: `{targetId, x, y, items: [{id,
+/// label, enabled}]}`, a line between groups having no label. Answered with `Native::menu`.
+pub(crate) const MENU: &str = "Newen.contextMenu";
+/// Text a native tab's menu copied (a link's address): `{targetId, text}`.
+pub(crate) const COPIED: &str = "Newen.copied";
+/// The menu's rows of Newen's own, among CEF's ids for an embedder's (`MENU_ID_USER_FIRST`).
+const OPEN_LINK: i32 = 26500;
+const COPY_LINK: i32 = 26501;
 /// The program run again as one of Chromium's own processes (`--type=renderer`…): it runs
 /// that process and gives its exit code. Call it first thing in `main`.
 pub fn subprocess() -> Option<i32> {
@@ -63,6 +75,14 @@ struct Shared {
     stream: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     own: AtomicI64,
     tokens: AtomicU64,
+    /// How many clicks the press under way counts (a double click's second is 2): its
+    /// release says the same.
+    clicks: AtomicI32,
+    /// The right-click menu the window is showing: how Chromium is told what was chosen.
+    menu: Mutex<Option<RunContextMenuCallback>>,
+    /// The button held in the tab on screen, when the window gives its pointer itself
+    /// (`Native::pointer_on`).
+    held: Mutex<Option<PointerButton>>,
 }
 
 #[derive(Default)]
@@ -149,26 +169,14 @@ impl Native {
         mac::load()?;
         library();
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-        // Chromium allocates its GPU buffers through a display server, with no window of its
-        // own: the headless platform has none to give ("Unable to allocate frame"), and on
-        // Wayland it paints at 1× whatever scale it is told. X11 (XWayland in a Wayland
-        // session) takes the window's.
-        // Off Linux there are no dmabufs to import (`Gpu::import`): paints reach the CPU.
-        let x11 =
-            cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
-        let gpu = gpu.filter(|(device, _)| {
-            let imports = device
-                .features()
-                .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF);
-            if !(x11 && imports) {
-                let why = if imports {
-                    "no X11 display"
-                } else {
-                    "the window's GPU cannot import dmabufs (not Vulkan?)"
-                };
-                eprintln!("newen: the browser's frames go through the CPU: {why}");
+        let gpu = gpu.filter(|(device, _)| match Gpu::takes(device) {
+            Ok(()) => true,
+            Err(why) => {
+                if !why.is_empty() {
+                    eprintln!("newen: the browser's frames go through the CPU: {why}");
+                }
+                false
             }
-            x11 && imports
         });
         crate::clear_cache_if_asked(cache);
         std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
@@ -225,6 +233,9 @@ impl Native {
                 stream: Mutex::default(),
                 own: AtomicI64::new(OWN_IDS),
                 tokens: AtomicU64::default(),
+                clicks: AtomicI32::new(1),
+                menu: Mutex::default(),
+                held: Mutex::default(),
             }),
         })
     }
@@ -287,6 +298,190 @@ impl Native {
     /// Draw the tab `target` at `size` CSS pixels.
     pub(crate) fn resize(&self, target: String, size: (u32, u32)) {
         self.shared.post(Job::Resize { target, size });
+    }
+
+    /// What the person chose in the menu the window drew (`MENU`), or nothing: it closed.
+    pub(crate) fn menu(&self, choice: Option<i32>) {
+        if let Some(callback) = self.shared.menu.lock().unwrap().take() {
+            match choice {
+                Some(id) => callback.cont(id, EventFlags::default()),
+                None => callback.cancel(),
+            }
+        }
+    }
+
+    /// The person's pointer in the tab on screen, when its surface is `surface`, straight
+    /// from where the window reads it, with no engine in between: a window that hears the
+    /// pointer apart from its frames calls this as each event arrives. `false` when another
+    /// tab is on screen, or none, or `input` is not the pointer's: the caller sends it the
+    /// usual way.
+    pub fn pointer_on(&self, surface: &str, input: &BrowserInput) -> bool {
+        let token = {
+            let shown = self.shared.shown.lock().unwrap();
+            shown
+                .token
+                .filter(|_| shown.surface.as_deref() == Some(surface))
+        };
+        let target = token.and_then(|t| self.shared.pages.lock().unwrap().targets.get(&t).cloned());
+        let Some(target) = target else {
+            return false;
+        };
+        let mut held = self.shared.held.lock().unwrap();
+        self.pointer(&target, input, &mut held)
+    }
+
+    /// The person's pointer in the tab `target`, given to Chromium as a window gives it its
+    /// own, with no DevTools message in between: `false` for what does not go this way. Keys
+    /// and text stay on the DevTools stream, which names each key as the page must see it
+    /// (CEF would work it out from a key code of the platform's, which Newen does not have).
+    /// `held` is the button down since a press, so a move while it is held drags.
+    pub(crate) fn pointer(
+        &self,
+        target: &str,
+        input: &BrowserInput,
+        held: &mut Option<PointerButton>,
+    ) -> bool {
+        let pointer = !matches!(
+            input,
+            BrowserInput::Key { .. } | BrowserInput::Text(_) | BrowserInput::Composition(_)
+        );
+        let Some(host) = self.shared.host(target).filter(|_| pointer) else {
+            return false;
+        };
+        let at = |x: f32, y: f32, modifiers: u32| MouseEvent {
+            x: x.round() as i32,
+            y: y.round() as i32,
+            modifiers,
+        };
+        match input {
+            BrowserInput::Move { x, y } => {
+                host.send_mouse_move_event(Some(&at(*x, *y, button_flag(*held))), 0);
+            }
+            // Off the page: what the pointer was over is no longer hovered.
+            BrowserInput::Leave => host.send_mouse_move_event(Some(&at(0.0, 0.0, 0)), 1),
+            BrowserInput::Down {
+                x,
+                y,
+                button,
+                clicks,
+                keys,
+            } => {
+                *held = Some(*button);
+                let clicks = i32::from(*clicks).max(1);
+                self.shared.clicks.store(clicks, Ordering::Relaxed);
+                let event = at(*x, *y, key_flags(*keys) | button_flag(*held));
+                host.send_mouse_click_event(Some(&event), button_type(*button), 0, clicks);
+            }
+            BrowserInput::Up { x, y, button, keys } => {
+                *held = None;
+                let clicks = self.shared.clicks.load(Ordering::Relaxed);
+                let event = at(*x, *y, key_flags(*keys));
+                host.send_mouse_click_event(Some(&event), button_type(*button), 1, clicks);
+            }
+            BrowserInput::Wheel {
+                x,
+                y,
+                dx,
+                dy,
+                precise,
+            } => {
+                // A touchpad's travel moves the page as it comes; a notch is eased into.
+                let flags = if *precise { PRECISE_SCROLL } else { 0 };
+                // CEF's deltas are a wheel's own: up and left are positive, the page's are not.
+                let (dx, dy) = (-dx.round() as i32, -dy.round() as i32);
+                host.send_mouse_wheel_event(Some(&at(*x, *y, flags)), dx, dy);
+            }
+            BrowserInput::Key { .. } | BrowserInput::Text(_) | BrowserInput::Composition(_) => {}
+        }
+        true
+    }
+}
+
+/// CEF's event flags (`cef_event_flags_t`) for the keys held, a button held, and a wheel
+/// event whose travel is in exact pixels.
+const SHIFT: u32 = 1 << 1;
+const CONTROL: u32 = 1 << 2;
+const ALT: u32 = 1 << 3;
+const PRECISE_SCROLL: u32 = 1 << 14;
+
+fn key_flags(keys: Modifiers) -> u32 {
+    (if keys.shift { SHIFT } else { 0 })
+        | (if keys.ctrl { CONTROL } else { 0 })
+        | (if keys.alt { ALT } else { 0 })
+}
+
+fn button_flag(held: Option<PointerButton>) -> u32 {
+    match held {
+        Some(PointerButton::Left) => 1 << 4,
+        Some(PointerButton::Middle) => 1 << 5,
+        Some(PointerButton::Right) => 1 << 6,
+        None => 0,
+    }
+}
+
+fn button_type(button: PointerButton) -> MouseButtonType {
+    match button {
+        PointerButton::Left => MouseButtonType::LEFT,
+        PointerButton::Middle => MouseButtonType::MIDDLE,
+        PointerButton::Right => MouseButtonType::RIGHT,
+    }
+}
+
+/// A string CEF gave, empty when it gave none: the `cef` crate writes a complaint on stderr
+/// when asked to read a null one.
+fn given(value: &CefStringUserfree) -> String {
+    let there: Option<&sys::_cef_string_utf16_t> = value.into();
+    there.map_or_else(String::new, |_| CefString::from(value).to_string())
+}
+
+/// Newen's words for one of Chromium's own menu rows, by its id (`cef_menu_id_t`).
+fn row_label(id: i32) -> Option<&'static str> {
+    Some(match id {
+        100 => "Back",
+        101 => "Forward",
+        102 => "Reload",
+        103 => "Reload without cache",
+        104 => "Stop",
+        110 => "Undo",
+        111 => "Redo",
+        112 => "Cut",
+        113 => "Copy",
+        116 => "Delete",
+        117 => "Select all",
+        130 => "Find",
+        132 => "View page source",
+        205 => "No spelling suggestions",
+        206 => "Add to dictionary",
+        _ => return None,
+    })
+}
+
+/// The system's own cursor, as CEF hands it on each: unused, the window draws the cursor by
+/// its name.
+#[cfg(target_os = "linux")]
+type CursorHandle = ::std::os::raw::c_ulong;
+#[cfg(windows)]
+type CursorHandle = sys::HCURSOR;
+#[cfg(target_os = "macos")]
+type CursorHandle = *mut u8;
+
+/// The CSS name of one of Chromium's cursors, as a page's `cursor` property names it: what
+/// the window shows over the page.
+fn cursor_name(cursor: CursorType) -> &'static str {
+    use sys::cef_cursor_type_t::*;
+    match *cursor.as_ref() {
+        CT_HAND => "pointer",
+        CT_IBEAM | CT_VERTICALTEXT => "text",
+        CT_CROSS => "crosshair",
+        CT_WAIT => "wait",
+        CT_PROGRESS => "progress",
+        CT_MOVE => "move",
+        CT_GRAB => "grab",
+        CT_GRABBING => "grabbing",
+        CT_NOTALLOWED | CT_NODROP => "not-allowed",
+        CT_EASTRESIZE | CT_WESTRESIZE | CT_EASTWESTRESIZE | CT_COLUMNRESIZE => "col-resize",
+        CT_NORTHRESIZE | CT_SOUTHRESIZE | CT_NORTHSOUTHRESIZE | CT_ROWRESIZE => "row-resize",
+        _ => "default",
     }
 }
 
@@ -352,14 +547,205 @@ fn over(page: &[u8], width: usize, popup: Option<(&[u8], usize, [i64; 2])>) -> V
     out
 }
 
+/// What turns the GPU paints on where they were never tried on a real machine (Windows and
+/// macOS, docs/browser.md §9): until they have been, a tab's paints reach the CPU there, as
+/// before.
+#[cfg(not(target_os = "linux"))]
+const ASKED: &str = "NEWEN_GPU_FRAMES";
+
+/// The paint's size and the descriptor of a texture to copy it from.
+fn paint_texture(info: &AcceleratedPaintInfo) -> Result<wgpu::TextureDescriptor<'static>, String> {
+    // shortcut: BGRA, as Chromium paints a page; another layout is not shown.
+    if info.format != ColorType::BGRA_8888 {
+        return Err(format!("a paint of {:?}", info.format));
+    }
+    Ok(wgpu::TextureDescriptor {
+        label: Some("chromium paint"),
+        size: wgpu::Extent3d {
+            width: info.extra.coded_size.width.max(1) as u32,
+            height: info.extra.coded_size.height.max(1) as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+/// `desc` as a Vulkan device takes it, for a texture made of memory that is not its own.
+#[cfg(not(target_os = "macos"))]
+fn backend_texture(
+    desc: &wgpu::TextureDescriptor<'static>,
+) -> wgpu::hal::TextureDescriptor<'static> {
+    wgpu::hal::TextureDescriptor {
+        label: desc.label,
+        size: desc.size,
+        mip_level_count: desc.mip_level_count,
+        sample_count: desc.sample_count,
+        dimension: desc.dimension,
+        format: desc.format,
+        usage: wgpu::TextureUses::COPY_SRC,
+        memory_flags: wgpu::hal::MemoryFlags::empty(),
+        view_formats: Vec::new(),
+    }
+}
+
 impl Gpu {
+    /// Whether `device` can take in Chromium's GPU paints here; else why not, in words for
+    /// the person, or none when it is simply not asked for.
+    #[cfg(target_os = "linux")]
+    fn takes(device: &wgpu::Device) -> Result<(), &'static str> {
+        // Chromium allocates its GPU buffers through a display server, with no window of its
+        // own: the headless platform has none to give ("Unable to allocate frame"), and on
+        // Wayland it paints at 1× whatever scale it is told. X11 (XWayland in a Wayland
+        // session) takes the window's.
+        if std::env::var_os("DISPLAY").is_none_or(|v| v.is_empty()) {
+            return Err("no X11 display");
+        }
+        let dmabufs = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+        match device.features().contains(dmabufs) {
+            true => Ok(()),
+            false => Err("the window's GPU cannot import dmabufs (not Vulkan?)"),
+        }
+    }
+
+    /// Whether `device` can take in Chromium's GPU paints here; else why not, in words for
+    /// the person, or none when it is simply not asked for.
+    #[cfg(windows)]
+    fn takes(device: &wgpu::Device) -> Result<(), &'static str> {
+        use wgpu::hal::api::{Dx12, Vulkan};
+        if std::env::var_os(ASKED).is_none() {
+            return Err("");
+        }
+        // SAFETY: only whether the device is of that backend is read.
+        let (dx12, vulkan) = unsafe {
+            (
+                device.as_hal::<Dx12>().is_some(),
+                device.as_hal::<Vulkan>().is_some(),
+            )
+        };
+        let handles = wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
+        match (dx12, vulkan && device.features().contains(handles)) {
+            (true, _) | (_, true) => Ok(()),
+            _ => Err("the window's GPU takes no Direct3D textures (neither DirectX 12 nor Vulkan with external memory)"),
+        }
+    }
+
+    /// Whether `device` can take in Chromium's GPU paints here; else why not, in words for
+    /// the person, or none when it is simply not asked for.
+    #[cfg(target_os = "macos")]
+    fn takes(device: &wgpu::Device) -> Result<(), &'static str> {
+        if std::env::var_os(ASKED).is_none() {
+            return Err("");
+        }
+        // SAFETY: only whether the device is Metal's is read.
+        match unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.is_some() {
+            true => Ok(()),
+            false => Err("the window's GPU is not Metal's"),
+        }
+    }
+
     /// Chromium's buffer as a texture of the window's device, to copy from while the paint
-    /// lasts: the buffer goes back to Chromium when it returns.
-    #[cfg(not(target_os = "linux"))]
-    fn import(&self, _: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
-        // Windows' shared handles and macOS's IOSurfaces are not imported: `start` keeps those
-        // systems' paints on the CPU.
-        Err("GPU paints are imported on Linux only".into())
+    /// lasts: the buffer goes back to Chromium when it returns. On Windows it is a Direct3D
+    /// 11 texture shared by a handle: opened as a resource of the window's Direct3D 12
+    /// device, or taken into its Vulkan one. Never run on a real machine (docs/browser.md §9).
+    #[cfg(windows)]
+    fn import(&self, info: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
+        use wgpu::hal::api::{Dx12, Vulkan};
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
+        let desc = paint_texture(info)?;
+        let handle = HANDLE(info.shared_texture_handle.cast());
+        // A shared resource starts in the common state, which is what wgpu takes an
+        // uninitialized texture to be in: its contents are kept.
+        let fresh = wgpu::TextureUses::UNINITIALIZED;
+        // SAFETY: the handle is Chromium's, valid for this call; the resource opened from it
+        // holds the texture alive on its own, and is of the size and format told.
+        unsafe {
+            if let Some(device) = self.device.as_hal::<Dx12>() {
+                let mut resource: Option<ID3D12Resource> = None;
+                (device.raw_device())
+                    .OpenSharedHandle(handle, &mut resource)
+                    .map_err(|e| format!("Direct3D 12 did not open Chromium's texture: {e}"))?;
+                let resource = resource.ok_or("Direct3D 12 opened no texture")?;
+                let hal = <Dx12 as wgpu::hal::Api>::Device::texture_from_raw(
+                    resource,
+                    desc.format,
+                    desc.dimension,
+                    desc.size,
+                    desc.mip_level_count,
+                    desc.sample_count,
+                );
+                drop(device);
+                return Ok(self
+                    .device
+                    .create_texture_from_hal::<Dx12>(hal, &desc, fresh));
+            }
+            let Some(device) = self.device.as_hal::<Vulkan>() else {
+                return Err("neither a DirectX 12 device nor a Vulkan one".into());
+            };
+            let hal = device
+                .texture_from_d3d11_shared_handle(handle, &backend_texture(&desc))
+                .map_err(|e| format!("Vulkan did not take Chromium's texture: {e}"))?;
+            drop(device);
+            Ok(self
+                .device
+                .create_texture_from_hal::<Vulkan>(hal, &desc, fresh))
+        }
+    }
+
+    /// Chromium's buffer as a texture of the window's device, to copy from while the paint
+    /// lasts: the buffer goes back to Chromium when it returns. On macOS it is an IOSurface,
+    /// which Metal makes a texture of without copying. Never run on a real machine
+    /// (docs/browser.md §9).
+    #[cfg(target_os = "macos")]
+    fn import(&self, info: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
+        use objc2_metal::{
+            MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+        };
+        use wgpu::hal::api::Metal;
+        let desc = paint_texture(info)?;
+        let surface = info
+            .shared_texture_io_surface
+            .cast::<objc2_io_surface::IOSurfaceRef>();
+        // SAFETY: the surface is Chromium's, alive for this call, and the texture Metal makes
+        // of it keeps it so; its size and format are the ones told.
+        unsafe {
+            let surface = surface.as_ref().ok_or("Chromium gave no IOSurface")?;
+            let device = (self.device.as_hal::<Metal>()).ok_or("not a Metal device")?;
+            // The storage mode is left as Metal sets it for the system: the surface's own.
+            let of = MTLTextureDescriptor::new();
+            of.setTextureType(MTLTextureType::Type2D);
+            of.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+            of.setWidth(desc.size.width as usize);
+            of.setHeight(desc.size.height as usize);
+            of.setUsage(MTLTextureUsage::ShaderRead);
+            let raw = (device.raw_device())
+                .newTextureWithDescriptor_iosurface_plane(&of, surface, 0)
+                .ok_or("Metal made no texture of Chromium's surface")?;
+            let hal = <Metal as wgpu::hal::Api>::Device::texture_from_raw(
+                raw,
+                desc.format,
+                MTLTextureType::Type2D,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width: desc.size.width,
+                    height: desc.size.height,
+                    depth: 1,
+                },
+                None,
+            );
+            drop(device);
+            Ok(self.device.create_texture_from_hal::<Metal>(
+                hal,
+                &desc,
+                wgpu::TextureUses::UNINITIALIZED,
+            ))
+        }
     }
 
     /// Chromium's buffer as a texture of the window's device, to copy from while the paint
@@ -368,10 +754,11 @@ impl Gpu {
     fn import(&self, info: &AcceleratedPaintInfo) -> Result<wgpu::Texture, String> {
         use std::os::fd::BorrowedFd;
         use wgpu::hal::api::Vulkan;
-        // shortcut: one plane of BGRA, as Chromium paints a page; another layout is not shown.
-        if info.plane_count != 1 || info.format != ColorType::BGRA_8888 {
-            return Err(format!("{} planes of {:?}", info.plane_count, info.format));
+        // shortcut: one plane, as Chromium paints a page; another layout is not shown.
+        if info.plane_count != 1 {
+            return Err(format!("a paint of {} planes", info.plane_count));
         }
+        let desc = paint_texture(info)?;
         let plane = &info.planes[0];
         // shortcut: on X11 Chromium names no modifier (DRM_FORMAT_MOD_INVALID); its capture
         // buffers are the ones it maps for the CPU too, so linear is taken. A tiled one would
@@ -379,11 +766,6 @@ impl Gpu {
         let modifier = match info.modifier {
             0x00ff_ffff_ffff_ffff => 0,
             modifier => modifier,
-        };
-        let size = wgpu::Extent3d {
-            width: info.extra.coded_size.width.max(1) as u32,
-            height: info.extra.coded_size.height.max(1) as u32,
-            depth_or_array_layers: 1,
         };
         // Chromium keeps its descriptor; the driver takes a copy of it.
         let fd = unsafe { BorrowedFd::borrow_raw(plane.fd) }
@@ -394,30 +776,10 @@ impl Gpu {
                 .device
                 .as_hal::<Vulkan>()
                 .ok_or("not a Vulkan device")?;
-            let desc = wgpu::hal::TextureDescriptor {
-                label: Some("chromium paint"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bgra8Unorm,
-                usage: wgpu::TextureUses::COPY_SRC,
-                memory_flags: wgpu::hal::MemoryFlags::empty(),
-                view_formats: Vec::new(),
-            };
+            let from = backend_texture(&desc);
             device
-                .texture_from_dmabuf_fd(fd, &desc, modifier, plane.stride.into(), plane.offset)
+                .texture_from_dmabuf_fd(fd, &from, modifier, plane.stride.into(), plane.offset)
                 .map_err(|e| e.to_string())?
-        };
-        let desc = wgpu::TextureDescriptor {
-            label: Some("chromium paint"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
         };
         // Freshly made, its layout is undefined, which keeps a linear buffer's contents.
         Ok(unsafe {
@@ -963,6 +1325,8 @@ impl Shared {
             Some(&CefString::from(url.as_str())),
             Some(&BrowserSettings {
                 // A 120 Hz screen's: a steady scroll paints ~100 frames a second, not 60.
+                // Chromium's own clock, not Newen's (`external_begin_frame_enabled`): driven
+                // from outside, CEF 147 paints later and less often (docs/browser.md, 8.1).
                 windowless_frame_rate: 120,
                 // Opaque, as a window's page is: a page with no background of its own is white.
                 background_color: 0xFFFF_FFFF,
@@ -1434,6 +1798,132 @@ wrap_client! {
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(Render::new(self.shared.clone(), self.token))
         }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(Menu::new(self.shared.clone(), self.token))
+        }
+    }
+}
+
+// A page's right-click menu: Chromium's own rows for what was clicked (a field's editing,
+// back and forward), a link's two of Newen's, drawn by the window, since a tab without a
+// window has nowhere to show one.
+wrap_context_menu_handler! {
+    struct Menu {
+        shared: Arc<Shared>,
+        token: u64,
+    }
+
+    impl ContextMenuHandler {
+        fn on_before_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+        ) {
+            let (Some(params), Some(model)) = (params, model) else {
+                return;
+            };
+            // Printing opens a dialog of the page's window, which it has none of.
+            // shortcut: no Paste rows; Chromium would read a clipboard of its own, not the
+            // desktop's, which only the window reads (Ctrl+V). Add them once the window can
+            // be asked for the clipboard's text.
+            for row in [MenuId::PRINT, MenuId::PASTE, MenuId::PASTE_MATCH_STYLE] {
+                model.remove(row.get_raw() as i32);
+            }
+            if !given(&params.link_url()).is_empty() {
+                model.insert_item_at(0, OPEN_LINK, Some(&CefString::from("Open link in new tab")));
+                model.insert_item_at(1, COPY_LINK, Some(&CefString::from("Copy link address")));
+                if model.count() > 2 {
+                    model.insert_separator_at(2);
+                }
+            }
+        }
+
+        fn run_context_menu(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+            callback: Option<&mut RunContextMenuCallback>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(params), Some(model), Some(callback)) = (params, model, callback) else {
+                return 0;
+            };
+            let target = browser.and_then(|b| self.shared.target_of(b));
+            let items: Vec<Value> = (0..model.count())
+                .filter(|at| model.is_visible_at(*at) != 0)
+                .map(|at| {
+                    let id = model.command_id_at(at);
+                    // A line between groups has no label. Chromium's own rows take Newen's
+                    // words, not the system language's; any other keeps its own (a spelling
+                    // suggestion), less the `&` that marks a shortcut letter in a window's menu.
+                    let label = match (model.type_at(at) == MenuItemType::SEPARATOR, row_label(id)) {
+                        (true, _) => String::new(),
+                        (false, Some(label)) => label.to_owned(),
+                        (false, None) => given(&model.label_at(at)).replace('&', ""),
+                    };
+                    json!({ "id": id, "enabled": model.is_enabled_at(at) != 0, "label": label })
+                })
+                .collect();
+            let Some(target) = target.filter(|_| !items.is_empty()) else {
+                callback.cancel();
+                return 1;
+            };
+            // One at a time: a menu still up gives way to this one.
+            if let Some(before) = self.shared.menu.lock().unwrap().replace(callback.clone()) {
+                before.cancel();
+            }
+            self.shared.event(
+                MENU,
+                json!({ "targetId": target, "x": params.xcoord(), "y": params.ycoord(), "items": items }),
+            );
+            1
+        }
+
+        fn on_context_menu_command(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            params: Option<&mut ContextMenuParams>,
+            command_id: ::std::os::raw::c_int,
+            _event_flags: EventFlags,
+        ) -> ::std::os::raw::c_int {
+            let (Some(browser), Some(params)) = (browser, params) else {
+                return 0;
+            };
+            let link = given(&params.link_url());
+            let Some(target) = self.shared.target_of(browser) else {
+                return 0;
+            };
+            match command_id {
+                // A tab of the same session, as a page opening another makes.
+                OPEN_LINK => {
+                    let pages = self.shared.pages.lock().unwrap();
+                    let context = pages.open.get(&target).map(|p| p.context.clone());
+                    let size = pages.sizes.get(&self.token).copied().unwrap_or((1280, 800));
+                    drop(pages);
+                    if let Some(context) = context {
+                        self.shared.make(None, Some(target), context, link, size);
+                    }
+                    1
+                }
+                COPY_LINK => {
+                    self.shared.event(COPIED, json!({ "targetId": target, "text": link }));
+                    1
+                }
+                // Copy and Cut: the desktop's clipboard is the window's to write; Chromium
+                // then does its own part (a cut takes the text away).
+                id if id == MenuId::COPY.get_raw() as i32 || id == MenuId::CUT.get_raw() as i32 => {
+                    let text = given(&params.selection_text());
+                    self.shared.event(COPIED, json!({ "targetId": target, "text": text }));
+                    0
+                }
+                _ => 0,
+            }
+        }
     }
 }
 
@@ -1570,6 +2060,22 @@ wrap_display_handler! {
             if let Some(browser) = browser {
                 self.shared.changed(browser, None, title.map(|t| t.to_string()));
             }
+        }
+
+        // The page's cursor as it changes, which DevTools does not tell: an event of Newen's
+        // own on the stream.
+        fn on_cursor_change(
+            &self,
+            browser: Option<&mut Browser>,
+            _cursor: CursorHandle,
+            type_: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> ::std::os::raw::c_int {
+            if let Some(target) = browser.and_then(|b| self.shared.target_of(b)) {
+                let cursor = cursor_name(type_);
+                self.shared.event(CURSOR, json!({ "targetId": target, "cursor": cursor }));
+            }
+            1
         }
     }
 }

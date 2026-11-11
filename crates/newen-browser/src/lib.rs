@@ -601,6 +601,12 @@ impl Browser {
                 self.emulate(&run, owner, tab, size, false).await?;
                 self.publish(&run, owner);
             }
+            // Only a native tab has a menu of the page's to answer.
+            BrowserOp::Menu { choice, .. } => {
+                if let Some(native) = &run.native {
+                    native.menu(choice);
+                }
+            }
             BrowserOp::Files { tab, node, paths } => {
                 let Some(session) = run.session(owner, tab) else {
                     return Ok(());
@@ -959,6 +965,11 @@ impl Browser {
             let Some(page) = state.tab_mut(owner, tab) else {
                 return;
             };
+            // A native tab takes the pointer as a window's own, and tells its cursor itself.
+            let native = run.native.as_ref();
+            if native.is_some_and(|n| n.pointer(&page.session, &input, &mut page.held)) {
+                return;
+            }
             for (method, params) in input::commands(&input, &mut page.held) {
                 run.cdp.send(method, params, Some(&page.session));
             }
@@ -967,7 +978,7 @@ impl Browser {
             let due = page
                 .cursor_asked
                 .is_none_or(|at| at.elapsed() > Duration::from_millis(120));
-            let ask = matches!(input, BrowserInput::Move { .. }) && due;
+            let ask = matches!(input, BrowserInput::Move { .. }) && due && native.is_none();
             if ask {
                 page.cursor_asked = Some(Instant::now());
             }
@@ -1397,6 +1408,40 @@ fn on_event(browser: &Browser, run: &Arc<Run>, message: Message, scale: f32) {
                 let (browser, run) = (browser.clone(), run.clone());
                 tokio::spawn(async move { refresh(&browser, &run, &session).await });
             }
+        }
+        // A native tab's cursor, as Chromium changes it.
+        native::CURSOR => {
+            let target = params["targetId"].as_str().unwrap_or_default();
+            let owner = run.state.lock().unwrap().by_target(target).map(|(o, _)| o);
+            if let (Some(owner), Some(cursor)) = (owner, params["cursor"].as_str()) {
+                browser.tell(owner, BrowserUpdate::Cursor(cursor.to_owned()));
+            }
+        }
+        // A native tab's right-click menu, for the window to draw, and what it copied.
+        native::MENU | native::COPIED => {
+            let target = params["targetId"].as_str().unwrap_or_default();
+            let found = (run.state.lock().unwrap().by_target(target)).map(|(o, tab)| (o, tab.id));
+            let Some((owner, tab)) = found else {
+                return;
+            };
+            let update = if message.method == native::COPIED {
+                BrowserUpdate::Copied(params["text"].as_str().unwrap_or_default().to_owned())
+            } else {
+                let item = |item: &Value| newen_model::BrowserMenuItem {
+                    id: item["id"].as_i64().unwrap_or_default() as i32,
+                    label: item["label"].as_str().unwrap_or_default().to_owned(),
+                    enabled: item["enabled"].as_bool().unwrap_or_default(),
+                };
+                BrowserUpdate::Menu {
+                    tab,
+                    x: params["x"].as_f64().unwrap_or_default() as f32,
+                    y: params["y"].as_f64().unwrap_or_default() as f32,
+                    items: (params["items"].as_array().into_iter().flatten())
+                        .map(item)
+                        .collect(),
+                }
+            };
+            browser.tell(owner, update);
         }
         "Page.screencastFrame" => {
             let session = message.session.unwrap_or_default();

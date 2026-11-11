@@ -14,6 +14,7 @@ se publican **macOS arm64 y Windows x64** además de Linux x86_64.
 |---|---|
 | Linux | `scripts/check.sh` verde (fmt, clippy `-D warnings`, tests) |
 | Windows, desde Linux | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -D warnings` limpio, con CEF compilado con su feature `dox` (sin el wrapper de C++). El MSVC real lo compila el CI |
+| Windows y macOS, desde Linux | `scripts/check-others.sh`: `cargo check --workspace` para `x86_64-pc-windows-msvc` y `aarch64-apple-darwin`, lo mismo que `check.yml`, sin sus toolchains: `newen-browser/dox` deja a cef-dll-sys sin compilar nada y un compilador de C de mentira crea los archivos que piden los scripts de build. Solo tipos: no enlaza ningún programa |
 | Windows y macOS en CI | `check.yml` (`cargo check`) sin `continue-on-error`; `package.yml` arma los tres bundles |
 | En una máquina Windows o Mac | **nada se corrió todavía**: todo lo de esos sistemas está escrito leyendo la documentación de CEF, de Chromium y de cada sistema |
 
