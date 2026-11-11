@@ -23,6 +23,7 @@ mod global;
 mod images;
 mod logos;
 pub mod migrate;
+mod programs;
 mod registry;
 mod servers;
 mod shared;
@@ -157,7 +158,8 @@ pub struct Config {
     pub extensions: Option<PathBuf>,
     /// Where those servers' secrets are kept; `None` is the system keychain.
     pub secrets: Option<Arc<dyn global::Secrets>>,
-    /// Whether Newen looks for its own updates (update.rs): the app does, the tests do not.
+    /// Whether Newen looks for its own updates (update.rs) and keeps the agents' programs at
+    /// their latest (programs.rs): the app does, the tests do not.
     pub updates: bool,
     /// Where each release's notes and media are kept once downloaded with its update; `None`
     /// keeps none.
@@ -295,6 +297,10 @@ enum Internal {
     PullRequests,
     /// An agent's providers changed: its models are asked for again.
     AskModels(String),
+    /// Time to look at the agents' programs again (programs.rs).
+    Agents,
+    /// What an agent's program said its version is.
+    AgentVersion { agent: String, version: String },
     /// A provider was signed in to: the agent's providers are listed again, then its models.
     ProvidersChanged(String),
     /// A session's pull request was merged.
@@ -390,6 +396,20 @@ async fn route(mut rx: UnboundedReceiver<Intent>, ui: Sink, config: Config) {
             every.tick().await;
         }
     });
+    // The agents' programs are looked at soon after the start, then every half hour.
+    if config.updates {
+        let look = internal.clone();
+        tokio::spawn(async move {
+            let first = tokio::time::Instant::now() + programs::FIRST;
+            let mut every = tokio::time::interval_at(first, programs::EVERY);
+            loop {
+                every.tick().await;
+                if look.send(Internal::Agents).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let mut router = Router::new(ui, config, internal);
     let path = router.config.settings.clone();
     router.settings = tokio::task::spawn_blocking(move || read_settings(path.as_deref()))
@@ -509,6 +529,9 @@ struct Router {
     shared: HashMap<String, shared::Shared>,
     /// Newen's own updates: checked, downloaded and installed off this thread (update.rs).
     updates: update::Updates,
+    /// Each agent's program's version as last read, and when its updater last ran (programs.rs).
+    versions: HashMap<String, String>,
+    agent_updates: HashMap<String, std::time::Instant>,
     /// Each agent's sign-in under way: where the person's code or cancel goes.
     logins: HashMap<String, UnboundedSender<auth::Login>>,
     /// The GitHub sign-in under way: a message (or a drop) kills its `gh`.
@@ -732,6 +755,8 @@ impl Router {
             awake: None,
             shared: HashMap::new(),
             updates,
+            versions: HashMap::new(),
+            agent_updates: HashMap::new(),
             logins: HashMap::new(),
             github_login: None,
         }
@@ -1632,6 +1657,10 @@ impl Router {
             }
         }
         self.updates.auto(self.settings.auto_update);
+        // Turned on: the agents' updaters run now rather than at the next look.
+        if self.settings.agents_auto_update && !before.agents_auto_update {
+            self.check_agents();
+        }
         self.hold_awake();
         let codec_before = before.video_codec;
         self.announce_settings();
@@ -2810,6 +2839,8 @@ impl Router {
             }
             Internal::PullRequests => {}
             Internal::AskModels(agent) => self.ask_models(agent),
+            Internal::Agents => self.check_agents(),
+            Internal::AgentVersion { agent, version } => self.agent_version(agent, version),
             Internal::ProvidersChanged(agent) => self.providers(agent, Some(vec![])),
             // A session that went back to work keeps on; it is asked again in 5 minutes.
             Internal::Merged { session } => {
@@ -3581,6 +3612,8 @@ enum Input {
     Servers(tokio::sync::oneshot::Sender<(Vec<newen_agent::McpServer>, bool)>),
     /// Settings now allow the agent's modes that skip every approval, or no longer do.
     AllowUnsafe(bool),
+    /// The agent's program was updated: the session goes on in the new one.
+    Refresh,
     Line {
         generation: u64,
         line: String,
@@ -4132,6 +4165,15 @@ impl Actor {
                 Input::RewindTo(request, at) => self.rewind_to(request, at).await,
                 Input::UndoRewind => self.undo_rewind().await,
                 Input::AllowUnsafe(allow) => self.spec.allow_unsafe = allow,
+                // Only a process running the old program: one not started takes the new one
+                // by itself. What the session left running in the background ends with it.
+                // A process its sessions share (`mux`) stays on the program it started with
+                // until it ends: ending it would leave them out of another device's reach.
+                Input::Refresh if self.process.is_some() => match self.busy {
+                    true => self.relaunch = true,
+                    false => self.relaunch().await,
+                },
+                Input::Refresh => {}
                 Input::Servers(answer) => {
                     self.server_waits.push(answer);
                     self.write(AgentCommand::McpStatus).await;

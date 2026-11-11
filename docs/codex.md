@@ -6,6 +6,7 @@ Plan para sumar el CLI de OpenAI Codex como segundo agente, con la misma interfa
 
 - **Código abierto:** [`openai/codex`](https://github.com/openai/codex), Apache-2.0, en Rust. El protocolo se lee del propio CLI con `codex app-server generate-json-schema --out <dir>`, que escribe el contrato completo (105 pedidos del cliente, 85 notificaciones, 10 pedidos del servidor en `codex-cli 0.163.0`). Las capturas de la fase 1 confirman cómo se usa.
 - **Versión probada:** `codex-cli 0.163.0`. La última release es la 0.165.0. `app-server` figura como `[experimental]` en el `--help`, así que el adaptador declara su rango en `tested()` y Newen avisa fuera de él, como con Claude.
+- **Actualización** ([agents.md](agents.md), «El programa al día»): `codex update` (`update_args`, en la ayuda de la 0.166.0). `codex --version` imprime `codex-cli 0.166.0`, de donde sale `0.166.0`, con la forma de la versión que da el `userAgent` de `initialize`. Sus modelos fuera de una sesión ya se pedían con `model/list` (`models_query`). Con «un proceso para todas las sesiones» (`mux`), ese proceso no se reinicia al actualizar: sus sesiones siguen alcanzables desde otro dispositivo y toman la versión nueva cuando el proceso termina.
 - **Observado el 2026-10-28** con `initialize` + `model/list` + `account/read`:
   - la respuesta de `initialize` trae `userAgent`, `codexHome`, `platformFamily` y `platformOs`;
   - `model/list` devuelve 8 modelos, cada uno con sus esfuerzos (`low` … `max`, y `ultra` en algunos) y el esfuerzo por defecto;

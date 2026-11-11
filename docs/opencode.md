@@ -6,6 +6,7 @@ OpenCode es el tercer agente de Newen. Habla ACP con `opencode acp`; el protocol
 
 - **Código abierto:** `anomalyco/opencode`, MIT, en TypeScript (OpenCode V2). Leído en el commit `c3c5531` (2026-11-03).
 - **Versión probada:** `opencode v2.2.5` (`@opencode/cli` en npm, binario `@opencode/cli-linux-x64`). `initialize` dice `agentInfo.version: "2.2.5"`.
+- **Actualización** ([agents.md](agents.md), «El programa al día»): `opencode upgrade` (`update_args`), a la última por la vía con que se instaló. `opencode --version` imprime `opencode v2.2.5`, de donde sale `2.2.5`, igual a `agentInfo.version`. Sus modelos fuera de una sesión ya se pedían a su catálogo (`models_runs`).
 - **Capturas** (2026-11-03): `crates/newen-agent-opencode/fixtures/2.2.5/`, con el modelo gratuito `opencode/big-pickle` de OpenCode Zen, sin cuenta. Escenarios: `simple`, `edit-bash`, `deny`, `always`, `todos`, `ask`, `interrupt`, `resume`, `fork`, `plan`, `ask-mode`, `host`. Más `debug-config.json` (Customize).
 - **Sin tocar la configuración de la persona:** cada comando corrió con `HOME`, `OPENCODE_TEST_HOME`, `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` y `XDG_*` en una carpeta de prueba (la receta de los propios tests de OpenCode).
 

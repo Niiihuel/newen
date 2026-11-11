@@ -9347,19 +9347,33 @@ pub(crate) fn top_effort(efforts: &[String], shown: usize) -> bool {
     efforts.len() > 1 && shown + 1 == efforts.len()
 }
 
-/// The models the menu lists: the session's agent's, for a new session the last session's,
-/// and before any session of the agent what its program offered when asked.
+/// The models the menu lists: what a session of the agent heard (this one, or for a new
+/// session the last one), which says the most of each model (its efforts), or what the
+/// agent's program offers when asked. What a session heard stands while the program is the
+/// version it heard it from; once the program is another (it was updated since), or before
+/// any session, the program's own list comes first.
 pub(crate) fn offered_models<'a>(
     store: &'a Store,
     session: Option<&'a Session>,
     ui: &'a Ui,
 ) -> &'a [newen_model::ModelInfo] {
     let agent = session.map_or(ui.agent.as_str(), |s| s.agent.as_str());
-    agent_capabilities(store, session, ui)
+    // The session that heard them: this one, or the last of its agent ([`agent_capabilities`]).
+    let told = session.filter(|s| s.capabilities.is_some()).or_else(|| {
+        (store.sessions.iter().rev()).find(|s| s.agent == agent && s.capabilities.is_some())
+    });
+    let heard = (told.and_then(|s| s.capabilities.as_ref()))
         .map(|c| c.models.as_slice())
-        .filter(|models| !models.is_empty())
-        .or_else(|| ui.agent_models.get(agent).map(Vec::as_slice))
-        .unwrap_or_default()
+        .filter(|models| !models.is_empty());
+    let asked = (ui.agent_models.get(agent).map(Vec::as_slice)).filter(|m| !m.is_empty());
+    let installed = ui.agent_versions.get(agent);
+    let current =
+        told.is_some_and(|s| installed.is_none() || s.agent_version.as_ref() == installed);
+    match current {
+        true => heard.or(asked),
+        false => asked.or(heard),
+    }
+    .unwrap_or_default()
 }
 
 /// The models Desktop lists by number, the newest of each family, and the rest it keeps
@@ -13541,12 +13555,12 @@ fn agent_page(
         .rev()
         .find(|s| s.agent == mine && s.capabilities.is_some());
     let capabilities = latest.and_then(|s| s.capabilities.as_ref());
-    let version = store
-        .sessions
-        .iter()
-        .rev()
-        .filter(|s| s.agent == mine)
-        .find_map(|s| s.agent_version.clone());
+    // The program's version as installed now, else as the agent's latest session heard it.
+    let version = ui.agent_versions.get(mine).cloned().or_else(|| {
+        (store.sessions.iter().rev())
+            .filter(|s| s.agent == mine)
+            .find_map(|s| s.agent_version.clone())
+    });
     let tested = agent.tested.join(", ");
     let (version_value, version_about) = match &version {
         Some(v) if agent.tested.contains(v) => {

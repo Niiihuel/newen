@@ -1178,6 +1178,11 @@ pub trait AgentAdapter: Send {
     fn install(&self) -> &'static str {
         ""
     }
+    /// The arguments that make the program update itself to its latest version; `None` when
+    /// it has no updater of its own.
+    fn update_args(&self) -> Option<Vec<String>> {
+        None
+    }
     /// Where a plugin can be installed and what a skill can be, with how to say each: see
     /// [`Extensions::scopes`] and [`Extensions::skill_states`].
     fn extension_words(&self) -> (Choices, Choices) {

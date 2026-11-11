@@ -91,6 +91,7 @@ impl Store {
             | Event::ServersFound { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
+            | Event::AgentVersion { .. }
             | Event::SignInUrl { .. }
             | Event::SignInFailed { .. }
             | Event::NotificationClicked { .. } => false,

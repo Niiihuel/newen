@@ -11,6 +11,10 @@ actualización es **opcional**: se descarga sola (si Ajustes lo permite), queda
 preparada y se aplica sola en el próximo arranque, o antes si la persona pide
 reiniciar.
 
+Los programas de los agentes (Claude Code, Codex y los demás) se actualizan
+aparte, cada uno con su propio actualizador: ver «El programa al día» en
+[agents.md](agents.md).
+
 Código: `crates/newen-update` (manifiesto, firma, descarga, instalación y el
 servidor de prueba), `crates/newen-engine/src/update.rs` (búsquedas, descargas
 y estados, fuera del hilo de la interfaz), la interfaz en `crates/newen-ui`

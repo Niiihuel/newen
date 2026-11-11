@@ -2516,6 +2516,86 @@ fn send(engine: &Engine, session: u64, text: &str) {
     });
 }
 
+#[test]
+fn an_agents_program_is_updated_told_and_its_idle_session_started_again_on_it() {
+    let dir = workdir("simple");
+    let version = dir.join("version");
+    std::fs::write(&version, "1.0.0").unwrap();
+    let mut settings = newen_model::Settings {
+        agents_auto_update: false,
+        ..Default::default()
+    };
+    settings.agents.entry("claude".into()).or_default().env =
+        vec![format!("NEWEN_FAKE_VERSION={}", version.display())];
+    let file = dir.join("settings.json");
+    std::fs::write(&file, serde_json::to_string(&settings).unwrap()).unwrap();
+    // Every other agent's program is one that is not there: none of the person's is run.
+    let mut programs: HashMap<String, String> =
+        ["codex", "opencode", "hermes", "grok", "antigravity"]
+            .map(|agent| (agent.to_string(), format!("/nonexistent/{agent}")))
+            .into();
+    programs.insert(
+        "claude".into(),
+        env!("CARGO_BIN_EXE_fake-agent").to_string(),
+    );
+    let (tx, rx) = channel();
+    let config = newen_engine::Config {
+        programs,
+        database: None,
+        snapshots: None,
+        settings: Some(file),
+        updates: true,
+        ..Default::default()
+    };
+    let engine = Engine::start_with(move |event| drop(tx.send(event)), config);
+    let told = until(&rx, |e| matches!(e, Event::Settings { .. }));
+    let Some(Event::Settings { agents, .. }) = told.last() else {
+        unreachable!()
+    };
+    // An agent added since must be given a stand-in above before this goes on.
+    assert!(agents.iter().all(|a| a.id == "claude" || a.missing));
+    engine.send(Intent::NewSession(NewSession {
+        agent: "claude".into(),
+        cwd: dir,
+        model: None,
+        effort: None,
+        mode: None,
+    }));
+    send(&engine, 1, "hi");
+    until(&rx, turn_finished(1));
+    until(&rx, |e| {
+        matches!(
+            e,
+            Event::Status {
+                session: 1,
+                status: SessionStatus::Idle
+            }
+        )
+    });
+    // The router hears of the turn's end apart from the UI, and updates nothing under a turn.
+    std::thread::sleep(Duration::from_millis(300));
+    // Turned on: the updater runs now, between two readings of the version.
+    settings.agents_auto_update = true;
+    engine.send(Intent::SaveSettings(settings));
+    let seen = until(&rx, |e| {
+        matches!(
+            e,
+            Event::Status {
+                session: 1,
+                status: SessionStatus::Starting
+            }
+        )
+    });
+    let versions: Vec<&str> = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::AgentVersion { agent, version } if agent == "claude" => Some(version.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(versions, ["1.0.0", "2.0.0"]);
+}
+
 fn turn_finished(session: u64) -> impl Fn(&Event) -> bool {
     move |e| matches!(e, Event::Agent { session: s, event: AgentEvent::TurnFinished { .. }, .. } if *s == session)
 }

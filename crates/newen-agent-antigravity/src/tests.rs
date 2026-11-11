@@ -6,6 +6,28 @@ use super::*;
 use newen_agent::AgentEvent::{self, *};
 use newen_agent_acp::replay::{replay, Replayed};
 
+#[test]
+fn its_models_are_listed_apart_from_any_session_as_a_session_lists_them() {
+    // What `agy models` printed (1.5.3).
+    let printed = "Fetching available models...\n\
+        gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n\
+        claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n";
+    let agy = Antigravity::new();
+    assert_eq!(agy.models_runs()[0].args, ["models"]);
+    let listed: Vec<(String, String)> = (agy.models_listed(&[printed.to_owned()]).into_iter())
+        .map(|m| (m.id, m.name))
+        .collect();
+    let model = |id: &str, name: &str| (id.to_owned(), name.to_owned());
+    assert_eq!(
+        listed,
+        [
+            model("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+            model("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)")
+        ]
+    );
+    assert!(agy.models_listed(&["not signed in".to_owned()]).is_empty());
+}
+
 fn run(name: &str) -> Replayed {
     let path = format!("{}/fixtures/1.5.3/{name}.jsonl", env!("CARGO_MANIFEST_DIR"));
     let capture = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));

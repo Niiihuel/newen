@@ -701,6 +701,11 @@ impl AgentAdapter for OpenCode {
         Some(include_str!("../assets/opencode.svg"))
     }
 
+    // `opencode upgrade` (2.2.5), to the latest by the way it was installed.
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["upgrade".into()])
+    }
+
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {
         self.0.encode(command)
     }

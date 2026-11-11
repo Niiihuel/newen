@@ -692,6 +692,7 @@ impl Store {
             | Event::ProviderSignIn { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
+            | Event::AgentVersion { .. }
             | Event::SignInUrl { .. }
             | Event::SignInFailed { .. }
             | Event::NotificationClicked { .. } => {}
@@ -1499,6 +1500,8 @@ pub struct Ui {
     pub missing_agents: Vec<newen_model::AgentInfo>,
     /// The models each agent's program offered before any session of it (`Event::AgentModels`).
     pub agent_models: std::collections::HashMap<String, Vec<newen_model::ModelInfo>>,
+    /// The version of each agent's program installed now (`Event::AgentVersion`).
+    pub agent_versions: std::collections::HashMap<String, String>,
     /// Settings, while open: the page shown, what its search looks for, and the select whose
     /// list is open.
     pub settings_page: Option<String>,
@@ -2279,6 +2282,7 @@ impl Ui {
             agents: vec![],
             missing_agents: vec![],
             agent_models: Default::default(),
+            agent_versions: Default::default(),
             settings_page: None,
             account_menu: false,
             github: Default::default(),
@@ -2956,6 +2960,22 @@ impl Ui {
         }
         if let Event::AgentModels { agent, models } = event {
             self.agent_models.insert(agent.clone(), models.clone());
+        }
+        if let Event::AgentVersion { agent, version } = event {
+            let before = self.agent_versions.insert(agent.clone(), version.clone());
+            // Another one than the last told: updated while Newen runs, and the person is
+            // told with a banner of Newen's own (session 0), silent.
+            if before.is_some_and(|before| before != *version) {
+                let name = (self.agents.iter().find(|a| a.id == *agent))
+                    .map_or(agent.as_str(), |a| a.name.as_str());
+                return vec![Intent::Notify {
+                    session: 0,
+                    title: format!("{name} was updated"),
+                    body: format!("Now at version {version}."),
+                    sound: None,
+                }];
+            }
+            return vec![];
         }
         if let Event::Settings { settings, agents } = event {
             look::set_text_size(settings.text_size);
@@ -6191,6 +6211,8 @@ fn settings_clicked(ui: &mut Ui, id: &str) -> Option<Vec<Intent>> {
         "archive_on_merge" => settings.archive_on_merge = !settings.archive_on_merge,
         "logos" => settings.logos = !settings.logos,
         "auto_update" => settings.auto_update = !settings.auto_update,
+        "agents_auto_update" => settings.agents_auto_update = !settings.agents_auto_update,
+        "agents_auto_refresh" => settings.agents_auto_refresh = !settings.agents_auto_refresh,
         "whats_new" => settings.whats_new = !settings.whats_new,
         // Cisco's codec: on downloads it from Cisco, off deletes it (the engine's codec.rs).
         "video_codec" => settings.video_codec = Some(settings.video_codec != Some(true)),

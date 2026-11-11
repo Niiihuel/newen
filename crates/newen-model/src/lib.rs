@@ -315,6 +315,11 @@ pub struct Settings {
     /// Download a new version of Newen in the background once one is out; installing always
     /// waits for the person. A mandatory version downloads whatever this says.
     pub auto_update: bool,
+    /// Run each agent's own updater in the background, so its program is its latest.
+    pub agents_auto_update: bool,
+    /// Once an agent's program is updated, its running sessions start again on it (a working
+    /// one after its turn); off, each takes it at its next start.
+    pub agents_auto_refresh: bool,
     /// Make every new session reachable from another device as it starts, for agents that
     /// offer it (Desktop's "Connect new sessions to Remote Control").
     pub remote_new_sessions: bool,
@@ -367,6 +372,8 @@ impl Default for Settings {
             agents: Default::default(),
             logos: true,
             auto_update: true,
+            agents_auto_update: true,
+            agents_auto_refresh: true,
             remote_new_sessions: false,
             whats_new: true,
             video_codec: None,
@@ -1741,6 +1748,12 @@ pub enum Event {
         agent: String,
         models: Vec<ModelInfo>,
     },
+    /// The version of an agent's program installed now, read at start and again as Newen
+    /// runs: one that differs from what a session last heard means the program was updated.
+    AgentVersion {
+        agent: String,
+        version: String,
+    },
     /// The page where the person signs in, which the engine also opened in their browser.
     SignInUrl {
         agent: String,
@@ -1905,6 +1918,7 @@ impl Event {
             | Event::ProviderSignIn { .. }
             | Event::Auth { .. }
             | Event::AgentModels { .. }
+            | Event::AgentVersion { .. }
             | Event::SignInUrl { .. }
             | Event::SignInFailed { .. }
             | Event::Github(_)

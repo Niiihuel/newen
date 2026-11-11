@@ -679,6 +679,11 @@ impl AgentAdapter for Claude {
         }
     }
 
+    // `claude update`: its native build's own updater; a package manager's install says to use that.
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["update".into()])
+    }
+
     fn servers(&self, stdout: &str) -> Vec<newen_agent::ConfiguredServer> {
         stdout.lines().filter_map(configured_server).collect()
     }

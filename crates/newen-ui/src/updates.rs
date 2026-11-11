@@ -481,6 +481,17 @@ pub(crate) fn settings(ui: &Ui, auto_update: bool, palette: ComponentPalette) ->
             ),
         ));
     }
+    // The agents' programs, after Newen's own: each has its updater (the engine's programs.rs).
+    out.push(setting(
+        "Update agents automatically",
+        "Run each agent's own updater in the background every few hours, while none of its sessions is working. Newen tells you when one was updated.",
+        setting_switch("agents_auto_update", ui.settings.agents_auto_update, palette),
+    ));
+    out.push(setting(
+        "Use an agent's new version right away",
+        "Once an agent is updated, restart its running sessions on the new version: idle ones now, a working one after its turn. What a session left running in the background stops. Off, each session takes it at its next start.",
+        setting_switch("agents_auto_refresh", ui.settings.agents_auto_refresh, palette),
+    ));
     out
 }
 

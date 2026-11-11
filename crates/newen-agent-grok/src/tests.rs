@@ -6,6 +6,28 @@ use super::*;
 use newen_agent::AgentEvent::{self, *};
 use newen_agent_acp::replay::{replay, Replayed};
 
+#[test]
+fn its_models_are_listed_apart_from_any_session_by_their_ids() {
+    // What `grok models` printed (1.0.77), and a second model as it would list one (inferred).
+    let printed = "You are logged in with grok.com.\n\nDefault model: grok-4.7\n\n\
+        Available models:\n  * grok-4.7 (default)\n    grok-code-fast-1\n";
+    let grok = Grok::new();
+    assert_eq!(grok.models_runs()[0].args, ["models"]);
+    let listed: Vec<(String, bool)> = (grok.models_listed(&[printed.to_owned()]).into_iter())
+        .map(|m| (m.id, m.default))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("grok-4.7".to_owned(), true),
+            ("grok-code-fast-1".to_owned(), false)
+        ]
+    );
+    assert!(grok
+        .models_listed(&["Not logged in.".to_owned()])
+        .is_empty());
+}
+
 fn run(name: &str) -> Replayed {
     let path = format!(
         "{}/fixtures/1.0.77/{name}.jsonl",

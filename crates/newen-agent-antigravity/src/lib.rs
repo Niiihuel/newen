@@ -5,8 +5,8 @@
 
 use newen_agent::{
     AgentAdapter, AgentCommand, AgentEvent, AgentId, AgentOption, Choices, ConfiguredServer,
-    Decoded, ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun,
-    SessionExtras, SessionSpec,
+    Decoded, ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ModelInfo,
+    ProgramRun, SessionExtras, SessionSpec,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Value};
@@ -305,6 +305,33 @@ impl AgentAdapter for Antigravity {
     /// alone, in currentColor, without the gradient.
     fn icon(&self) -> Option<&'static str> {
         Some(include_str!("../assets/antigravity.svg"))
+    }
+
+    // `agy update` (1.5.3).
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["update".into()])
+    }
+
+    // `agy models` (1.5.3): a line of its own, then each model as its id, a tab and its
+    // name, the ones a session lists.
+    fn models_runs(&self) -> Vec<ProgramRun> {
+        vec![ProgramRun {
+            args: vec!["models".into()],
+            stdin: None,
+            timeout: 30,
+            until: None,
+        }]
+    }
+
+    fn models_listed(&self, outputs: &[String]) -> Vec<ModelInfo> {
+        (outputs.first().into_iter().flat_map(|out| out.lines()))
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(id, name)| ModelInfo {
+                id: id.trim().to_owned(),
+                name: name.trim().to_owned(),
+                ..Default::default()
+            })
+            .collect()
     }
 
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {

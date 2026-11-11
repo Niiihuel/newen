@@ -7,6 +7,7 @@ Antigravity CLI, de Google (binario `agy`), es el sexto agente de Newen. Habla A
 - **No es código abierto:** `google-antigravity/antigravity-cli` publica solo README, CHANGELOG y ejemplos, sin licencia; el binario es Go. Lo que dice este documento sale de su `--help`, su CHANGELOG, su documentación (antigravity.google/docs) y las capturas.
 - **Versión:** `agentInfo.version`. `tested()` = `1.5.3`.
 - **Instalación:** `curl -fsSL https://antigravity.google/cli/install.sh | bash` (verifica el sha512 del manifiesto) deja `agy` en `~/.local/bin`, que Newen ya suma al `PATH`.
+- **Actualización** ([agents.md](agents.md), «El programa al día»): `agy update` (`update_args`). `agy --version` imprime `1.5.3`, igual a `agentInfo.version`. Los modelos fuera de una sesión son `agy models` (`models_runs`): una línea «Fetching available models...» y después cada modelo como su id, un tabulador y su nombre, los mismos que lista `session/new`.
 - **Capturas** (2026-11-08, `crates/newen-agent-antigravity/fixtures/1.5.3/`): Gemini 3.8 Flash con la cuenta de Google de la persona. Escenarios: `simple`, `edit-bash`, `deny`, `always`, `ask`, `interrupt`, `resume`, `plan`, `unsafe`, `host`. `todos` no se guarda: Antigravity no tiene herramienta de tareas (lleva su lista en un archivo propio) y el modelo terminó explorando la máquina. En `plan` se reemplazaron el usuario y la carpeta de la captura en los textos.
 - **Sin tocar la configuración de la persona:** `HOME` en una carpeta de prueba; la cuenta está en el llavero del sistema, que sigue disponible.
 

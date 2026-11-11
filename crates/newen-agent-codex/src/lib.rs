@@ -1408,6 +1408,11 @@ impl AgentAdapter for Codex {
         "npm install -g @openai/codex"
     }
 
+    // `codex update` (0.166.0).
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["update".into()])
+    }
+
     // Sign-in is the CLI's own `codex login` (docs/codex.md, codex-rs/cli/src/login.rs): it
     // prints the page address on stderr and waits for the browser to come back to a local
     // server, so it never needs a code. `--device-auth` prints a code the person must type

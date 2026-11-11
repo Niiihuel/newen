@@ -8966,6 +8966,61 @@ fn a_new_session_offers_the_models_its_agent_told_before_any_session() {
 }
 
 #[test]
+fn an_updated_program_s_models_replace_what_a_session_heard_from_the_old_one() {
+    let (mut store, mut ui) = store_with_session();
+    ui.agent = "claude".into();
+    let model = |id: &str| newen_model::ModelInfo {
+        id: id.into(),
+        ..Default::default()
+    };
+    agent(
+        &mut store,
+        AgentEvent::Ready {
+            version: "2.1.310".into(),
+            capabilities: AgentCapabilities {
+                models: vec![model("opus")],
+                ..Default::default()
+            },
+            mode: None,
+        },
+    );
+    let version = |version: &str| Event::AgentVersion {
+        agent: "claude".into(),
+        version: version.into(),
+    };
+    let offered = |store: &Store, ui: &Ui, own: bool| -> Vec<String> {
+        let session = store.session(1).filter(|_| own);
+        let models = view::offered_models(store, session, ui);
+        models.iter().map(|m| m.id.clone()).collect()
+    };
+    // The first reading of a run tells nobody.
+    assert!(ui.applied(&version("2.1.310")).is_empty());
+    ui.applied(&Event::AgentModels {
+        agent: "claude".into(),
+        models: vec![model("opus"), model("fable")],
+    });
+    // The session heard the program that is installed: its list stays, for a new session too.
+    assert_eq!(offered(&store, &ui, true), ["opus"]);
+    assert_eq!(offered(&store, &ui, false), ["opus"]);
+    // Updated since: the person is told, and what the session heard is the old program's list.
+    let told = ui.applied(&version("2.1.322"));
+    assert!(matches!(
+        told.as_slice(),
+        [Intent::Notify { session: 0, body, .. }] if body == "Now at version 2.1.322."
+    ));
+    assert_eq!(offered(&store, &ui, true), ["opus", "fable"]);
+    assert_eq!(offered(&store, &ui, false), ["opus", "fable"]);
+    // Settings, System, Updates: both switches are on until the person turns one off.
+    click(&store, &mut ui, view::SETTINGS_OPEN);
+    click(&store, &mut ui, "settings:page:system");
+    let off = click(&store, &mut ui, "set:agents_auto_refresh");
+    assert!(matches!(
+        &off[..],
+        [Intent::SaveSettings(s)] if !s.agents_auto_refresh && s.agents_auto_update
+    ));
+}
+
+#[test]
 fn a_new_codex_session_never_takes_a_claude_model() {
     let store = Store::default();
     let mut ui = Ui::new("/work".into());

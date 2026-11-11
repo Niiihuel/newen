@@ -5,8 +5,8 @@
 
 use newen_agent::{
     AgentAdapter, AgentCommand, AgentId, AgentOption, Choices, ConfiguredServer, Decision, Decoded,
-    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ProgramRun, SessionExtras,
-    SessionSpec,
+    ExtensionOp, LaunchPlan, McpSource, McpStatus, ModeTone, ModeWords, ModelInfo, ProgramRun,
+    SessionExtras, SessionSpec,
 };
 use newen_agent_acp::{by_kind, mcp_name, Acp, Call, Flavor};
 use serde_json::{json, Map, Value};
@@ -541,6 +541,42 @@ impl AgentAdapter for Grok {
     /// Grok's mark, as svgl.app lists it (svgl.app/library/grok-dark.svg), in currentColor.
     fn icon(&self) -> Option<&'static str> {
         Some(include_str!("../assets/grok.svg"))
+    }
+
+    // `grok update` (1.0.77).
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["update".into()])
+    }
+
+    // `grok models` (1.0.77): after "Available models:", one a line by its id, the one it
+    // runs by default marked ("  * grok-4.7 (default)"). It gives no names: a model is
+    // called by its id until a session tells its name.
+    fn models_runs(&self) -> Vec<ProgramRun> {
+        vec![ProgramRun {
+            args: vec!["models".into()],
+            stdin: None,
+            timeout: 30,
+            until: None,
+        }]
+    }
+
+    fn models_listed(&self, outputs: &[String]) -> Vec<ModelInfo> {
+        let printed = outputs.first().map(String::as_str).unwrap_or_default();
+        let Some((_, list)) = printed.split_once("Available models:") else {
+            return vec![];
+        };
+        list.lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace().filter(|word| *word != "*");
+                let id = words.next()?;
+                Some(ModelInfo {
+                    id: id.to_owned(),
+                    name: id.to_owned(),
+                    default: words.next() == Some("(default)"),
+                    ..Default::default()
+                })
+            })
+            .collect()
     }
 
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {

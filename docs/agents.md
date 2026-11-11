@@ -122,6 +122,41 @@ El motor abre la URL con `newen_files::open_in_system` (como la de un servidor M
 
 Codex 0.163.0 (verificado, ver [codex.md](codex.md)): un solo método, `chatgpt` "ChatGPT account"; `auth_query` es `login status` (escribe en stderr, el motor entrega el texto de la salida que tenga algo), `login` imprime la URL en stderr y vuelve por un servidor local, sin código; `logout` es `logout`. `--device-auth` no se ofrece: pide escribir un código que Newen no muestra.
 
+## El programa al día (`update_args`, `programs.rs`)
+
+Vale para todos los agentes, sin nada propio de ninguno en el código genérico. Cada CLI trae su propio actualizador y Newen lo usa: no baja ni instala nada por su cuenta. Un adaptador nuevo da tres cosas, y el motor y la UI hacen el resto:
+
+1. **`update_args()`**: con qué argumentos se actualiza su programa; `None` si no tiene actualizador.
+2. **La versión**: `--version` tiene que imprimir la misma que su sesión dice en `AgentEvent::Ready`. Si no coinciden, sus sesiones cuentan siempre como de otra versión; eso solo cambia qué lista de modelos va primero.
+3. **Los modelos fuera de una sesión**, si su programa los lista: `models_query` (se le pregunta a un arranque corto del programa) o `models_runs` (un comando que los imprime). Sin esto, la lista nueva aparece cuando una sesión arranca de nuevo.
+
+| CLI | `update_args()` | `--version` → versión | Modelos fuera de una sesión | Probado |
+|---|---|---|---|---|
+| Claude Code | `update` | `2.1.322 (Claude Code)` → `2.1.322` | `models_query` (`initialize`) | ayuda y `--version` de 2.1.322 |
+| Codex | `update` | `codex-cli 0.166.0` → `0.166.0` | `models_query` (`model/list`) | ayuda y `--version` de 0.166.0 |
+| OpenCode | `upgrade` | `opencode v2.2.5` → `2.2.5` | `models_runs` (su catálogo) | ayuda y `--version` de 2.2.5 |
+| Grok | `update` | `grok 1.0.77 (…) [stable]` → `1.0.77` | `models_runs` (`grok models`) | ayuda, `--version` y `grok models` de 1.0.77 |
+| Antigravity | `update` | `1.5.3` | `models_runs` (`agy models`) | ayuda, `--version` y `agy models` de 1.5.3 |
+| Hermes | `update` | sin ver | solo una sesión | no: es lo que dice su documentación *(inferido)* |
+
+Ningún actualizador se corrió de verdad al escribir esto: se leyó su ayuda. La prueba del flujo completo usa un programa falso (`tests/engine.rs`).
+
+El motor (`newen-engine/src/programs.rs`) mira cada programa instalado 20 s después de arrancar y luego cada 30 minutos:
+
+1. Lee la versión con `--version` (la primera palabra que empieza con un dígito: `codex-cli 0.166.0` → `0.166.0`).
+2. Si Ajustes › Sistema › Updates › «Update agents automatically» está prendido (de fábrica), pasaron 4 horas desde la última vez y ninguna sesión de ese agente está trabajando, corre el actualizador y vuelve a leer la versión. Al prender el interruptor corre en el momento.
+3. Cada versión nueva va a la UI como `Event::AgentVersion` (no se guarda). La primera lectura solo fija con qué comparar.
+
+Una versión distinta de la anterior quiere decir que el programa se actualizó mientras Newen corría, lo haya hecho Newen o el propio CLI en una terminal. Entonces:
+
+- **Aviso:** la UI muestra un banner del sistema, «Claude Code was updated · Now at version 2.1.322.», y Ajustes › el agente › Program muestra la versión instalada.
+- **Modelos:** se le vuelven a pedir al programa (`ask_models`).
+- **Sesiones:** con «Use an agent's new version right away» prendido (de fábrica), cada sesión de ese agente con un proceso corriendo arranca de nuevo sobre la misma conversación (`relaunch`): las inactivas en el momento y la que trabaja al terminar su turno. Lo que la sesión dejó corriendo en segundo plano termina con el proceso viejo. Apagado, cada sesión toma la versión nueva en su próximo arranque.
+
+El menú de modelos (`view::offered_models`) sigue la misma idea. Lo que escuchó una sesión (la propia, o la última del agente para una sesión nueva) es lo más completo, porque trae los esfuerzos de cada modelo, y vale mientras el programa sea la versión de la que lo escuchó. Si la versión instalada es otra, o antes de cualquier sesión, va primero lo que el programa ofrece ahora. Antes ganaba siempre lo que había escuchado la última sesión, y un modelo recién salido no aparecía hasta que alguna sesión arrancara de nuevo.
+
+No cubierto a propósito: el proceso que comparten las sesiones de un agente (`mux`, Codex con Remote Control) sigue con el programa con que arrancó hasta que termina. Reiniciarlo dejaría sus sesiones sin alcanzar desde otro dispositivo, que es para lo que existe.
+
 ## Cuenta de GitHub (no es un agente)
 
 GitHub es la identidad de la persona en Newen (el pie de la sidebar y Settings › Accounts, ver [ui.md](ui.md) §2.14b). No pasa por `AgentAdapter`: el código genérico no nombra proveedor, y `gh` es una herramienta de la computadora, como `git`. El motor (`newen-engine/src/github.rs`) corre estos comandos fuera del hilo de la UI y la UI solo ve `GithubState`, `ContributionCalendar` y los eventos `Github`, `GithubCode`, `GithubFailed` y `GithubContributions`.

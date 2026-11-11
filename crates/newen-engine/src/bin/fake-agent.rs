@@ -21,6 +21,8 @@ fn main() {
         Some("login" | "logout") => return codex_auth(),
         Some("mcp") => return ext::mcp(),
         Some("plugin") => return ext::plugin(),
+        Some("--version") => return version(false),
+        Some("update") => return version(true),
         _ => {}
     }
     if std::env::var_os("NEWEN_FAKE_APP_SERVER").is_some() {
@@ -153,6 +155,18 @@ fn next_line(input: &mut impl Iterator<Item = std::io::Result<String>>) -> Optio
             None => return Some(line),
         }
     }
+}
+
+/// Its version, kept in the file `NEWEN_FAKE_VERSION` names, which its updater moves on.
+fn version(update: bool) {
+    let Ok(file) = std::env::var("NEWEN_FAKE_VERSION") else {
+        return;
+    };
+    if update {
+        let _ = std::fs::write(&file, "2.0.0");
+    }
+    let version = std::fs::read_to_string(file).unwrap_or_default();
+    println!("fake-agent v{version}");
 }
 
 /// `auth status|login|logout` as Claude Code 2.1.312 answers them. The

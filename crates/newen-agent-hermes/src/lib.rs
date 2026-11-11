@@ -315,6 +315,11 @@ impl AgentAdapter for Hermes {
         Some(include_str!("../assets/hermes.svg"))
     }
 
+    // `hermes update`, as its documentation says; not tried here (inferred).
+    fn update_args(&self) -> Option<Vec<String>> {
+        Some(vec!["update".into()])
+    }
+
     fn encode(&mut self, command: AgentCommand) -> Vec<String> {
         self.0.encode(command)
     }
